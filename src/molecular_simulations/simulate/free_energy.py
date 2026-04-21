@@ -960,8 +960,7 @@ class EVB:
 
     def run_evb(self, parsl_func: Callable = run_evb_window) -> None:
         """Collect futures for each EVB window and distribute."""
-        if self._owns_parsl:
-            self.initialize()
+        self.initialize()
 
         futures = []
         for i, rc0 in enumerate(self.reaction_coordinate):

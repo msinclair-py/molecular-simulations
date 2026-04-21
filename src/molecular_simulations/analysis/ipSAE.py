@@ -49,6 +49,7 @@ class ipSAE:
         plddt_file: PathLike,
         pae_file: PathLike,
         out_path: OptPath = None,
+        skip_chains: set[str] | list[str] | None = None,
     ):
         """Initialize the ipSAE scorer.
 
@@ -57,8 +58,11 @@ class ipSAE:
             plddt_file: Path to pLDDT data file.
             pae_file: Path to PAE data file.
             out_path: Output directory path.
+            skip_chains: Chain IDs to exclude from scoring (e.g. glycan
+                or ligand chains). Their pLDDT/PAE tokens are inferred
+                from remaining tokens and dropped before scoring.
         """
-        self.parser = ModelParser(structure_file)
+        self.parser = ModelParser(structure_file, skip_chains=skip_chains)
         self.plddt_file = Path(plddt_file)
         self.pae_file = Path(pae_file)
 
@@ -110,9 +114,10 @@ class ipSAE:
 
         n_residues = len(self.parser.residues)
         if pLDDT.shape[0] != n_residues or PAE.shape[0] != n_residues:
-            token_mask = np.array(self.parser.token_mask, dtype=bool)
-            pLDDT = pLDDT[token_mask]
-            PAE = PAE[np.ix_(token_mask, token_mask)]
+            self.parser.build_protein_token_indices(pLDDT.shape[0])
+            indices = np.array(self.parser.protein_token_indices, dtype=int)
+            pLDDT = pLDDT[indices]
+            PAE = PAE[np.ix_(indices, indices)]
 
         self.prepare_scorer()
         self.scorer.compute_scores(distances, pLDDT, PAE)
@@ -511,24 +516,35 @@ class ModelParser:
         >>> parser.classify_chains()
     """
 
-    def __init__(self, structure: PathLike):
+    def __init__(
+        self,
+        structure: PathLike,
+        skip_chains: set[str] | list[str] | None = None,
+    ):
         """Initialize the ModelParser.
 
         Args:
             structure: Path to PDB or CIF file.
+            skip_chains: Chain IDs to exclude (e.g. glycan/ligand chains
+                whose per-atom token counts in the pLDDT/PAE arrays
+                aren't recoverable from the structure file alone).
         """
         self.structure = Path(structure)
+        self.skip_chains = set(skip_chains) if skip_chains else set()
 
-        self.token_mask = []
         self.residues = []
         self.cb_residues = []
         self.chains = []
+        self.chain_order: list[str] = []
+        self.chain_residue_counts: dict[str, int] = {}
+        self.protein_token_indices: list[int] = []
 
     def parse_structure_file(self) -> None:
         """Parse the structure file and extract atom/residue data.
 
-        Identifies file type and parses line by line, storing data for
-        C-alpha, C-beta, C1', and C3' atoms.
+        Atoms in ``skip_chains`` are ignored. Chain order is preserved
+        so that :meth:`build_protein_token_indices` can later infer the
+        token span of skipped chains by arithmetic.
         """
         if self.structure.suffix == '.pdb':
             line_parser = self.parse_pdb_line
@@ -540,6 +556,10 @@ class ModelParser:
         with open(self.structure) as f:
             lines = f.readlines()
 
+        chain_residues: dict[str, list[dict[str, Any]]] = {}
+        chain_cb: dict[str, list[dict[str, Any]]] = {}
+        seen_chains: set[str] = set()
+
         for line in lines:
             if line.startswith('_atom_site.'):
                 _, field_name = line.strip().split('.')
@@ -547,30 +567,95 @@ class ModelParser:
                 field_num += 1
 
             if line.startswith(('ATOM', 'HETATM')):
-                atom = line_parser(line, fields)
+                atom = line_parser(line, fields, allow_missing_seq_id=True)
                 if atom is None:
-                    self.token_mask.append(0)
+                    continue
+
+                cid = atom['chain_id']
+                if cid not in seen_chains:
+                    seen_chains.add(cid)
+                    self.chain_order.append(cid)
+                    chain_residues[cid] = []
+                    chain_cb[cid] = []
+
+                if cid in self.skip_chains:
                     continue
 
                 name = atom['atom_name']
-                if name == 'CA' or 'C1' in name:
-                    self.token_mask.append(1)
-                    self.residues.append(atom)
-                    self.chains.append(atom['chain_id'])
+                is_standard = atom['res'] in self.STANDARD_RESIDUES
+                if is_standard and (name == 'CA' or 'C1' in name):
+                    chain_residues[cid].append(atom)
 
-                if (
+                if is_standard and (
                     name == 'CB'
                     or 'C3' in name
                     or (atom['res'] == 'GLY' and name == 'CA')
                 ):
-                    self.cb_residues.append(atom)
+                    chain_cb[cid].append(atom)
 
-                if (
-                    name != 'CA'
-                    and 'C1' not in name
-                    and atom['res'] not in self.STANDARD_RESIDUES
-                ):
-                    self.token_mask.append(0)
+        for cid in self.chain_order:
+            if cid in self.skip_chains:
+                continue
+            residues = chain_residues[cid]
+            self.residues.extend(residues)
+            self.cb_residues.extend(chain_cb[cid])
+            self.chains.extend([cid] * len(residues))
+            self.chain_residue_counts[cid] = len(residues)
+
+    def build_protein_token_indices(self, total_tokens: int) -> None:
+        """Derive pLDDT/PAE indices for kept-chain anchor tokens.
+
+        Each kept chain contributes one token per residue; any run of
+        consecutive skipped chains occupies the token span left over
+        between kept chains. Solvable when skipped chains form at most
+        one contiguous block in ``chain_order`` — the default layout
+        emitted by Chai, Boltz, and AlphaFold (polymers first, then
+        non-polymer chains).
+
+        Args:
+            total_tokens: Length of the pLDDT array (== PAE dim).
+
+        Raises:
+            ValueError: If skipped chains appear in multiple
+                non-contiguous runs, making per-run sizes ambiguous.
+        """
+        runs: list[tuple[bool, list[str]]] = []
+        for cid in self.chain_order:
+            is_kept = cid not in self.skip_chains
+            if runs and runs[-1][0] == is_kept:
+                runs[-1][1].append(cid)
+            else:
+                runs.append((is_kept, [cid]))
+
+        skipped_runs = [r for r in runs if not r[0]]
+        total_kept_tokens = sum(self.chain_residue_counts.values())
+        skipped_span = total_tokens - total_kept_tokens
+
+        if len(skipped_runs) > 1:
+            raise ValueError(
+                f'Cannot infer token layout: skipped chains appear in '
+                f'{len(skipped_runs)} non-contiguous runs. Reorder input '
+                'so non-polymer chains are grouped.'
+            )
+        if skipped_span < 0:
+            raise ValueError(
+                f'Kept residue count ({total_kept_tokens}) exceeds '
+                f'total tokens ({total_tokens}); structure and score '
+                'files are inconsistent.'
+            )
+
+        indices: list[int] = []
+        offset = 0
+        for is_kept, chain_ids in runs:
+            if is_kept:
+                for cid in chain_ids:
+                    n = self.chain_residue_counts[cid]
+                    indices.extend(range(offset, offset + n))
+                    offset += n
+            else:
+                offset += skipped_span
+
+        self.protein_token_indices = indices
 
     def classify_chains(self) -> None:
         """Classify chains as protein or nucleic acid.
@@ -599,7 +684,7 @@ class ModelParser:
     ])
 
     @staticmethod
-    def parse_pdb_line(line: str, *args) -> dict[str, Any]:
+    def parse_pdb_line(line: str, *args, **kwargs) -> dict[str, Any]:
         """Parse a single line of a PDB file.
 
         Args:
@@ -623,16 +708,23 @@ class ModelParser:
         )
 
     @staticmethod
-    def parse_cif_line(line: str, fields: dict[str, int]) -> dict[str, Any] | None:
+    def parse_cif_line(
+        line: str,
+        fields: dict[str, int],
+        allow_missing_seq_id: bool = False,
+    ) -> dict[str, Any] | None:
         """Parse a single line of a CIF file.
 
         Args:
             line: Line from the CIF file.
             fields: Dictionary mapping field names to column indices.
+            allow_missing_seq_id: If True, fall back to auth_seq_id when
+                label_seq_id is '.'. Used for non-polymer residues
+                (ligands, glycans) which lack a label_seq_id.
 
         Returns:
             Dictionary with atom/residue information, or None if
-            residue_id is missing.
+            residue_id is missing and fallback is disabled.
         """
         _split = line.split()
         atom_num = _split[fields['id']]
@@ -645,7 +737,9 @@ class ModelParser:
         z = _split[fields['Cartn_z']]
 
         if residue_id == '.':
-            return None
+            if not allow_missing_seq_id or 'auth_seq_id' not in fields:
+                return None
+            residue_id = _split[fields['auth_seq_id']]
 
         return ModelParser.package_line(
             atom_num, atom_name, residue_name, chain_id, residue_id, x, y, z

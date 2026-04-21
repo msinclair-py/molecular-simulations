@@ -104,8 +104,10 @@ class ImplicitSolvent:
             else:
                 raise ValueError('AMBERHOME is not set in env vars!')
 
-        self.tleap = str(Path(amberhome) / 'bin' / 'tleap')
-        self.pdb4amber = str(Path(amberhome) / 'bin' / 'pdb4amber')
+        self.amberhome = Path(amberhome)
+
+        self.tleap = str(self.amberhome / 'bin' / 'tleap')
+        self.pdb4amber = str(self.amberhome / 'bin' / 'pdb4amber')
 
         switches = [protein, glycans, rna, dna, phos_protein, mod_protein]
         ffs = [
@@ -307,6 +309,41 @@ class ExplicitSolvent(ImplicitSolvent):
         logger.info('Build finished')
 
     def prep_pdb(self) -> None:
+        """Prepare the input PDB using cpptraj.
+
+        While pdb4amber has been the standard for some time, it sometimes
+        makes decisions such as distance-based disulfide formation which
+        cannot be stopped and is sometimes undesirable (such as in binder
+        design use cases). For that reason, we are utilizing the more
+        feature-rich prepareforleap function in cpptraj.
+        """
+        self.ss_bonds_leap = self.path  / 'ss_bonds.leap'
+        prepared_pdb = self.path / 'protein.pdb'
+        cpptraj_in = [
+            f'parm {self.pdb}',
+            f'loadcrd {self.pdb} name IN',
+            (
+                'prepareforleap crdset IN name OUT '
+                f'pdbout {prepared_pdb} noh existingdisulfides '
+                f'leapunitname PROT out {self.ss_bonds_leap}'
+            ),
+            'quit'
+        ]
+
+        cpptraj = str(self.amberhome / 'bin' / 'cpptraj')
+        subprocess.run(
+            [cpptraj], 
+            input='\n'.join(cpptraj_in),
+            text=True, 
+            cwd=str(self.path), 
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        self.pdb = str(prepared_pdb)
+
+    def _prep_pdb(self) -> None:
         """Prepare the input PDB using pdb4amber.
 
         Runs pdb4amber to ensure tleap compatibility. Removes explicit

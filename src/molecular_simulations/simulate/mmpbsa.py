@@ -10,6 +10,7 @@ parallelization for efficient processing of long trajectories.
 
 import json
 import logging
+import MDAnalysis as mda
 import os
 import re
 import subprocess
@@ -180,7 +181,7 @@ class MMPBSASettings:
 
     top: PathLike
     dcd: PathLike
-    selections: list[str]
+    selections: list[str] | None
     first_frame: int = 0
     last_frame: int = -1
     stride: int = 1
@@ -323,6 +324,9 @@ class MMPBSA(MMPBSASettings):
 
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        if self.selections is None:
+            self.get_selections()
 
     def run(self) -> None:
         """Execute the complete MM-PBSA workflow.
@@ -705,6 +709,42 @@ class MMPBSA(MMPBSASettings):
 
         if errors:
             raise RuntimeError(f"Output verification failed: {'; '.join(errors)}")
+
+    def get_selections(self) -> list[str]:
+        """If AMBER-style selections not provided, we will naively infer them to be
+        all chains up to the last, against the last chain. This involves identifying 
+        all OXT termini atoms to demarcate separation of chains."""
+        u = mda.Universe(self.top)
+        protein = u.select_atoms('protein').residues.resids
+        oxts = u.select_atoms('name OXT').residues.resids
+        last_oxt = oxts[-2] # if we don't have two chains we should be crashing
+
+        sel1 = [resid for resid in protein if resid <= last_oxt]
+        sel2 = [resid for resid in protein if resid > last_oxt]
+
+        return [self.format_for_cpptraj(sel1), self.format_for_cpptraj(sel2)]
+    
+    @staticmethod
+    def format_for_cpptraj(resids) -> str:
+        """Formats a list of resids into AMBER-style selections. The general format
+        is a colon followed by stretches of continous amino acids represented by a dash
+        (e.g. `:1-10`; `:1-10,25-43`)"""
+        string = ':'
+        cur = resids[0] - 1
+        start = resids[0]
+        end = None
+        for resid in resids:
+            if resid - cur > 1:
+                end = cur
+                string += f'{start}-{end},'
+                start = resid
+
+            cur = resid
+
+        end = resids[-1]
+        string += f'{start}-{end}'
+
+        return string
 
 
 class OutputAnalyzer:

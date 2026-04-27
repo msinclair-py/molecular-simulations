@@ -1378,10 +1378,10 @@ class TestSimulatorPlatformInit:
             (path / "system.inpcrd").write_text("mock coordinates")
 
             # Set environment variable
-            with patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "1,2"}):
+            with patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "0"}):
                 sim = Simulator(path=path, platform="CUDA")
 
-            assert sim.properties["DeviceIndex"] == "1,2"
+            assert sim.properties["DeviceIndex"] == "0"
             assert sim.properties["Precision"] == "mixed"
 
     @patch("molecular_simulations.simulate.omm_simulator.Platform")

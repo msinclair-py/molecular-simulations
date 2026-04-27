@@ -193,11 +193,11 @@ class Simulator:
             self.properties = {}
 
         elif platform == 'CUDA':
-            if device_id := os.environ.get('CUDA_VISIBLE_DEVICES', False):
-                if isinstance(device_id, list):
-                    device_index = ','.join([str(x) for x in device_id])
-                else:
-                    device_index = str(device_id)
+            if 'CUDA_VISIBLE_DEVICES' in os.environ:
+                # CUDA_VISIBLE_DEVICES (set by Parsl/the scheduler) already masks
+                # GPUs and re-indexes them from 0, so the in-process device index
+                # is always 0 regardless of the physical GPU assigned.
+                device_index = '0'
             else:
                 device_index = ','.join([str(x) for x in device_ids])
 

@@ -380,7 +380,7 @@ class Decomposition:
             **kwargs: Arguments passed to the algorithm constructor.
 
         Raises:
-            KeyError: If an unsupported algorithm is specified.
+            ValueError: If an unsupported algorithm is specified.
         """
         algorithms: dict[str, type[PCA] | None] = {
             'PCA': PCA,

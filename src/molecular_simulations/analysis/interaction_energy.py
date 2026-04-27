@@ -276,8 +276,8 @@ class StaticInteractionEnergy(InteractionEnergy):
         """
         return np.vstack([self.lj, self.coulomb])  # type: ignore[arg-type]
 
+    @staticmethod
     def energy(
-        self,
         context: Context,
         solute_coulomb_scale: int = 0,
         solute_lj_scale: int = 0,

@@ -501,7 +501,8 @@ class ModelParser:
 
     Attributes:
         structure: Path to the structure file.
-        token_mask: List of token indicators for each residue.
+        protein_token_indices: pLDDT/PAE indices for kept-chain anchor
+            tokens; populated by :meth:`build_protein_token_indices`.
         residues: List of dictionaries containing residue information.
         chains: List of chain IDs for each residue.
         chain_types: Dictionary mapping chain ID to type after

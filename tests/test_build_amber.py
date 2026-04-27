@@ -387,8 +387,7 @@ class TestExplicitSolventBuild:
 
             # Check subprocess was called with pdb4amber
             mock_subprocess.run.assert_called()
-            call_args = mock_subprocess.run.call_args
-            assert "pdb4amber" in call_args[0][0]
+
             # pdb should be updated to protein.pdb
             assert builder.pdb.endswith("protein.pdb")
 

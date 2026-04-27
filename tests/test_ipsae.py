@@ -20,7 +20,7 @@ class TestModelParser:
         """Test ModelParser initialization"""
         parser = ModelParser("test.pdb")
         assert parser.structure == Path("test.pdb")
-        assert parser.token_mask == []
+        assert parser.protein_token_indices == []
         assert parser.residues == []
         assert parser.cb_residues == []
         assert parser.chains == []
@@ -115,7 +115,6 @@ END"""
 
         assert len(parser.residues) == 2  # Only CA atoms
         assert len(parser.cb_residues) == 2  # GLY CA (fallback) + ALA CB
-        assert len(parser.token_mask) == 2
         assert len(parser.chains) == 2
         assert all(chain == "A" for chain in parser.chains)
 
@@ -389,8 +388,6 @@ class TestIpSAE:
                 {"coor": np.array([1.5, 1.5, 1.5])},
                 {"coor": np.array([2.5, 2.5, 2.5])},
             ]
-            ipsae.parser.token_mask = [1, 1, 1]
-
             ipsae.parse_structure_file()
 
             assert ipsae.coordinates.shape == (3, 3)
@@ -462,7 +459,6 @@ class TestIpSAERun:
                 {"coor": np.array([5.5, 5.5, 5.5])},
                 {"coor": np.array([6.5, 6.5, 6.5])},
             ]
-            obj.parser.token_mask = [1, 1, 1, 1]
             obj.parser.chains = ["A", "A", "B", "B"]
             obj.parser.chain_types = {"A": "protein", "B": "protein"}
 
@@ -551,8 +547,6 @@ class TestModelParserCIF:
             assert len(parser.cb_residues) == 2  # GLY CA (fallback) + ALA CB
             assert len(parser.chains) == 2
             assert parser.chains == ["A", "A"]
-            # Token mask: GLY CA=1, ALA CA=1, LEU with resid '.' → None → 0
-            assert parser.token_mask == [1, 1, 0]
 
 
 if __name__ == "__main__":

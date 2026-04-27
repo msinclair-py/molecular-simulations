@@ -30,6 +30,7 @@ dependencies = [
     'parsl>=2024.1.29',
     'polars',
     'pydantic',
+    'python-json-logger>=3',
     'pyyaml',
     'rust-simulation-tools',
     'scikit-learn',

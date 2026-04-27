@@ -397,7 +397,7 @@ class TestDecomposition:
 
     def test_unsupported_algorithm(self):
         """Test that unsupported algorithms raise appropriate errors"""
-        with pytest.raises(TypeError):
+        with pytest.raises(ValueError):
             # TICA and UMAP are not implemented (None in the dict)
             decomp = Decomposition("TICA")
             decomp.fit_transform(np.random.rand(10, 5))

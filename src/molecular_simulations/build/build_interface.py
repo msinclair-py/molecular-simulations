@@ -83,7 +83,15 @@ class InterfaceBuilder(ExplicitSolvent):
         polarizable: bool = False,
     ):
         """Initialize the InterfaceBuilder."""
-        super().__init__(path, pdb, padding, protein, rna, dna, polarizable)
+        super().__init__(
+            path=path, 
+            pdb=pdb, 
+            padding=padding, 
+            protein=protein, 
+            rna=rna, 
+            dna=dna, 
+            polarizable=polarizable
+        )
         self.interfaces = interfaces
         self.target = mda.Universe(target).select_atoms('all')
         self.binder = binder

@@ -643,7 +643,7 @@ class ComplexBuilder(ExplicitSolvent):
         **kwargs,
     ):
         """Initialize the ComplexBuilder."""
-        super().__init__(path, pdb, padding)
+        super().__init__(path=path, pdb=pdb, padding=padding)
         self.lig = (
             Path(lig).resolve()
             if isinstance(lig, str)

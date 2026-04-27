@@ -1201,7 +1201,7 @@ class TitrationAnalyzer:
             fig, ax = plt.subplots(figsize=figsize)
         else:
             _fig = ax.get_figure()
-            assert isinstance(_fig, plt.Figure), "Axes has no associated Figure"
+            assert _fig is not None, "Axes has no associated Figure"
             fig = _fig
 
         resname = self.resid_to_resname.get(resid, 'UNK')

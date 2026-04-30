@@ -35,7 +35,7 @@ def convert_cif_with_gemmi(cif: PathLike) -> PathLike:
     if not isinstance(cif, Path):
         cif = Path(cif)
     structure = gemmi.read_structure(str(cif))
-    structure.write(str(cif.with_suffix('.pdb')))
+    structure.write_pdb(str(cif.with_suffix('.pdb')))
     return cif.with_suffix('.pdb')
 
 

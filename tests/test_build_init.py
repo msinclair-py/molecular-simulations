@@ -154,7 +154,7 @@ _atom_site.Cartn_z
             convert_cif_with_gemmi(cif_file)
 
             mock_gemmi.read_structure.assert_called_once_with(str(cif_file))
-            mock_structure.write.assert_called_once_with(str(tmp_path / "test.pdb"))
+            mock_structure.write_pdb.assert_called_once_with(str(tmp_path / "test.pdb"))
 
 
 class TestAddChains:

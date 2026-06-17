@@ -19,7 +19,9 @@ jobs:
         run: pip install build
 
       - name: Build package
-        run: python -m build
+        run: |
+          rm -rf dist/*
+          python -m build
 
       - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
@@ -43,3 +45,4 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_TOKEN }}
+          skip-existing: true

@@ -7,3 +7,4 @@ dist/
 .venv
 joss/
 .claude
+*.md

@@ -38,8 +38,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = 'https://github.com/msinclair-py/molecular-dynamics'
-Issues = 'https://github.com/msinclair-py/molecular-dynamics/issues'
+Homepage = 'https://github.com/msinclair-py/molecular-simulations'
+Issues = 'https://github.com/msinclair-py/molecular-simulations/issues'
 
 [project.optional-dependencies]
 ligand = [

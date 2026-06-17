@@ -105,6 +105,55 @@ class LocalCPUSettings(BaseComputeSettings):
         )
 
 
+class HeterogeneousSettings(BaseComputeSettings):
+    worker_init: str = ''
+    nodes: int = 1
+    max_workers_per_node: int = 1
+    cores_per_worker: float = 1.0
+    retries: int = 1
+    worker_port_range: tuple[int, int] = (10000, 20000)
+    available_accelerators: int = 4
+
+    def config_factory(self, run_dir: PathLike) -> Config:
+        return Config(
+            run_dir=str(Path(run_dir) / 'runinfo'),
+            retries=self.retries,
+            executors=[
+                HighThroughputExecutor(
+                    provider=LocalProvider(
+                        nodes_per_block=self.nodes,
+                        init_blocks=1,
+                        max_blocks=1,
+                        launcher=MpiExecLauncher(
+                            bind_cmd='--cpu-bind', overrides='--depth=1 --ppn 1'
+                        ),
+                        worker_init=self.worker_init,
+                    ),
+                    label='gpu',
+                    cpu_affinity='block',
+                    max_workers_per_node=self.available_accelerators,
+                    available_accelerators=self.available_accelerators,
+                    worker_port_range=self.worker_port_range,
+                ),
+                HighThroughputExecutor(
+                    provider=LocalProvider(
+                        nodes_per_block=self.nodes,
+                        init_blocks=1,
+                        max_blocks=1,
+                        launcher=MpiExecLauncher(
+                            bind_cmd='--cpu-bind', overrides='--depth=1 --ppn 1'
+                        ),
+                        worker_init=self.worker_init,
+                    ),
+                    label='cpu',
+                    max_workers_per_node=self.max_workers_per_node,
+                    cores_per_worker=self.cores_per_worker,
+                    worker_port_range=self.worker_port_range,
+                ),
+            ],
+        )
+
+
 class PolarisSettings(BaseComputeSettings):
     label: str = 'htex'
     num_nodes: int = 1

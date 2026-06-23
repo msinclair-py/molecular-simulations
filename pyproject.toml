@@ -20,7 +20,7 @@ classifiers = [
 license = 'MIT'
 license-files = ['LICEN[CS]E*']
 dependencies = [
-    'black-pdbfixer',
+    'pdbfixer',
     'MDAnalysis>=2.7',
     'mdtraj',
     'natsort',

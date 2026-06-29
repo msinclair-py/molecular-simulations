@@ -2,16 +2,20 @@ import contextlib
 from pathlib import Path
 
 from .build_amber import ExplicitSolvent, ImplicitSolvent
-from .build_interface import InterfaceBuilder
 
 with contextlib.suppress(ImportError):
-    from .build_ligand import ComplexBuilder, LigandBuilder, PLINDERBuilder
+    from .build_ligand import ComplexBuilder, LigandBuilder
 
 PathLike = Path | str
 
 def convert_cif_with_biopython(cif: PathLike) -> PathLike:
-    """
-    Helper function to convert a cif file to a pdb file using biopython.
+    """Convert a CIF file to a PDB file using biopython.
+
+    Args:
+        cif: Path to the input CIF file.
+
+    Returns:
+        Path to the written PDB file (same stem, '.pdb' suffix).
     """
     from Bio.PDB import PDBIO, MMCIFParser  # ty: ignore[unresolved-import]
 
@@ -30,6 +34,14 @@ def convert_cif_with_biopython(cif: PathLike) -> PathLike:
 
 
 def convert_cif_with_gemmi(cif: PathLike) -> PathLike:
+    """Convert a CIF file to a PDB file using gemmi.
+
+    Args:
+        cif: Path to the input CIF file.
+
+    Returns:
+        Path to the written PDB file (same stem, '.pdb' suffix).
+    """
     import gemmi  # ty: ignore[unresolved-import]
 
     if not isinstance(cif, Path):
@@ -40,8 +52,19 @@ def convert_cif_with_gemmi(cif: PathLike) -> PathLike:
 
 
 def add_chains(pdb: PathLike, first_res: int = 1, last_res: int = -1) -> PathLike:
-    """
-    Helper function to add chain IDs to a model.
+    """Add chain IDs to a model.
+
+    Residues from ``first_res`` to ``last_res`` are assigned chain 'A';
+    any remaining residues are assigned chain 'B'.
+
+    Args:
+        pdb: Path to the input PDB file.
+        first_res: First residue (1-indexed) of chain A. Defaults to 1.
+        last_res: Last residue of chain A. If -1, uses the final residue
+            (no chain B is created). Defaults to -1.
+
+    Returns:
+        Path to the written PDB file (input stem plus '_withchains.pdb').
     """
     import MDAnalysis as mda
 

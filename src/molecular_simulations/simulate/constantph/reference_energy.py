@@ -5,19 +5,18 @@ from scipy.optimize import curve_fit
 
 class ReferenceEnergyFinder:
     def __init__(self, model, pKa, temperature):
-        """
-        Construct a ReferenceEnergyFinder.
+        """Construct a ReferenceEnergyFinder.
 
-        Parameters
-        ----------
-        model: ConstantPH
-            The model for which to determine reference energies.  It must contain a single titratable residue with
-            exactly two states.  It does not matter what pH or reference energies were specified when it was created,
-            because they will both be overwritten.
-        pKa: float
-            The experimental pKa of the titratable residue.  Reference energies will be chosen to match it.
-        temperature: openmm.unit.Quantity
-            The temperature at which the simulation will be run.
+        Args:
+            model: ConstantPH model for which to determine reference energies.
+                It must contain a single titratable residue with exactly two
+                states. It does not matter what pH or reference energies were
+                specified when it was created, because they will both be
+                overwritten.
+            pKa: The experimental pKa of the titratable residue. Reference
+                energies will be chosen to match it.
+            temperature: The temperature (openmm.unit.Quantity) at which the
+                simulation will be run.
         """
         if len(model.titrations) != 1:
             raise ValueError(
@@ -34,17 +33,15 @@ class ReferenceEnergyFinder:
             raise ValueError('Only residues with two states are currently supported')
 
     def findReferenceEnergies(self, iterations=20000, substeps=20):
-        """
-        Compute the reference energies for the states of the model compound.  On exit, they will be stored in
-        the ConstantPH object.
+        """Compute the reference energies for the states of the model compound.
 
-        Parameters
-        ----------
-        iterations: int
-            The number of Monte Carlo moves to attempt.  The larger the number, the more tightly converged
-            the results will be.
-        subsets: int
-            The number of dynamics steps to integrate between Monte Carlo moves.
+        On exit, they will be stored in the ConstantPH object.
+
+        Args:
+            iterations: The number of Monte Carlo moves to attempt. The larger
+                the number, the more tightly converged the results will be.
+            substeps: The number of dynamics steps to integrate between Monte
+                Carlo moves.
         """
         # Find an initial estimate of the reference energies just by computing the potential
         # energies of the states.

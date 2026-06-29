@@ -9,7 +9,6 @@ parallelization for efficient processing of long trajectories.
 """
 
 import json
-import logging
 import MDAnalysis as mda
 import os
 import re
@@ -31,8 +30,6 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')
 import numpy as np
 
 PathLike = Path | str
-
-logger = logging.getLogger(__name__)
 
 
 def _run_energy_calculation(
@@ -80,10 +77,6 @@ def _run_energy_calculation(
             error = f'Exception: {e}'
 
         if attempt < max_retries - 1:
-            logger.warning(
-                f'Energy calculation {out} failed (attempt {attempt + 1}/{max_retries})'
-            )
-            logger.warning(f'Error: {error}')
             time.sleep(2**attempt)
 
     return (Path(out), False, error)
@@ -152,9 +145,6 @@ def _run_sasa_calculation(
             error = f'Exception: {e}'
 
         if attempt < max_retries - 1:
-            logger.warning(
-                f'SASA calculation {sasa_script} failed (attempt {attempt + 1}/{max_retries})'
-            )
             time.sleep(2**attempt)
 
     return (script_path, False, error)
@@ -334,10 +324,6 @@ class MMPBSA(MMPBSASettings):
         Runs file preparation, energy calculations, and result analysis
         using the configured parallelization mode.
         """
-        logger.debug(
-            f'Preparing MM-PBSA calculation with {self.n_cpus} CPUs '
-            f'(mode: {self.parallel_mode})'
-        )
         gb_mdin, pb_mdin = self.write_mdins()
 
         if self.parallel_mode == 'frame':
@@ -345,7 +331,6 @@ class MMPBSA(MMPBSASettings):
         else:
             self._run_serial(gb_mdin, pb_mdin)
 
-        logger.debug('Collating results.')
         self.analyzer.parse_outputs()
 
         self.free_energy = self.analyzer.free_energy
@@ -358,7 +343,6 @@ class MMPBSA(MMPBSASettings):
             pb_mdin: Path to PB input file.
         """
         for prefix, top, traj, pdb in self.fh.files:
-            logger.debug(f'Computing energy terms for {Path(prefix).name}.')
             self.calculate_sasa(prefix, top, traj)
             self.calculate_energy(prefix, top, traj, pdb, gb_mdin, 'gb')
             self.calculate_energy(prefix, top, traj, pdb, pb_mdin, 'pb')
@@ -382,7 +366,6 @@ class MMPBSA(MMPBSASettings):
 
         for prefix, top, traj_chunks, pdb in self.fh.files_chunked:
             system_name = prefix.name
-            logger.debug(f'Preparing parallel energy calculations for {system_name}.')
 
             # SASA calculations for each chunk
             for i, traj_chunk in enumerate(traj_chunks):
@@ -421,59 +404,47 @@ class MMPBSA(MMPBSASettings):
                 )
 
         # Run SASA calculations in parallel
-        logger.debug(f'Running {len(sasa_tasks)} SASA calculations in parallel.')
         sasa_failures = []
         with ThreadPoolExecutor(max_workers=self.n_cpus) as executor:
             futures = []
             for task in sasa_tasks:
                 futures.append(executor.submit(_run_sasa_calculation, task))
 
-            logger.debug(
-                f'Submitted {len(futures)} SASA futures, waiting for completion...'
-            )
             done, _ = wait(futures, return_when=ALL_COMPLETED)
 
             for future in done:
                 script, success, error = future.result()
                 if not success:
                     sasa_failures.append((script, error))
-                    logger.error(f'SASA calculation failed: {script}: {error[:300]}')
 
         if sasa_failures:
             failed_scripts = [f[0] for f in sasa_failures]
             raise RuntimeError(
                 f'{len(sasa_failures)} SASA calculations failed: {failed_scripts}'
             )
-        logger.debug('All SASA calculations completed successfully')
 
         # Combine SASA results
         self._combine_sasa_chunks()
 
         # Run Energy calculations in parallel
-        logger.debug(f'Running {len(energy_tasks)} energy calculations in parallel.')
         energy_failures = []
         with ThreadPoolExecutor(max_workers=self.n_cpus) as executor:
             futures = []
             for task in energy_tasks:
                 futures.append(executor.submit(_run_energy_calculation, task))
 
-            logger.debug(
-                f'Submitted {len(futures)} Energy futures, waiting for completion...'
-            )
             done, _ = wait(futures, return_when=ALL_COMPLETED)
 
             for future in done:
                 script, success, error = future.result()
                 if not success:
                     energy_failures.append((script, error))
-                    logger.error(f'Energy calculation failed: {script}: {error[:300]}')
 
         if energy_failures:
             failed_scripts = [f[0] for f in energy_failures]
             raise RuntimeError(
                 f'{len(energy_failures)} Energy calculations failed: {failed_scripts}'
             )
-        logger.debug('All Energy calculations completed successfully')
 
         # Combine Energy results
         self._combine_energy_chunks()
@@ -711,9 +682,16 @@ class MMPBSA(MMPBSASettings):
             raise RuntimeError(f"Output verification failed: {'; '.join(errors)}")
 
     def get_selections(self) -> list[str]:
-        """If AMBER-style selections not provided, we will naively infer them to be
-        all chains up to the last, against the last chain. This involves identifying 
-        all OXT termini atoms to demarcate separation of chains."""
+        """Infer receptor and ligand selections when none are provided.
+
+        If AMBER-style selections are not provided, they are naively inferred to
+        be all chains up to the last (receptor) against the last chain (ligand).
+        This involves identifying all OXT termini atoms to demarcate the
+        separation of chains.
+
+        Returns:
+            List of two cpptraj-formatted selection strings, [receptor, ligand].
+        """
         u = mda.Universe(self.top)
         protein = u.select_atoms('protein').residues.resids
         oxts = u.select_atoms('name OXT').residues.resids
@@ -726,9 +704,17 @@ class MMPBSA(MMPBSASettings):
     
     @staticmethod
     def format_for_cpptraj(resids) -> str:
-        """Formats a list of resids into AMBER-style selections. The general format
-        is a colon followed by stretches of continous amino acids represented by a dash
-        (e.g. `:1-10`; `:1-10,25-43`)"""
+        """Format a list of resids into an AMBER-style selection.
+
+        The general format is a colon followed by stretches of continuous amino
+        acids represented by a dash (e.g. `:1-10`; `:1-10,25-43`).
+
+        Args:
+            resids: Sorted list of residue IDs to format.
+
+        Returns:
+            cpptraj-formatted selection string.
+        """
         string = ':'
         cur = resids[0] - 1
         start = resids[0]
@@ -1049,7 +1035,6 @@ class OutputAnalyzer:
             dfs: List of DataFrames for GB and PB results.
         """
         print_statement = []
-        log_statement = []
         for df, level in zip(dfs, ['Generalized Born ', 'Poisson Boltzmann'], strict=True):
             print_statement += [
                 f"{' ':<20}=========================",
@@ -1068,9 +1053,6 @@ class OutputAnalyzer:
                     print_statement.append('')
 
                 if col == '∆G Binding':
-                    log_statement.append(f'{level.strip()}:')
-                    log_statement.append(report)
-
                     if level == 'Poisson Boltzmann':
                         self.free_energy = [mean, std]
 
@@ -1080,10 +1062,7 @@ class OutputAnalyzer:
         with open(self.path / 'deltaG.txt', 'w') as fout:
             fout.write(print_statement)
 
-        if self.log:
-            for statement in log_statement:
-                logging.info(statement)
-        else:
+        if not self.log:
             print(print_statement)
 
     @staticmethod
@@ -1308,7 +1287,6 @@ class FileHandler:
             self.total_frames = self._estimate_frames()
 
         count_script.unlink(missing_ok=True)
-        logger.debug(f'Total frames in trajectory: {self.total_frames}')
 
     def _estimate_frames(self) -> int:
         """Estimate frame count by running cpptraj analysis."""
@@ -1342,12 +1320,6 @@ class FileHandler:
     def _split_trajectories(self) -> None:
         """Split trajectories into chunks for parallel processing."""
         actual_chunks = min(self.n_chunks, self.total_frames)
-
-        if actual_chunks < self.n_chunks:
-            logger.warning(
-                f'Requested {self.n_chunks} chunks but only {self.total_frames} frames. '
-                f'Using {actual_chunks} chunks (some CPUs will be idle)'
-            )
 
         frames_per_chunk = max(1, self.total_frames // actual_chunks)
         self.trajectory_chunks = {
@@ -1388,11 +1360,6 @@ class FileHandler:
 
                 split_script.unlink()
                 self.trajectory_chunks[system].append(chunk_traj)
-
-        logger.debug(
-            f'Split trajectories into {actual_chunks} chunks '
-            f'of ~{frames_per_chunk} frames each.'
-        )
 
     @property
     def files(self) -> zip[tuple[Path, Path, Path, Path]]:

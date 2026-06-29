@@ -76,11 +76,15 @@ class LigandBuilder:
     """
 
     def __init__(
-        self, path: PathLike, lig: PathLike, lig_number: int = 0, file_prefix: str = ''
+        self, 
+        path: PathLike, 
+        lig: PathLike, 
+        lig_number: int = 0, 
+        file_prefix: str = ''
     ):
         """Initialize the LigandBuilder."""
         self.path = Path(path)
-        self.lig: Path | str = self.path / str(lig)
+        self.lig = self.path / str(lig)
         self.ln = lig_number
         self.out_lig = self.path / f'{file_prefix}{Path(lig).stem}'
 
@@ -123,12 +127,9 @@ class LigandBuilder:
         quit
         """
 
-        if ext == '.sdf':
-            self.process_sdf()
-        else:
-            self.process_pdb()
-
+        self.process_input()
         self.convert_to_mol2()
+
         os.system(convert_to_gaff)
         try:
             self.move_antechamber_outputs()
@@ -139,26 +140,33 @@ class LigandBuilder:
         except FileNotFoundError as exc:
             raise LigandError(f'Antechamber failed! {self.lig}') from exc
 
-    def process_sdf(self) -> None:
-        """Process an SDF file and add hydrogens.
+    def process_input(self,
+                      extension: str) -> None:
+        """Process input ligand of filetypes mol2, pdb or sdf.
 
-        Uses RDKit to add hydrogens based on atom hybridization from
-        the input SDF file. Note that incorrect hybridization in the
-        input will result in incorrect hydrogen placement.
+        Adds hydrogens using RDKit and writes the result to a new SDF file.
+        Note that incorrect atom hybridization in SDF may lead to incorrect
+        hydrogen placement.
+
+        Args:
+            extension: File extension of the input ligand. One of '.mol2',
+                '.pdb', or '.sdf'.
+
+        Raises:
+            LigandError: If the extension is not a supported filetype.
         """
-        mol = Chem.SDMolSupplier(f'{self.lig}.sdf')[0]
-        molH = Chem.AddHs(mol, addCoords=True)
-        with Chem.SDWriter(f'{self.lig}_H.sdf') as w:
-            w.write(molH)
+        match extension:
+            case '.mol2':
+                mol = Chem.MolFromMolFile(f'{self.lig}{extension}')
+            case '.pdb':
+                mol = Chem.MolFromPDBFile(f'{self.lig}{extension}')
+            case '.sdf':
+                mol = Chem.SDMolSupplier(f'{self.lig}{extension}')[0]
+            case _:
+                raise LigandError()
 
-    def process_pdb(self) -> None:
-        """Process a PDB file and add hydrogens.
-
-        Reads a small molecule PDB, adds hydrogens using RDKit,
-        and writes the result to an SDF file.
-        """
-        mol = Chem.MolFromPDBFile(f'{self.lig}.pdb')
         molH = Chem.AddHs(mol, addCoords=True)
+
         with Chem.SDWriter(f'{self.lig}_H.sdf') as w:
             w.write(molH)
 
@@ -207,401 +215,6 @@ class LigandBuilder:
             outfile.write(inp)
 
         return leap_file, leap_log
-
-
-class PLINDERBuilder(ImplicitSolvent):
-    """Build protein-ligand complexes from PLINDER database entries.
-
-    Extends ImplicitSolvent to handle PLINDER-format input directories
-    containing receptor PDB, ligand SDF files, and sequence information.
-
-    Args:
-        path: Base path to PLINDER system directory.
-        system_id: PLINDER system identifier.
-        out: Output directory path.
-        **kwargs: Additional arguments passed to ImplicitSolvent.
-
-    Attributes:
-        system_id: PLINDER system identifier.
-        build_dir: Directory for intermediate build files.
-        ions: List of ions extracted from ligand files.
-        ligs: List of parameterized ligand names.
-
-    Example:
-        >>> builder = PLINDERBuilder(
-        ...     path='./plinder_data', system_id='1abc_A_B_ligand', out='./output'
-        ... )
-        >>> builder.build()
-    """
-
-    def __init__(self, path: PathLike, system_id: str, out: PathLike, **kwargs):
-        """Initialize the PLINDERBuilder."""
-        super().__init__(
-            Path(path) / system_id,
-            'receptor.pdb',
-            protein=True,
-            rna=True,
-            dna=True,
-            phos_protein=True,
-            mod_protein=True,
-            out=Path(out) / system_id,
-            **kwargs,
-        )
-        self.system_id = system_id
-        self.ffs.append('leaprc.gaff2')
-        self.build_dir = self.out / 'build'
-        self.ions: list[list[list[Any]]] | None = None
-
-    def build(self) -> None:
-        """Build the protein-ligand complex system.
-
-        Migrates files, parameterizes ligands, and assembles the
-        final system with topology and coordinate files.
-
-        Raises:
-            LigandError: If no ligands are found or parameterization fails.
-        """
-        ligs = self.migrate_files()
-
-        if not ligs:
-            print(f'No ligands!\n\n{self.pdb}')
-            raise LigandError
-
-        self.ligs = self.ligand_handler(ligs)
-        self.assemble_system()
-
-    def ligand_handler(self, ligs: list[str]) -> list[str]:
-        """Parameterize all ligands in the system.
-
-        Args:
-            ligs: List of ligand file paths to parameterize.
-
-        Returns:
-            List of parameterized ligand names (without extensions).
-        """
-        ligands = []
-        for i, lig in enumerate(ligs):
-            lig_builder = LigandBuilder(self.build_dir, lig, i)
-            lig_builder.parameterize_ligand()
-            ligands.append(os.path.basename(lig)[:-4])
-
-        return ligands
-
-    def migrate_files(self) -> list[str]:
-        """Prepare input files for system building.
-
-        Copies sequence files, fixes and moves the receptor PDB,
-        and processes ligand files. Handles ions separately.
-
-        Returns:
-            List of ligand filenames to parameterize.
-        """
-        os.makedirs(str(self.build_dir), exist_ok=True)
-        os.chdir(self.build_dir)  # necessary for antechamber outputs
-
-        # grab the sequence file to complete protein modeling
-        shutil.copy(str(self.path / 'sequences.fasta'), str(self.build_dir))
-        self.fasta = str(self.build_dir / 'sequences.fasta')
-
-        # fix and move pdb
-        self.prep_protein()
-
-        # move ligand(s)
-        ligands = []
-        lig_files = self.path / 'ligand_files'
-        for lig in lig_files.glob('*.sdf'):
-            shutil.copy(str(lig), str(self.build_dir))
-
-            if self.check_ligand(lig):
-                ligands.append(lig.name)
-
-        # handle any potential ions
-        if self.ions is not None:
-            self.ffs.append('leaprc.water.tip3p')
-            self.place_ions()
-
-        return ligands
-
-    def place_ions(self) -> None:
-        """Add ion records to the PDB file.
-
-        Appends ATOM records for extracted ions to the receptor PDB.
-        Handles various ion naming conventions for AMBER compatibility.
-
-        Note:
-            This method handles complex PDB formatting requirements.
-            Proceed with caution if modifications are needed.
-        """
-        with open(self.pdb) as f:
-            pdb_lines = f.readlines()[:-1]
-
-        if 'END' in pdb_lines[-1]:
-            ln = -3 if 'TER' in pdb_lines[-2] else -2
-        elif 'TER' in pdb_lines[-1]:
-            ln = -2
-        else:
-            ln = -1
-
-        try:
-            next_atom_num = int(pdb_lines[ln][6:12].strip()) + 1
-            next_resid = int(pdb_lines[ln][22:26].strip()) + 1
-        except ValueError as exc:
-            print(f'ERROR: {self.pdb}')
-            raise LigandError from exc
-
-        assert self.ions is not None
-        for ion in self.ions:
-            for atom in ion:
-                ion_line = f'ATOM  {next_atom_num:>5}'
-
-                if atom[0].lower() in ['na', 'k', 'cl']:
-                    ionname = atom[0] + atom[1]
-                    ion_line += f'{ionname:>4}  {ionname:<3} '
-                else:
-                    ionname = atom[0].upper()
-                    ion_line += f'{ionname:>3}   {ionname:<3}'
-
-                coords = ''.join([f'{x:>8.3f}' for x in atom[2:]])
-                ion_line += f'{next_resid:>5}    {coords}  0.00  0.00\n'
-
-                pdb_lines.append(ion_line)
-                pdb_lines.append('TER\n')
-
-                next_atom_num += 1
-                next_resid += 1
-
-        pdb_lines.append('END')
-
-        with open(self.pdb, 'w') as f:
-            f.write(''.join(pdb_lines))
-
-    def assemble_system(self) -> None:
-        """Assemble the protein-ligand complex with tleap.
-
-        Creates topology and coordinate files for the complex,
-        including all parameterized ligands and ions.
-        """
-        tleap_complex = [f'source {ff}' for ff in self.ffs]
-        structs = [f'PROT = loadpdb {self.pdb}']
-        combine = 'COMPLEX = combine{PROT'
-        for i, lig in enumerate(self.ligs):
-            ligand = self.build_dir / lig
-            tleap_complex += [
-                f'loadamberparams {ligand}.frcmod',
-                f'loadoff {ligand}.lib',
-            ]
-            structs += [f'LG{i} = loadmol2 {ligand}.mol2']
-            combine += f' LG{i}'
-
-        combine += '}'
-        tleap_complex += structs
-        tleap_complex.append(combine)
-        tleap_complex += [
-            'set default PBRadii mbondi3',
-            f'savepdb COMPLEX {self.out}/system.pdb',
-            f'saveamberparm COMPLEX {self.out}/system.prmtop {self.out}/system.inpcrd',
-            'quit',
-        ]
-
-        tleap_complex = '\n'.join(tleap_complex)
-        leap_file = self.build_dir / 'tleap.in'
-        with open(str(leap_file), 'w') as outfile:
-            outfile.write(tleap_complex)
-
-        tleap = f'tleap -f {leap_file}'
-        os.system(tleap)
-
-    def prep_protein(self) -> None:
-        """Prepare the receptor protein structure.
-
-        Runs PDBFixer to repair missing residues, then pdb4amber
-        to remove hydrogens and waters for clean tleap input.
-        """
-        raw_pdb = self.path / self.pdb
-        prep_pdb = self.build_dir / 'prepped.pdb'
-        self.pdb = self.build_dir / 'protein.pdb'
-
-        # complex workflow for modeling missing residues
-        self.triage_pdb(raw_pdb, prep_pdb)
-
-        # remove hydrogens (-y) and waters (-d) from the input PDB
-        pdb4amber = f'pdb4amber -i {prep_pdb} -o {self.pdb} -y -d'
-        os.system(pdb4amber)
-
-    def triage_pdb(self, broken_pdb: PathLike, repaired_pdb: PathLike) -> None:
-        """Repair a PDB structure using PDBFixer.
-
-        Runs PDBFixer to add missing loops and atoms. Uses FASTA
-        sequence from PLINDER to properly model missing residues,
-        including non-canonical residues like phosphorylations.
-
-        Args:
-            broken_pdb: Path to input PDB requiring repairs.
-            repaired_pdb: Path for output repaired PDB.
-        """
-        fixer = PDBFixer(filename=str(broken_pdb))
-        chains = [chain for chain in fixer.topology.chains()]
-        chain_map = {chain.id: [res for res in chain.residues()] for chain in chains}
-
-        # non-databank models do not have SEQRES and therefore no
-        # sequence data to model missing residues
-        fixer.sequences = self.inject_fasta(chain_map)
-        fixer.findMissingResidues()
-        fixer.findMissingAtoms()
-        fixer.addMissingAtoms()
-
-        with open(str(repaired_pdb), 'w') as f:
-            PDBFile.writeFile(fixer.topology, fixer.positions, f)
-
-    def inject_fasta(self, chain_map: dict[str, list[Any]]) -> Sequences:
-        """Inject FASTA sequence data for PDBFixer.
-
-        Checks FASTA against actual sequence and modifies to correctly
-        handle non-canonical residues (e.g., SER -> SEP for phosphoserine).
-
-        Args:
-            chain_map: Dictionary mapping chain IDs to lists of residues.
-
-        Returns:
-            List of PDBFixer Sequence objects for all chains.
-
-        Raises:
-            LigandError: If unknown residues are found in the FASTA.
-        """
-        with open(self.fasta) as f:
-            fasta = f.readlines()
-
-        with open(self.path / 'chain_mapping.json', 'rb') as f:
-            remapping = json.load(f)
-
-        sequences = []
-        for i in range(len(fasta) // 2):
-            seq_chain = fasta[2 * i].strip()[1:]  # strip off > and \n
-            chain = remapping[seq_chain]
-            one_letter_seq = fasta[2 * i + 1].strip()
-            try:
-                three_letter_seq = [convert_aa_code(aa) for aa in one_letter_seq]
-            except ValueError as exc:
-                print(f'\nUnknown residue in fasta!\n\n{self.pdb}')
-                raise LigandError from exc
-
-            try:
-                three_letter_seq = self.check_ptms(three_letter_seq, chain_map[chain])
-                sequences.append(Sequence(chainId=chain, residues=three_letter_seq))
-            except KeyError as exc:
-                print(f'\nUnknown ligand error!\n\n{self.pdb}')
-                raise LigandError from exc
-
-        return sequences
-
-    def check_ptms(self, sequence: list[str], chain_residues: list[Any]) -> list[str]:
-        """Check for post-translational modifications in the sequence.
-
-        Compares the full sequence from FASTA against the partial
-        sequence from the structural model and updates non-canonical
-        residue names appropriately.
-
-        Args:
-            sequence: List of three-letter residue codes from FASTA.
-            chain_residues: List of residue objects from the structure.
-
-        Returns:
-            Updated sequence list with PTM residue names.
-
-        Raises:
-            LigandError: If sequence length mismatches occur.
-        """
-        for residue in chain_residues:
-            resID = int(residue.id) - 1  # since 0-indexed in list
-
-            try:
-                if sequence[resID] != residue.name:
-                    sequence[resID] = residue.name
-            except IndexError as exc:
-                print(f'Sequence length is messed up!\n\n{self.pdb}')
-                raise LigandError from exc
-
-        return sequence
-
-    def check_ligand(self, ligand: PathLike) -> bool:
-        """Check if a ligand file contains ions or valid small molecules.
-
-        Identifies species that are ions based on element type and
-        formal charge. True ligands are returned for parameterization
-        while ions are stored separately.
-
-        Args:
-            ligand: Path to ligand SDF file.
-
-        Returns:
-            True if ligand should be parameterized, False if it's an ion.
-        """
-        ion = False
-        mol = Chem.SDMolSupplier(str(ligand))[0]
-
-        ion_atoms: list[list[Any]] = []
-        for atom, position in zip(mol.GetAtoms(),
-                                  mol.GetConformer().GetPositions(),
-                                  strict=True):
-            symbol = atom.GetSymbol()
-            if symbol.lower() in self.cation_list + self.anion_list:
-                charge = atom.GetFormalCharge()
-                if charge != 0:
-                    ion = True
-                    sign = '+' if charge > 0 else '-'
-                    if abs(charge) > 1:
-                        sign = f'{charge}{sign}'
-
-                    ion_atoms.append([symbol, sign] + [x for x in position])
-
-        if ion:
-            if self.ions is None:
-                self.ions = [ion_atoms]
-            else:
-                self.ions.append(ion_atoms)
-            return False
-
-        return True
-
-    @property
-    def cation_list(self) -> list[str]:
-        """List of common cation element symbols (lowercase)."""
-        return [
-            'na',
-            'k',
-            'ca',
-            'mn',
-            'mg',
-            'li',
-            'rb',
-            'cs',
-            'cu',
-            'ag',
-            'au',
-            'ti',
-            'be',
-            'sr',
-            'ba',
-            'ra',
-            'v',
-            'cr',
-            'fe',
-            'co',
-            'zn',
-            'ni',
-            'pd',
-            'cd',
-            'sn',
-            'pt',
-            'hg',
-            'pb',
-            'al',
-        ]
-
-    @property
-    def anion_list(self) -> list[str]:
-        """List of common anion element symbols (lowercase)."""
-        return ['cl', 'br', 'i', 'f']
 
 
 class ComplexBuilder(ExplicitSolvent):

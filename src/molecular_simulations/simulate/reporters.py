@@ -1,10 +1,7 @@
 # ruff: noqa: SIM115
 """Custom OpenMM reporters for molecular simulations."""
-
-from pathlib import Path
-
 import numpy as np
-
+from pathlib import Path
 
 class RCReporter:
     """Custom reaction-coordinate reporter for OpenMM. Computes reaction

@@ -1,6 +1,5 @@
 """Free energy calculations using Empirical Valence Bond (EVB) methods."""
 
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from importlib.util import find_spec
@@ -28,8 +27,6 @@ from typing import Any, TypeVar
 
 from .omm_simulator import Simulator
 from .reporters import RCReporter
-
-logger = logging.getLogger(__name__)
 
 # Constants
 KB = 8.314462618e-3  # Boltzmann constant in kJ/(mol·K)
@@ -265,7 +262,6 @@ class EVBAnalyzer:
             if self.output_path != self.log_path:
                 f.write(f'output_path = "{self.output_path}"\n')
 
-        logger.info(f'Saved metadata to {output_path}')
         return output_path
 
     def load_rc_data(self) -> list[np.ndarray]:
@@ -291,11 +287,7 @@ class EVBAnalyzer:
                 pl.read_csv(str(rc_log)).select(pl.col('rc')).to_numpy().flatten()
             )
             rc_data.append(rc_contents)
-            logger.debug(f'Loaded window {i}: {len(rc_contents)} frames')
 
-        logger.info(
-            f'Loaded {n_windows} windows with {sum(len(rc) for rc in rc_data)} total frames'
-        )
         return rc_data
 
     def get_available_windows(self) -> list[int]:
@@ -437,9 +429,6 @@ class EVBAnalyzer:
                 )
             )
 
-            if t0 > len(rc) * 0.5:
-                logger.warning(f'Window {i}: >50% discarded as equilibration')
-
         return results
 
     def check_convergence(
@@ -521,7 +510,6 @@ class EVBAnalyzer:
         if find_spec('pymbar') is not None:
             return self._compute_pmf_mbar(rc_data, rc0_values, temperature, n_bins)
         else:
-            logger.warning('pymbar not available, using WHAM fallback')
             return self._compute_pmf_histogram(rc_data, rc0_values, temperature, n_bins)
 
     def _compute_pmf_mbar(
@@ -544,7 +532,6 @@ class EVBAnalyzer:
         for k in range(n_windows):
             u_kn[k, :] = beta * 0.5 * self.k * (rc_all - rc0_values[k]) ** 2
 
-        logger.info('Running MBAR analysis...')
         mbar = pymbar.MBAR(u_kn, N_k, verbose=False)
 
         results = mbar.compute_free_energy_differences()
@@ -665,8 +652,6 @@ class EVBAnalyzer:
         Returns:
             EVBAnalysisResult with complete analysis.
         """
-        logger.info('Starting EVB analysis...')
-
         # Load data
         rc_data_raw = self.load_rc_data()
 
@@ -676,30 +661,21 @@ class EVBAnalyzer:
             rc_data = [rc[eq.t0 :] for rc, eq in zip(rc_data_raw, equilibration, strict=True)]
             n_discarded = sum(eq.t0 for eq in equilibration)
             n_total = sum(len(rc) for rc in rc_data_raw)
-            logger.info(f'Discarded {n_discarded}/{n_total} frames as equilibration')
         else:
             rc_data = rc_data_raw
 
         # Convergence
         convergence = self.check_convergence(rc_data, block_size, sem_threshold)
         n_converged = sum(1 for c in convergence if c.is_converged)
-        logger.info(f'Converged windows: {n_converged}/{len(convergence)}')
 
         # Overlap
         overlap = self.analyze_overlap(rc_data, n_bins, overlap_threshold)
-        if overlap.problem_pairs:
-            logger.warning(
-                f'Found {len(overlap.problem_pairs)} pairs with insufficient overlap'
-            )
 
         # PMF
         pmf = self.compute_pmf(rc_data, temperature, n_bins)
         valid_pmf = pmf.pmf[~np.isnan(pmf.pmf)]
         if len(valid_pmf) > 0:
             barrier = valid_pmf.max()
-            logger.info(
-                f'Barrier: {barrier:.2f} kJ/mol ({barrier / 4.184:.2f} kcal/mol)'
-            )
 
         return EVBAnalysisResult(
             pmf=pmf,
@@ -771,8 +747,6 @@ class EVBAnalyzer:
             )
             f.write(f'Minimum overlap: {result.overlap.min_overlap:.3f}\n')
 
-        logger.info(f'Results saved to {output_dir}')
-
 
 @python_app
 def run_evb_window(
@@ -838,11 +812,13 @@ class EVB:
         Args:
             topology: Path to the system topology file (prmtop).
             coordinates: Path to the system coordinate file (inpcrd).
-            umbrella_atoms: List of three atom indices [i, j, k] for umbrella
-                sampling where the reaction coordinate is dist(i,k) - dist(j,k).
-            morse_atoms: List of two atom indices [i, j] for the Morse bond.
-            reaction_coordinate: List of [min, max, increment] defining the
-                reaction coordinate windows.
+            donor_atom: MDAnalysis selection string for the donor atom (the
+                atom the reactive atom departs from).
+            acceptor_atom: MDAnalysis selection string for the acceptor atom
+                (the atom the reactive atom moves toward).
+            reactive_atom: MDAnalysis selection string for the transferring
+                atom shared by donor and acceptor. The reaction coordinate is
+                dist(donor, reactive) - dist(acceptor, reactive).
             parsl_config: Parsl configuration for distributed execution.
             log_path: Directory path for writing reaction coordinate logs.
             log_prefix: Prefix for log file names. Defaults to 'reactant'.
@@ -853,8 +829,13 @@ class EVB:
             k_path: Path restraint force constant in kJ/mol. Defaults to 100.0.
             D_e: Morse well depth in kJ/mol. Defaults to 392.46.
             alpha: Morse width parameter in nm^-1. Defaults to 13.275.
-            r0: Equilibrium bond distance in nm. Defaults to 0.1.
+            r0: Equilibrium bond distance in nm. Defaults to 0.109.
             platform: OpenMM platform name. Defaults to 'CUDA'.
+            n_windows: Number of umbrella windows to generate when an explicit
+                reaction_coordinate is not provided. Defaults to 50.
+            reaction_coordinate: Optional list of [min, max, increment] defining
+                the reaction coordinate windows. If None, it is inferred from the
+                donor/acceptor/reactive atom positions. Defaults to None.
             restraint_sel: Optional MDAnalysis selection string for backbone
                 restraints. Defaults to None.
         """
@@ -893,7 +874,22 @@ class EVB:
         reactor: str,
         rc: list[float] | None = None,
     ) -> None:
-        """"""
+        """Resolve donor/acceptor/reactive atoms and build the reaction coordinate.
+
+        Selects the participating atoms from the topology, records the Morse
+        and umbrella atom index sets, and constructs the per-window reaction
+        coordinate values.
+
+        Args:
+            donor: MDAnalysis selection string for the donor atom.
+            acceptor: MDAnalysis selection string for the acceptor atom.
+            reactor: MDAnalysis selection string for the transferring (reactive)
+                atom shared by donor and acceptor.
+            rc: Optional list of [min, max, increment] defining the reaction
+                coordinate windows. If None, it is inferred from the donor,
+                acceptor, and reactive atom positions using n_windows.
+                Defaults to None.
+        """
         u = mda.Universe(self.topology, self.coordinates)
 
         a0 = u.select_atoms(donor)
@@ -919,10 +915,10 @@ class EVB:
         """Construct linearly spaced reaction coordinate.
 
         Args:
-            rc (tuple[float]): (rc_minimum, rc_maximum, rc_increment)
+            rc: List of [rc_minimum, rc_maximum, rc_increment].
 
         Returns:
-            (np.ndarray): Linearly spaced reaction coordinate
+            Linearly spaced reaction coordinate as a numpy array.
         """
         return np.arange(rc[0], rc[1] + rc[2], rc[2])
 
@@ -938,12 +934,10 @@ class EVB:
                 existing_dfk = parsl.dfk()
                 self.dfk = existing_dfk
                 self._owns_parsl = False
-                logger.info('Reusing existing Parsl DataFlowKernel')
             except Exception:
                 # No DFK exists, load a new one
                 self.dfk = parsl.load(self.parsl_config)
                 self._owns_parsl = True
-                logger.info('Initialized new Parsl DataFlowKernel')
 
     def shutdown(self) -> None:
         """Clean up Parsl after runs.
@@ -954,7 +948,6 @@ class EVB:
         if self._owns_parsl and self.dfk:
             self.dfk.cleanup()
             parsl.clear()
-            logger.info('Shut down Parsl DataFlowKernel')
         self.dfk = None
         self._owns_parsl = False
 
@@ -1033,14 +1026,9 @@ class EVB:
             )
             all_data.append(window_df)
 
-            logger.info(
-                f'Loaded window {i}: {n_frames} frames, target RC = {self.reaction_coordinate[i]:.4f}'
-            )
-
         df = pl.concat(all_data)
         output_path = self.log_path / f'{self.log_prefix}_rc_data.parquet'
         df.write_parquet(str(output_path))
-        logger.info(f'Saved RC data to {output_path}')
 
         return df
 
@@ -1113,12 +1101,6 @@ class EVB:
                     fraction_discarded=t0 / len(rc),
                 )
             )
-
-            if t0 > len(rc) * 0.5:
-                logger.warning(
-                    f'Window {i}: >50% of trajectory discarded as equilibration '
-                    f'(t0={t0}, n_total={len(rc)})'
-                )
 
         return results
 
@@ -1230,10 +1212,6 @@ class EVB:
             n_blocks = n // bs
 
             if n_blocks < 3:
-                logger.warning(
-                    f'Window {i}: Only {n_blocks} blocks available. '
-                    'Consider longer simulation or smaller block_size.'
-                )
                 n_blocks = max(3, n_blocks)
                 bs = n // n_blocks
 
@@ -1256,12 +1234,6 @@ class EVB:
                     is_converged=is_converged,
                 )
             )
-
-            if not is_converged:
-                logger.warning(
-                    f'Window {i}: SEM ({sem:.4f}) exceeds threshold ({sem_threshold}). '
-                    'Consider longer sampling.'
-                )
 
         return results
 
@@ -1306,11 +1278,6 @@ class EVB:
 
             if overlap < min_overlap_threshold:
                 problem_pairs.append((i, i + 1))
-                logger.warning(
-                    f'Windows {i} and {i + 1}: overlap ({overlap:.3f}) '
-                    f'below threshold ({min_overlap_threshold}). '
-                    'Consider adding intermediate windows.'
-                )
 
         min_overlap = overlap_matrix.min() if len(overlap_matrix) > 0 else 0.0
 
@@ -1349,10 +1316,6 @@ class EVB:
         if find_spec('pymbar') is not None:
             return self._compute_pmf_mbar(rc_data, rc0_values, temperature, n_bins)
         else:
-            logger.warning(
-                'pymbar not available. Using simplified histogram reweighting. '
-                'Install pymbar for more accurate results: pip install pymbar'
-            )
             return self._compute_pmf_histogram(rc_data, rc0_values, temperature, n_bins)
 
     def _compute_pmf_mbar(
@@ -1392,7 +1355,6 @@ class EVB:
             u_kn[k, :] = beta * 0.5 * k_umb * (rc_all - rc0_values[k]) ** 2
 
         # Initialize MBAR
-        logger.info('Running MBAR analysis...')
         mbar = pymbar.MBAR(u_kn, N_k, verbose=False)
 
         # Get free energies for each window
@@ -1436,8 +1398,7 @@ class EVB:
                     pmf[i] = np.nan
                     pmf_uncertainty[i] = np.nan
 
-            except Exception as e:
-                logger.warning(f'Error computing PMF for bin {i}: {e}')
+            except Exception:
                 pmf[i] = np.nan
                 pmf_uncertainty[i] = np.nan
 
@@ -1529,10 +1490,7 @@ class EVB:
             f_k -= f_k[0]  # Reference to first window
             delta = np.max(np.abs(f_k - f_k_old))
             if delta < tolerance:
-                logger.info(f'WHAM converged after {iteration + 1} iterations')
                 break
-        else:
-            logger.warning(f'WHAM did not converge after {max_iter} iterations')
 
         # Compute PMF from probability
         pmf = np.full(n_bins, np.nan)
@@ -1587,14 +1545,10 @@ class EVB:
             >>> result = evb.run_full_analysis(temperature=300.0)
             >>> print(f"Barrier height: {result.pmf.pmf.max():.2f} kJ/mol")
         """
-        logger.info('Starting comprehensive EVB analysis...')
-
         # Load RC data
-        logger.info('Loading reaction coordinate data...')
         rc_data_raw = self.load_rc_data()
 
         # Detect equilibration
-        logger.info('Detecting equilibration...')
         equilibration = self.detect_equilibration(rc_data_raw)
 
         # Remove equilibration frames if requested
@@ -1602,38 +1556,23 @@ class EVB:
             rc_data = [rc[eq.t0 :] for rc, eq in zip(rc_data_raw, equilibration, strict=True)]
             n_discarded = sum(eq.t0 for eq in equilibration)
             n_total = sum(len(rc) for rc in rc_data_raw)
-            logger.info(
-                f'Discarded {n_discarded}/{n_total} frames '
-                f'({100 * n_discarded / n_total:.1f}%) as equilibration'
-            )
         else:
             rc_data = rc_data_raw
 
         # Check convergence
-        logger.info('Checking convergence...')
         convergence = self.check_convergence(rc_data, block_size, sem_threshold)
         n_converged = sum(1 for c in convergence if c.is_converged)
-        logger.info(f'Converged windows: {n_converged}/{len(convergence)}')
 
         # Analyze overlap
-        logger.info('Analyzing window overlap...')
         overlap = self.analyze_overlap(rc_data, n_bins, overlap_threshold)
-        if overlap.problem_pairs:
-            logger.warning(
-                f'Found {len(overlap.problem_pairs)} window pairs with insufficient overlap'
-            )
 
         # Compute PMF
-        logger.info('Computing PMF...')
         pmf = self.compute_pmf(rc_data, temperature, n_bins)
 
         # Report key results
         valid_pmf = pmf.pmf[~np.isnan(pmf.pmf)]
         if len(valid_pmf) > 0:
             barrier = valid_pmf.max()
-            logger.info(
-                f'Estimated barrier height: {barrier:.2f} kJ/mol ({barrier / 4.184:.2f} kcal/mol)'
-            )
 
         return EVBAnalysisResult(
             pmf=pmf,
@@ -1723,8 +1662,6 @@ class EVB:
                     f'  Window {eq.window_idx}: t0={eq.t0}, g={eq.g:.2f}, N_eff={eq.n_effective:.1f}\n'
                 )
 
-        logger.info(f'Analysis results saved to {output_dir}')
-
     def save_metadata(self, output_path: Path | None = None) -> Path:
         """Save run metadata for later analysis without re-instantiation.
 
@@ -1773,7 +1710,6 @@ class EVB:
             f.write(f'topology = "{self.topology}"\n')
             f.write(f'coordinates = "{self.coordinates}"\n')
 
-        logger.info(f'Saved EVB metadata to {output_path}')
         return output_path
 
     def get_analyzer(self) -> 'EVBAnalyzer':
@@ -1975,14 +1911,14 @@ class EVBCalculation:
         """Difference of distances umbrella force. Think pulling an oxygen off
 
         Args:
-            atom_i (int): Index of first atom participating (from reactant).
-            atom_j (int): Index of second atom participating (from product).
-            atom_k (int): Index of shared atom participating in both reactant and product.
-            k (float, optional): Harmonic spring constant.
-            rc0 (float, optional): Target equilibrium distance for current window.
+            atom_i: Index of first atom participating (from reactant).
+            atom_j: Index of second atom participating (from product).
+            atom_k: Index of shared atom participating in both reactant and product.
+            k: Harmonic spring constant.
+            rc0: Target equilibrium distance for current window.
 
         Returns:
-            CustomBondForce: Force that drives sampling in each umbrella window.
+            CustomCompoundBondForce that drives sampling in each umbrella window.
         """
         force = CustomCompoundBondForce(
             3,
@@ -2009,13 +1945,13 @@ class EVBCalculation:
         since (1 - costheta)^2 is dimensionless. Typical values are 50-200 kJ/mol.
 
         Args:
-            atom_i (int): Index of donor atom.
-            atom_j (int): Index of acceptor atom.
-            atom_k (int): Index of transferring atom (e.g., hydride).
-            k_path (float): Force constant in kJ/mol for collinearity restraint.
+            atom_i: Index of donor atom.
+            atom_j: Index of acceptor atom.
+            atom_k: Index of transferring atom (e.g., hydride).
+            k_path: Force constant in kJ/mol for collinearity restraint.
 
         Returns:
-            CustomCompoundBondForce: Force enforcing D-H-A collinearity.
+            CustomCompoundBondForce enforcing D-H-A collinearity.
         """
         force = CustomCompoundBondForce(
             3,
@@ -2057,14 +1993,14 @@ class EVBCalculation:
             - Alpha in nm^-1
 
         Args:
-            atom_i (int): Index of first atom.
-            atom_j (int): Index of second atom.
-            D_e (float): Well depth in kJ/mol (from bond dissociation energy).
-            alpha (float): Width parameter in nm^-1.
-            r0 (float): Equilibrium distance in nm.
+            atom_i: Index of first atom.
+            atom_j: Index of second atom.
+            D_e: Well depth in kJ/mol (from bond dissociation energy).
+            alpha: Width parameter in nm^-1.
+            r0: Equilibrium distance in nm.
 
         Returns:
-            CustomBondForce: Force corresponding to a Morse potential.
+            CustomBondForce corresponding to a Morse potential.
         """
         force = CustomBondForce('D_e * (1 - exp(-alpha * (r-r0))) ^ 2')
         force.addGlobalParameter('D_e', D_e)
@@ -2085,8 +2021,8 @@ class EVBCalculation:
 
         Args:
             system: OpenMM System object containing forces.
-            atom_i (int): Index of first atom in the bond.
-            atom_j (int): Index of second atom in the bond.
+            atom_i: Index of first atom in the bond.
+            atom_j: Index of second atom in the bond.
 
         Returns:
             None. Modifies system in place.

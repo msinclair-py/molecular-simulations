@@ -41,6 +41,13 @@ class UWHAMSolver:
     """
 
     def __init__(self, tol: float = 1e-7, maxiter: int = 10000):
+        """Initialize the UWHAM solver.
+
+        Args:
+            tol: Convergence tolerance on the maximum change in free
+                energy offsets between iterations.
+            maxiter: Maximum number of self-consistent iterations.
+        """
         self.tol = tol
         self.maxiter = maxiter
         self.f = None  # Log of normalization constants (will be solved)
@@ -50,13 +57,11 @@ class UWHAMSolver:
         """
         Load data from polars DataFrame into UWHAM-compatible format.
 
-        Parameters
-        ----------
-        df : pl.DataFrame
-            DataFrame with columns: rankid, current_pH, and residue columns
-            Residue columns should contain numeric protonation states (0 or 1)
-        resid_cols : List[str]
-            List of column names corresponding to residue IDs
+        Args:
+            df: DataFrame with columns: rankid, current_pH, and residue
+                columns. Residue columns should contain numeric
+                protonation states (0 or 1).
+            resid_cols: List of column names corresponding to residue IDs.
         """
         # Get unique pH values and count samples
         pH_groups = df.group_by('current_pH').agg(pl.len().alias('count'))
@@ -110,10 +115,11 @@ class UWHAMSolver:
 
         where the sum over n includes ALL samples from ALL states.
 
-        Returns
-        -------
-        f : np.ndarray
-            Free energy offsets for each pH simulation
+        Args:
+            verbose: If True, print convergence progress.
+
+        Returns:
+            Free energy offsets for each pH simulation as an np.ndarray.
         """
         # Initialize free energies
         f = np.zeros(self.nstates)
@@ -209,12 +215,16 @@ class UWHAMSolver:
         Uses MBAR formula:
         w_n ∝ exp(-u_target(x_n)) / Σ_l N_l exp(f_l - u_l(x_n))
 
-        Returns
-        -------
-        log_weights : np.ndarray
-            Log weights for all samples (flattened)
-        log_norm : float
-            Log of the normalization constant
+        Args:
+            target_pH: pH value to reweight the samples to.
+
+        Returns:
+            Tuple of (log_weights, log_norm), where log_weights is an
+            np.ndarray of log weights for all samples (flattened) and
+            log_norm is the log of the normalization constant.
+
+        Raises:
+            RuntimeError: If solve() has not been called first.
         """
         if self.f is None:
             raise RuntimeError('Must call solve() before computing weights')
@@ -245,17 +255,13 @@ class UWHAMSolver:
         """
         Compute expectation value of observable at arbitrary pH.
 
-        Parameters
-        ----------
-        observable_by_state : List[np.ndarray]
-            Observable values for each sample, organized by state index
-        target_pH : float
-            pH value at which to compute the expectation
+        Args:
+            observable_by_state: Observable values for each sample,
+                organized by state index.
+            target_pH: pH value at which to compute the expectation.
 
-        Returns
-        -------
-        expectation : float
-            Reweighted expectation value at target_pH
+        Returns:
+            Reweighted expectation value at target_pH.
         """
         log_weights, log_norm = self.compute_log_weights(target_pH)
 
@@ -294,8 +300,17 @@ class TitrationCurve:
         log_file: Path | list[Path],
         make_plots: bool = True,
         out: Path = Path('.'),
-        method: str = 'uwham',  # 'curvefit' or 'uwham'
+        method: str = 'curvefit',  # 'curvefit' or 'uwham'
     ):
+        """Initialize the titration curve analyzer.
+
+        Args:
+            log_file: Path or list of paths to constant pH log file(s).
+            make_plots: Whether to generate plots during postprocessing.
+            out: Output directory for results and plots.
+            method: Fitting method to use; one of 'curvefit', 'weighted',
+                or 'bootstrap'.
+        """
         if isinstance(log_file, list):
             dfs = []
             resids = None
@@ -320,12 +335,18 @@ class TitrationCurve:
     def parse_log(log: Path) -> tuple[pl.DataFrame, list[int]]:
         """Parse OpenMM constant pH log file.
 
-        Returns
-        -------
-        df : pl.DataFrame
-            DataFrame with columns: rankid, current_pH, and one column per residue
-        resids : List[int]
-            List of residue IDs in order
+        Args:
+            log: Path to the constant pH log file to parse.
+
+        Returns:
+            Tuple of (df, resids), where df is a DataFrame with columns
+            rankid, current_pH, and one column per residue, and resids is
+            a list of residue IDs in order.
+
+        Raises:
+            RuntimeError: If the cpH residue ID header line is not found.
+            ValueError: If the number of states does not match the number
+                of residues.
         """
         lines = log.read_text().splitlines()
 
@@ -499,6 +520,13 @@ class TitrationCurve:
 
         This is more statistically rigorous than unweighted curve fitting
         when sample sizes vary across pH values.
+
+        Args:
+            verbose: If True, print progress information.
+
+        Returns:
+            DataFrame with fitted pKa, Hill coefficient, and associated
+            errors for each residue.
         """
         fit_rows = []
 
@@ -584,16 +612,12 @@ class TitrationCurve:
         parameters. This gives robust error estimates even when the
         Hill equation doesn't perfectly fit the data.
 
-        Parameters
-        ----------
-        n_bootstrap : int
-            Number of bootstrap iterations (default 1000)
-        verbose : bool
-            Print progress
+        Args:
+            n_bootstrap: Number of bootstrap iterations (default 1000).
+            verbose: If True, print progress.
 
-        Returns
-        -------
-        DataFrame with pKa, Hill_n, and 95% confidence intervals
+        Returns:
+            DataFrame with pKa, Hill_n, and 95% confidence intervals.
         """
         fit_rows = []
 
@@ -757,16 +781,12 @@ class TitrationCurve:
         """
         Diagnose why a residue might have failed pKa determination.
 
-        Parameters
-        ----------
-        resid : str
-            Residue ID to diagnose
-        verbose : bool
-            Print diagnostic information
+        Args:
+            resid: Residue ID to diagnose.
+            verbose: If True, print diagnostic information.
 
-        Returns
-        -------
-        dict with diagnostic info including titration curve data
+        Returns:
+            Dictionary with diagnostic info including titration curve data.
         """
         # Get per-pH fraction protonated from simple averaging
         resid_data = self.titrations.filter(pl.col('resid') == resid)
@@ -869,14 +889,11 @@ class TitrationCurve:
         """
         Compare curve fit vs UWHAM results for specified residues.
 
-        Parameters
-        ----------
-        resids : List[str], optional
-            Residues to compare. If None, compares all.
+        Args:
+            resids: Residues to compare. If None, compares all.
 
-        Returns
-        -------
-        DataFrame with both methods' results side by side
+        Returns:
+            DataFrame with both methods' results side by side.
         """
         # Run both methods
         fits_cf = self.compute_titrations_curvefit()
@@ -910,14 +927,13 @@ class TitrationAnalyzer:
     Provides a streamlined API that runs both curve fitting and UWHAM analysis,
     generates comparisons, and creates publication-quality plots.
 
-    Example usage
-    -------------
-    >>> analyzer = TitrationAnalyzer(["cpH.log"])
-    >>> analyzer.run()
-    >>> analyzer.summary()
-    >>> analyzer.plot_residue("145")
-    >>> analyzer.plot_all(output_dir="plots/")
-    >>> analyzer.save_results("results/")
+    Example:
+        >>> analyzer = TitrationAnalyzer(["cpH.log"])
+        >>> analyzer.run()
+        >>> analyzer.summary()
+        >>> analyzer.plot_residue("145")
+        >>> analyzer.plot_all(output_dir="plots/")
+        >>> analyzer.save_results("results/")
     """
 
     def __init__(
@@ -928,12 +944,10 @@ class TitrationAnalyzer:
         """
         Initialize the analyzer.
 
-        Parameters
-        ----------
-        log_files : Path, str, or list thereof
-            Path(s) to constant pH log file(s)
-        output_dir : Path or str, optional
-            Directory for output files. If None, uses current directory.
+        Args:
+            log_files: Path(s) to constant pH log file(s).
+            output_dir: Directory for output files. If None, uses current
+                directory.
         """
         log_file_list: list[Path | str] = [log_files] if isinstance(log_files, (str, Path)) else list(log_files)
         self.log_files = [Path(f) for f in log_file_list]
@@ -966,21 +980,17 @@ class TitrationAnalyzer:
         """
         Run the analysis with specified methods.
 
-        Parameters
-        ----------
-        methods : list of str
-            Methods to run: 'curvefit', 'weighted', 'bootstrap'
-            - curvefit: Simple least squares fit of Hill equation
-            - weighted: Weighted least squares (by 1/variance)
-            - bootstrap: Curve fit with bootstrap confidence intervals
-        verbose : bool
-            Print progress information
-        n_bootstrap : int
-            Number of bootstrap iterations (only used if 'bootstrap' in methods)
+        Args:
+            methods: Methods to run: 'curvefit', 'weighted', 'bootstrap'.
+                - curvefit: Simple least squares fit of Hill equation
+                - weighted: Weighted least squares (by 1/variance)
+                - bootstrap: Curve fit with bootstrap confidence intervals
+            verbose: If True, print progress information.
+            n_bootstrap: Number of bootstrap iterations (only used if
+                'bootstrap' in methods).
 
-        Returns
-        -------
-        self : for method chaining
+        Returns:
+            Self, for method chaining.
         """
         if verbose:
             print('=' * 60)
@@ -1069,14 +1079,11 @@ class TitrationAnalyzer:
         """
         Print and return summary of results.
 
-        Parameters
-        ----------
-        show_all : bool
-            If True, show all residues. Otherwise show first 20.
+        Args:
+            show_all: If True, show all residues. Otherwise show first 20.
 
-        Returns
-        -------
-        DataFrame with comparison results
+        Returns:
+            DataFrame with comparison results.
         """
         if not self._analyzed:
             raise RuntimeError('Must call run() before summary()')
@@ -1142,10 +1149,9 @@ class TitrationAnalyzer:
         """
         Get results DataFrame for specified method.
 
-        Parameters
-        ----------
-        method : str
-            'curvefit', 'weighted', 'bootstrap', or 'comparison'
+        Args:
+            method: One of 'curvefit', 'weighted', 'bootstrap', or
+                'comparison'.
         """
         if method == 'curvefit':
             return self.fits_curvefit
@@ -1171,26 +1177,17 @@ class TitrationAnalyzer:
         """
         Plot titration curve for a single residue.
 
-        Parameters
-        ----------
-        resid : str
-            Residue ID to plot
-        ax : matplotlib Axes, optional
-            Axes to plot on. If None, creates new figure.
-        show_curvefit : bool
-            Show curve fitting result
-        show_weighted : bool
-            Show weighted fit result
-        show_data : bool
-            Show raw data points
-        figsize : tuple
-            Figure size if creating new figure
-        save : str or Path, optional
-            Path to save figure
+        Args:
+            resid: Residue ID to plot.
+            ax: Axes to plot on. If None, creates new figure.
+            show_curvefit: Show curve fitting result.
+            show_weighted: Show weighted fit result.
+            show_data: Show raw data points.
+            figsize: Figure size if creating new figure.
+            save: Path to save figure.
 
-        Returns
-        -------
-        matplotlib Figure
+        Returns:
+            The matplotlib Figure.
         """
         import matplotlib.pyplot as plt
 
@@ -1299,20 +1296,14 @@ class TitrationAnalyzer:
         """
         Generate plots for all (or selected) residues.
 
-        Parameters
-        ----------
-        output_dir : str or Path, optional
-            Directory for plots. Uses self.output_dir / 'plots' if None.
-        format : str
-            Image format ('png', 'pdf', 'svg')
-        show_curvefit : bool
-            Include curve fitting results
-        show_weighted : bool
-            Include weighted fit results
-        residues : list of str, optional
-            Specific residues to plot. If None, plots all.
-        verbose : bool
-            Print progress
+        Args:
+            output_dir: Directory for plots. Uses self.output_dir /
+                'plots' if None.
+            format: Image format ('png', 'pdf', 'svg').
+            show_curvefit: Include curve fitting results.
+            show_weighted: Include weighted fit results.
+            residues: Specific residues to plot. If None, plots all.
+            verbose: If True, print progress.
         """
         import matplotlib.pyplot as plt
 
@@ -1438,14 +1429,10 @@ class TitrationAnalyzer:
         """
         Save all results to files.
 
-        Parameters
-        ----------
-        output_dir : str or Path, optional
-            Output directory. Uses self.output_dir if None.
-        prefix : str
-            Prefix for filenames
-        formats : list of str
-            Output formats: 'csv', 'parquet', 'json'
+        Args:
+            output_dir: Output directory. Uses self.output_dir if None.
+            prefix: Prefix for filenames.
+            formats: Output formats: 'csv', 'parquet', 'json'.
         """
         out_dir = Path(output_dir) if output_dir else self.output_dir
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -1496,30 +1483,30 @@ class TitrationAnalyzer:
         protonated vs deprotonated at the specified pH, with confidence
         estimates based on distance from pKa.
 
-        Parameters
-        ----------
-        target_pH : float
-            pH value to make predictions for (e.g., 3.0, 7.4)
-        confidence_threshold : float
-            Probability threshold for "confident" predictions (default 0.7)
-            Residues with P(protonated) between (1-threshold) and threshold
-            are marked as "uncertain"
-        use_bootstrap : bool
-            If True and bootstrap results available, use bootstrap CI for
-            uncertainty estimation
-        verbose : bool
-            Print summary of recommendations
+        Args:
+            target_pH: pH value to make predictions for (e.g., 3.0, 7.4).
+            confidence_threshold: Probability threshold for "confident"
+                predictions (default 0.7). Residues with P(protonated)
+                between (1-threshold) and threshold are marked as
+                "uncertain".
+            use_bootstrap: If True and bootstrap results available, use
+                bootstrap CI for uncertainty estimation.
+            verbose: If True, print summary of recommendations.
 
-        Returns
-        -------
-        DataFrame with columns:
-            - resid: residue ID
-            - resname: canonical residue name (ASP, GLU, HIS, LYS, CYS)
-            - pKa: fitted pKa value
-            - prob_protonated: probability of being protonated at target pH
-            - recommendation: 'protonated', 'deprotonated', or 'uncertain'
-            - confidence: 'high', 'medium', or 'low'
-            - state_name: recommended state name (e.g., 'ASH' or 'ASP')
+        Returns:
+            DataFrame with columns:
+                - resid: residue ID
+                - resname: canonical residue name (ASP, GLU, HIS, LYS, CYS)
+                - pKa: pKa value used for the prediction; the fitted pKa
+                  when available, otherwise the reference pKa
+                - pKa_source: 'fitted' if a fitted pKa was used, or
+                  'reference' if the reference pKa was used as a fallback
+                - prob_protonated: probability of being protonated at
+                  target pH
+                - recommendation: 'protonated', 'deprotonated', or
+                  'uncertain'
+                - confidence: 'high', 'medium', or 'low'
+                - state_name: recommended state name (e.g., 'ASH' or 'ASP')
         """
         if not self._analyzed:
             raise RuntimeError('Must call run() before recommend_protonation()')
@@ -1682,16 +1669,13 @@ class TitrationAnalyzer:
 
         Useful for setting up simulations.
 
-        Parameters
-        ----------
-        target_pH : float
-            pH value to make predictions for
-        confidence_threshold : float
-            Probability threshold for confident predictions
+        Args:
+            target_pH: pH value to make predictions for.
+            confidence_threshold: Probability threshold for confident
+                predictions.
 
-        Returns
-        -------
-        String with format: "resid:state,resid:state,..."
+        Returns:
+            String with format: "resid:state,resid:state,...".
         """
         recs = self.recommend_protonation(
             target_pH, confidence_threshold=confidence_threshold, verbose=False
@@ -1713,20 +1697,16 @@ class TitrationAnalyzer:
         """
         Export protonation state recommendations to file.
 
-        Parameters
-        ----------
-        target_pH : float
-            pH value to make predictions for
-        output_file : str or Path, optional
-            Output file path. If None, uses output_dir/protonation_pH{pH}.{format}
-        format : str
-            Output format: 'csv', 'json', or 'txt'
-        confidence_threshold : float
-            Probability threshold for confident predictions
+        Args:
+            target_pH: pH value to make predictions for.
+            output_file: Output file path. If None, uses
+                output_dir/protonation_pH{pH}.{format}.
+            format: Output format: 'csv', 'json', or 'txt'.
+            confidence_threshold: Probability threshold for confident
+                predictions.
 
-        Returns
-        -------
-        DataFrame with recommendations
+        Returns:
+            DataFrame with recommendations.
         """
         recs = self.recommend_protonation(
             target_pH, confidence_threshold=confidence_threshold, verbose=False
@@ -1770,18 +1750,13 @@ class TitrationAnalyzer:
         Creates a bar plot showing P(protonated) for each residue,
         colored by residue type.
 
-        Parameters
-        ----------
-        target_pH : float
-            pH value to visualize
-        figsize : tuple
-            Figure size
-        save : str or Path, optional
-            Path to save figure
+        Args:
+            target_pH: pH value to visualize.
+            figsize: Figure size.
+            save: Path to save figure.
 
-        Returns
-        -------
-        matplotlib Figure
+        Returns:
+            The matplotlib Figure.
         """
         import matplotlib.pyplot as plt
         from matplotlib.patches import Patch
@@ -1878,23 +1853,21 @@ def analyze_cph(
     """
     Convenience function to run complete constant pH analysis.
 
-    Parameters
-    ----------
-    log_files : path(s) to log files
-    output_dir : output directory
-    methods : list of methods to run ('curvefit', 'weighted', 'bootstrap')
-    plot : whether to generate plots
-    verbose : print progress
+    Args:
+        log_files: Path(s) to log files.
+        output_dir: Output directory.
+        methods: List of methods to run ('curvefit', 'weighted',
+            'bootstrap').
+        plot: Whether to generate plots.
+        verbose: If True, print progress.
 
-    Returns
-    -------
-    TitrationAnalyzer with results
+    Returns:
+        TitrationAnalyzer with results.
 
-    Example
-    -------
-    >>> results = analyze_cph("cpH.log", output_dir="analysis/")
-    >>> results.summary()
-    >>> results.plot_residue("145")
+    Example:
+        >>> results = analyze_cph("cpH.log", output_dir="analysis/")
+        >>> results.summary()
+        >>> results.plot_residue("145")
     """
     analyzer = TitrationAnalyzer(log_files, output_dir=output_dir)
     analyzer.run(methods=methods, verbose=verbose)

@@ -12,13 +12,8 @@ Classes:
     Minimizer: Simple energy minimization utility.
 """
 
-import logging
-import os
 from copy import deepcopy
 from io import TextIOWrapper
-from pathlib import Path
-from typing import Any
-
 import MDAnalysis as mda
 import numpy as np
 from openmm import (
@@ -58,12 +53,12 @@ from openmm.unit import (
     picosecond,  # ty: ignore[unresolved-import]
     picoseconds,  # ty: ignore[unresolved-import]
 )
+import os
+from pathlib import Path
+from typing import Any
 
 PathLike = Path | str
 OptPath = Path | str | None
-
-logger = logging.getLogger(__name__)
-
 
 class Simulator:
     """Class for performing OpenMM simulations on AMBER FF inputs.
@@ -87,6 +82,10 @@ class Simulator:
             (2.5 ns at 2 fs timestep).
         prod_steps: Number of production timesteps. Defaults to 250,000,000
             (1 µs at 4 fs timestep).
+        prod_dt_in_ps: Production integration timestep in picoseconds. Defaults
+            to 0.004.
+        hydrogen_mass_repartitioning: Hydrogen mass in amu used for hydrogen
+            mass repartitioning. Defaults to 1.5.
         n_equil_cycles: Number of unrestrained equilibration cycles after
             restraint relaxation. Defaults to 3.
         temperature: Simulation temperature in Kelvin. Defaults to 300.0.
@@ -371,21 +370,13 @@ class Simulator:
 
         skip_eq = all([f.exists() for f in [self.eq_state, self.eq_chkpt, self.eq_log]])
         if not skip_eq:
-            logger.info('No restart detected, will begin equilibration.')
             self.equilibrate()
-            logger.info(
-                f'Equilibration finished, running {self.prod_steps} steps of production MD.'
-            )
 
         if self.restart.exists():
-            logger.info('Checkpoint file detected, resuming simulation.')
             self.check_num_steps_left()
-            logger.info(f'Will run {self.prod_steps} steps of production MD.')
             self.production(chkpt=str(self.restart), restart=True)
         else:
             self.production(chkpt=str(self.eq_chkpt), restart=False)
-
-        logger.info('Production MD run complete.')
 
     def equilibrate(self) -> Simulation:
         """Run the equilibration protocol.
@@ -974,7 +965,7 @@ class CustomForcesSimulator(Simulator):
 class Minimizer:
     """Simple energy minimization utility for molecular structures.
 
-    Supports AMBER, GROMACS, and PDB input formats. Performs energy
+    Supports AMBER and PDB input formats. Performs energy
     minimization and writes out the minimized structure as a PDB file.
 
     Args:
@@ -1048,16 +1039,15 @@ class Minimizer:
         Raises:
             FileNotFoundError: If no valid input files are found.
         """
-        if self.topology.suffix in ['.prmtop', '.parm7']:
-            system = self.load_amber()
-        elif self.topology.suffix == '.top':
-            system = self.load_gromacs()
-        elif self.topology.suffix == '.pdb':
-            system = self.load_pdb()
-        else:
-            raise FileNotFoundError(
-                f'No viable simulation input files foundat path: {self.path}!'
-            )
+        match self.topology.suffix:
+            case '.prmtop':
+                system = self.load_amber()
+            case '.pdb':
+                system = self.load_pdb()
+            case _:
+                raise FileNotFoundError(
+                    f'No viable simulation input files foundat path: {self.path}!'
+                )
 
         return system
 
@@ -1075,23 +1065,6 @@ class Minimizer:
         system = self.topology.createSystem(
             nonbondedMethod=NoCutoff, constraints=HBonds
         )
-
-        return system
-
-    def load_gromacs(self) -> System:
-        """Load GROMACS input files into OpenMM System.
-
-        Note:
-            This method is untested and may require adjustments.
-
-        Returns:
-            OpenMM System object from GROMACS files.
-        """
-        gro = next(iter(self.path.glob('*.gro')))
-        self.coordinates = GromacsGroFile(str(gro))
-        self.topology = GromacsTopFile(str(self.topology), includeDir='/usr/local/gromacs/share/gromacs/top')
-
-        system = self.topology.createSystem(nonbondedMethod=NoCutoff, constraints=HBonds)
 
         return system
 

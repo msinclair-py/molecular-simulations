@@ -65,7 +65,9 @@ class GenericDataloader:
         """Load and concatenate data from all files into one array.
 
         Lumps data into one large array by vertical stacking. If the
-        resulting array has more than 2 dimensions, it is reshaped to 2D.
+        stacked array has more than 2 rows along its first axis, it is
+        flattened to 2D by collapsing all trailing axes into a single
+        dimension.
         """
         data_list: list[np.ndarray] = []
         self.shapes = []

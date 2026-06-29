@@ -168,6 +168,9 @@ class ConstantPHEnsemble:
             log_dir: Directory path for writing simulation logs.
             pHs: List of pH values to sample. Defaults to [0.5, 1.5, ..., 13.5].
             temperature: Simulation temperature in Kelvin. Defaults to 300.
+            platform: OpenMM platform name to run on. Defaults to 'CUDA'.
+            properties: Platform-specific properties passed to OpenMM. Defaults
+                to {'Precision': 'mixed'}.
             variant_sel: Optional MDAnalysis selection string to limit which
                 titratable residues are included. Defaults to None.
         """
@@ -279,8 +282,13 @@ class ConstantPHEnsemble:
         Args:
             n_cycles: Number of MD/MC cycles per replica. Defaults to 500.
             n_steps: Number of MD steps per cycle. Defaults to 500.
+            parsl_func: Parsl python app used to run each replica. Defaults to
+                run_cph_sim.
+
         Returns:
-            (dict): Dictionary containing failure modes, empty if all successful.
+            Dictionary mapping each replica index to None on success or to the
+            raised Exception on failure. Contains one entry per replica (it is
+            not empty when all replicas succeed).
         """
         futures = []
         for i, path in enumerate(self.paths):
@@ -335,9 +343,10 @@ class ConstantPHEnsemble:
             path: Directory containing system.prmtop and system.inpcrd files.
 
         Returns:
-            Dictionary containing all parameters needed to initialize a
-            ConstantPH simulation including file paths, pH values, integrators,
-            and force field parameters for both explicit and implicit solvent.
+            Dictionary containing the parameters needed to initialize a
+            ConstantPH simulation: file paths (prmtop_file, inpcrd_file), pH
+            values, relaxationSteps, the nonbonded and implicit cutoffs,
+            hmr, platform_name, and properties.
         """
         params = {
             'prmtop_file': path / 'system.prmtop',

@@ -6,26 +6,28 @@ for titratable residues. The convention is:
 
   ref_energies[residue_type] = [E_deprotonated, E_protonated, ...]
 
-Where E_deprotonated = 0 and E_protonated = kT * ln(10) * pKa
+Where E_deprotonated = 0 and E_protonated combines the implicit-solvent
+(GB) free-energy difference between states with a pKa adjustment term,
+i.e. E_protonated = (E_prot - E_deprot)_GB + kT * ln(10) * pKa.
 
 This ensures that at pH = pKa, both protonation states have equal probability.
 """
 
 
 def get_ref_energies(ff: str = 'amber19'):
-    """
-    Get reference energies for constant pH simulations.
+    """Get reference energies for constant pH simulations.
 
-    Parameters
-    ----------
-    ff : str
-        Force field name (currently only 'amber19' is supported)
+    Args:
+        ff: Force field name. Currently only 'amber19' is supported.
+            Defaults to 'amber19'.
 
-    Returns
-    -------
-    dict
+    Returns:
         Maps residue type names to lists of reference energies (kJ/mol).
         Index 0 is the deprotonated state, index 1+ are protonated states.
+
+    Raises:
+        ValueError: If reference energies for the given force field have
+            not been computed.
     """
     match ff.lower():
         case 'amber19':

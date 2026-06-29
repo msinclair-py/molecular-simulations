@@ -6,7 +6,6 @@ Tests use real OpenMM when available, with conditional skips for environments
 without OpenMM installed.
 """
 
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -428,108 +427,80 @@ class TestInteractionEnergyFrame:
 
 
 class TestDynamicInteractionEnergy:
-    """Test suite for DynamicInteractionEnergy class"""
+    """Real DynamicInteractionEnergy tests over the two-chain trajectory."""
 
-    @patch("molecular_simulations.analysis.interaction_energy.md")
-    @patch("molecular_simulations.analysis.interaction_energy.AmberPrmtopFile")
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
-    def test_dynamic_interaction_energy_init(self, mock_platform, mock_prmtop, mock_md):
-        """Test DynamicInteractionEnergy initialization"""
+    def test_dynamic_interaction_energy_init(self, two_chain_trajectory):
+        """Test initialization builds the system and loads the trajectory."""
         from molecular_simulations.analysis.interaction_energy import (
             DynamicInteractionEnergy,
         )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        die = DynamicInteractionEnergy(
+            top=str(two_chain_trajectory["top"]),
+            traj=str(two_chain_trajectory["traj"]),
+            stride=2,
+            chain="A",
+            platform="CPU",
+            first_residue=1,
+            last_residue=10,
+            progress_bar=True,
+        )
 
-        mock_prmtop_instance = MagicMock()
-        mock_prmtop_instance.createSystem.return_value = MagicMock()
-        mock_prmtop.return_value = mock_prmtop_instance
+        assert die.stride == 2
+        assert die.progress is True
+        # Real trajectory: 5 frames, 58 atoms
+        assert die.coordinates.shape == (5, 58, 3)
 
-        mock_traj = MagicMock()
-        mock_traj.xyz = np.zeros((10, 100, 3))
-        mock_md.load.return_value = mock_traj
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            top_path = Path(tmpdir) / "system.prmtop"
-            traj_path = Path(tmpdir) / "traj.dcd"
-            top_path.write_text("dummy")
-            traj_path.write_text("dummy")
-
-            die = DynamicInteractionEnergy(
-                top=top_path,
-                traj=traj_path,
-                stride=2,
-                chain="A",
-                platform="CPU",
-                first_residue=1,
-                last_residue=10,
-                progress_bar=True,
-            )
-
-            assert die.stride == 2
-            assert die.progress is True
-            assert die.coordinates.shape == (10, 100, 3)
-
-    @patch("molecular_simulations.analysis.interaction_energy.md")
-    @patch("molecular_simulations.analysis.interaction_energy.PDBFile")
-    @patch("molecular_simulations.analysis.interaction_energy.ForceField")
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
-    def test_build_system_pdb(self, mock_platform, mock_ff, mock_pdb, mock_md):
-        """Test build_system with PDB file"""
+    def test_build_system_pdb(self, two_chain_trajectory):
+        """Test build_system constructs a real OpenMM system from a PDB."""
         from molecular_simulations.analysis.interaction_energy import (
             DynamicInteractionEnergy,
         )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        die = DynamicInteractionEnergy(
+            top=str(two_chain_trajectory["top"]),
+            traj=str(two_chain_trajectory["traj"]),
+            chain="A",
+            platform="CPU",
+        )
 
-        mock_pdb_instance = MagicMock()
-        mock_pdb_instance.topology = MagicMock()
-        mock_pdb.return_value = mock_pdb_instance
+        assert die.system.getNumParticles() == 58
 
-        mock_ff_instance = MagicMock()
-        mock_ff_instance.createSystem.return_value = MagicMock()
-        mock_ff.return_value = mock_ff_instance
-
-        mock_traj = MagicMock()
-        mock_traj.xyz = np.zeros((5, 50, 3))
-        mock_md.load.return_value = mock_traj
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / "system.pdb"
-            traj_path = Path(tmpdir) / "traj.dcd"
-            pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
-            )
-            traj_path.write_text("dummy")
-
-            die = DynamicInteractionEnergy(top=pdb_path, traj=traj_path)
-
-            # Should have built system from PDB
-            mock_ff.assert_called()
-
-    @patch("molecular_simulations.analysis.interaction_energy.md")
-    @patch("molecular_simulations.analysis.interaction_energy.AmberPrmtopFile")
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
-    def test_build_system_unsupported(self, mock_platform, mock_prmtop, mock_md):
-        """Test build_system with unsupported topology"""
+    def test_build_system_unsupported(self, tmp_path):
+        """Test build_system rejects an unsupported topology extension."""
         from molecular_simulations.analysis.interaction_energy import (
             DynamicInteractionEnergy,
         )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        bad_top = tmp_path / "system.xyz"
+        bad_top.write_text("dummy")
+        traj_path = tmp_path / "traj.dcd"
+        traj_path.write_text("dummy")
 
-        mock_traj = MagicMock()
-        mock_traj.xyz = np.zeros((5, 50, 3))
-        mock_md.load.return_value = mock_traj
+        # build_system runs first in __init__, so it raises before any load
+        with pytest.raises(NotImplementedError):
+            DynamicInteractionEnergy(top=bad_top, traj=traj_path, platform="CPU")
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            top_path = Path(tmpdir) / "system.xyz"  # Unsupported
-            traj_path = Path(tmpdir) / "traj.dcd"
-            top_path.write_text("dummy")
-            traj_path.write_text("dummy")
+    def test_compute_energies_breaks_salt_bridge(self, two_chain_trajectory):
+        """End-to-end: per-frame energies weaken as chain B drifts away."""
+        from molecular_simulations.analysis.interaction_energy import (
+            DynamicInteractionEnergy,
+        )
 
-            with pytest.raises(NotImplementedError):
-                DynamicInteractionEnergy(top=top_path, traj=traj_path)
+        die = DynamicInteractionEnergy(
+            top=str(two_chain_trajectory["top"]),
+            traj=str(two_chain_trajectory["traj"]),
+            chain="A",
+            platform="CPU",
+            progress_bar=False,
+        )
+        die.compute_energies()
+
+        assert die.energies.shape == (5, 2)
+        assert np.isfinite(die.energies).all()
+        # Coulombic attraction of the Lys-Asp salt bridge weakens as the chains
+        # separate across the trajectory (less negative).
+        assert die.energies[-1, 1] > die.energies[0, 1]
 
 
 class TestInteractionEnergyAbstract:
@@ -633,112 +604,59 @@ class TestDynamicInteractionEnergyAdditional:
             assert mock_pbar.update.call_count == 10
             mock_pbar.close.assert_called_once()
 
-    def test_load_traj(self):
-        """Test load_traj loads trajectory with mdtraj."""
-        with (
-            patch(
-                "molecular_simulations.analysis.interaction_energy.Platform"
-            ) as mock_platform,
-            patch("molecular_simulations.analysis.interaction_energy.md") as mock_md,
-        ):
-            mock_platform.getPlatformByName.return_value = MagicMock()
-            mock_traj = MagicMock()
-            mock_traj.xyz = np.random.rand(100, 500, 3)
-            mock_md.load.return_value = mock_traj
+    def test_load_traj(self, two_chain_trajectory):
+        """Test load_traj loads real trajectory coordinates with mdtraj."""
+        from molecular_simulations.analysis.interaction_energy import (
+            DynamicInteractionEnergy,
+        )
 
-            from molecular_simulations.analysis.interaction_energy import (
-                DynamicInteractionEnergy,
-            )
+        die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
 
-            die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
+        result = die.load_traj(
+            two_chain_trajectory["top"], two_chain_trajectory["traj"]
+        )
 
-            result = die.load_traj(Path("top.pdb"), Path("traj.dcd"))
-
-            mock_md.load.assert_called_once_with("traj.dcd", top="top.pdb")
-            assert np.array_equal(result, mock_traj.xyz)
+        # 5 frames, 58 atoms, xyz
+        assert result.shape == (5, 58, 3)
 
 
 class TestDynamicInteractionEnergyBuildSystem:
-    """Test suite for DynamicInteractionEnergy.build_system method."""
+    """Real build_system tests for DynamicInteractionEnergy."""
 
-    def test_build_system_pdb(self):
-        """Test build_system with PDB topology file."""
-        with (
-            patch(
-                "molecular_simulations.analysis.interaction_energy.Platform"
-            ) as mock_platform,
-            patch(
-                "molecular_simulations.analysis.interaction_energy.PDBFile"
-            ) as mock_pdb_cls,
-            patch(
-                "molecular_simulations.analysis.interaction_energy.ForceField"
-            ) as mock_ff_cls,
-        ):
-            mock_platform.getPlatformByName.return_value = MagicMock()
+    def test_build_system_pdb(self, two_chain_pdb):
+        """build_system creates a real OpenMM system from a PDB topology."""
+        from molecular_simulations.analysis.interaction_energy import (
+            DynamicInteractionEnergy,
+        )
 
-            mock_pdb = MagicMock()
-            mock_pdb.topology = MagicMock()
-            mock_pdb_cls.return_value = mock_pdb
+        die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
+        result = die.build_system(Path(str(two_chain_pdb)))
 
-            mock_ff = MagicMock()
-            mock_system = MagicMock()
-            mock_ff.createSystem.return_value = mock_system
-            mock_ff_cls.return_value = mock_ff
+        assert result.getNumParticles() == 58
+        # build_system stores the parsed OpenMM topology
+        assert die.top.getNumAtoms() == 58
 
-            from molecular_simulations.analysis.interaction_energy import (
-                DynamicInteractionEnergy,
-            )
+    def test_build_system_prmtop(self, real_amber_system_files):
+        """build_system creates a real OpenMM system from an AMBER prmtop."""
+        from molecular_simulations.analysis.interaction_energy import (
+            DynamicInteractionEnergy,
+        )
 
-            die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
-            result = die.build_system(Path("test.pdb"))
+        die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
+        result = die.build_system(real_amber_system_files["prmtop"])
 
-            mock_ff.createSystem.assert_called_once()
-            assert result is mock_system
-            assert die.top is mock_pdb.topology
-
-    def test_build_system_prmtop(self):
-        """Test build_system with AMBER prmtop topology file."""
-        with (
-            patch(
-                "molecular_simulations.analysis.interaction_energy.Platform"
-            ) as mock_platform,
-            patch(
-                "molecular_simulations.analysis.interaction_energy.AmberPrmtopFile"
-            ) as mock_prmtop_cls,
-        ):
-            mock_platform.getPlatformByName.return_value = MagicMock()
-
-            mock_prmtop = MagicMock()
-            mock_system = MagicMock()
-            mock_prmtop.createSystem.return_value = mock_system
-            mock_prmtop_cls.return_value = mock_prmtop
-
-            from molecular_simulations.analysis.interaction_energy import (
-                DynamicInteractionEnergy,
-            )
-
-            die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
-            result = die.build_system(Path("test.prmtop"))
-
-            mock_prmtop.createSystem.assert_called_once()
-            assert result is mock_system
-            assert die.top is mock_prmtop
+        assert result.getNumParticles() == 22
 
     def test_build_system_unsupported_format(self):
-        """Test build_system raises for unsupported file type."""
-        with patch(
-            "molecular_simulations.analysis.interaction_energy.Platform"
-        ) as mock_platform:
-            mock_platform.getPlatformByName.return_value = MagicMock()
+        """build_system raises for an unsupported file type."""
+        from molecular_simulations.analysis.interaction_energy import (
+            DynamicInteractionEnergy,
+        )
 
-            from molecular_simulations.analysis.interaction_energy import (
-                DynamicInteractionEnergy,
-            )
+        die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
 
-            die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
-
-            with pytest.raises(NotImplementedError):
-                die.build_system(Path("test.gro"))
+        with pytest.raises(NotImplementedError):
+            die.build_system(Path("test.gro"))
 
 
 class TestDynamicInteractionEnergySetupPbar:

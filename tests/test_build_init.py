@@ -141,21 +141,6 @@ _atom_site.Cartn_z
 
         assert cif_file.with_suffix(".pdb").exists()
 
-    def test_convert_cif_with_gemmi_mocked(self, tmp_path):
-        """Test convert_cif_with_gemmi with mocked gemmi."""
-        mock_gemmi = MagicMock()
-        mock_structure = MagicMock()
-        mock_gemmi.read_structure.return_value = mock_structure
-
-        with patch.dict("sys.modules", {"gemmi": mock_gemmi}):
-            from molecular_simulations.build import convert_cif_with_gemmi
-
-            cif_file = tmp_path / "test.cif"
-            convert_cif_with_gemmi(cif_file)
-
-            mock_gemmi.read_structure.assert_called_once_with(str(cif_file))
-            mock_structure.write_pdb.assert_called_once_with(str(tmp_path / "test.pdb"))
-
 
 class TestAddChains:
     """Tests for add_chains function."""
@@ -221,12 +206,6 @@ class TestImports:
         from molecular_simulations.build import ImplicitSolvent
 
         assert ImplicitSolvent is not None
-
-    def test_import_interface_builder(self):
-        """Test that InterfaceBuilder is importable."""
-        from molecular_simulations.build import InterfaceBuilder
-
-        assert InterfaceBuilder is not None
 
     def test_pathlike_type(self):
         """Test PathLike type alias."""

@@ -58,6 +58,7 @@ dev = [
     'coverage[toml]>=7.0',
     'numpy>=1.22',
     'ruff>=0.11',
+    'gemmi',
 ]
 
 [tool.hatch.metadata]

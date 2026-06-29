@@ -46,7 +46,7 @@ ligand = [
     'openbabel',
     'rdkit'
 ]
-docutils = [
+docs = [
     'sphinx',
     'sphinx-rtd-theme',
     'sphinx-wagtail-theme',
@@ -54,10 +54,9 @@ docutils = [
 ]
 dev = [
     'pytest>=7.0',
-    'pytest-cov>=4.0',
+    'coverage[toml]>=7.0',
     'numpy>=1.22',
     'ruff>=0.11',
-    'ty>=0.0.1a7',
 ]
 
 [tool.hatch.metadata]
@@ -115,5 +114,12 @@ known-first-party = ['molecular_simulations']
 
 [tool.ruff.format]
 docstring-code-format = true
+
+[tool.coverage.run]
+source = ['src/molecular_simulations']
+branch = true
+
+[tool.coverage.report]
+show_missing = true
 
 [tool.ty]

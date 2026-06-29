@@ -65,6 +65,24 @@ def saltbridge_ppi(two_chain_pdb, tmp_path):
     )
 
 
+@pytest.fixture
+def traj_ppi(two_chain_trajectory, tmp_path):
+    """Real PPInteractions over the two-chain 5-frame trajectory.
+
+    The PDB topology carries CONECT bonds (needed by the hydrogen-bond donor/
+    acceptor survey) and chain B drifts across the frames, so trajectory
+    analyses return real, frame-averaged occupancies.
+    """
+    from molecular_simulations.analysis.cov_ppi import PPInteractions
+
+    return PPInteractions(
+        top=str(two_chain_trajectory["top"]),
+        traj=str(two_chain_trajectory["traj"]),
+        out=tmp_path / "results.json",
+        plot=False,
+    )
+
+
 # ============================================================================
 # Pure logic tests - no mocking needed
 # ============================================================================
@@ -581,52 +599,19 @@ class TestEvaluateHBond:
 
 
 class TestAnalyzeHydrophobic:
-    """Test the analyze_hydrophobic method"""
+    """Test the analyze_hydrophobic method on a real two-chain trajectory."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.distance_array")
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_analyze_hydrophobic(self, mock_mda, mock_dist_array):
-        """Test analyze_hydrophobic method"""
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
+    def test_analyze_hydrophobic(self, traj_ppi):
+        """analyze_hydrophobic returns a real frame-averaged occupancy."""
+        lys = traj_ppi.u.select_atoms("chainID A and resname LYS")
+        asp = traj_ppi.u.select_atoms("chainID B and resname ASP")
 
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=2)
-        mock_universe.trajectory.__iter__ = MagicMock(
-            return_value=iter([MagicMock(), MagicMock()])
-        )
-        mock_universe.select_atoms.return_value = MagicMock()
-        mock_mda.Universe.return_value = mock_universe
+        result = traj_ppi.analyze_hydrophobic(lys, asp)
 
-        # Mock distance array to return values within cutoff
-        mock_dist_array.return_value = np.array([[5.0]])  # Within 8 Å cutoff
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
-
-            # Create mock residues with carbon atoms
-            mock_atom1 = MagicMock()
-            mock_atom1.type = "C"
-            mock_res1 = MagicMock()
-            mock_res1.atoms = [mock_atom1]
-
-            mock_atom2 = MagicMock()
-            mock_atom2.type = "C"
-            mock_res2 = MagicMock()
-            mock_res2.atoms = [mock_atom2]
-
-            # Mock the + operator for AtomGroups
-            ppi.u.select_atoms.return_value = MagicMock()
-
-            result = ppi.analyze_hydrophobic(mock_res1, mock_res2)
-
-            # Should return a fraction
-            assert isinstance(result, float)
-            assert 0.0 <= result <= 1.0
+        assert isinstance(result, float)
+        assert 0.0 <= result <= 1.0
+        # The carbon side chains start within the 8 A cutoff
+        assert result > 0.0
 
 
 class TestAnalyzeSaltbridge:
@@ -925,45 +910,22 @@ class TestSurveyDonorsAcceptors:
 
 
 class TestAnalyzeHbond:
-    """Test analyze_hbond method"""
+    """Test analyze_hbond method on a real two-chain trajectory."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_analyze_hbond(self, mock_mda):
-        """Test analyze_hbond method"""
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
+    def test_analyze_hbond(self, traj_ppi):
+        """analyze_hbond surveys real donors/acceptors and scores geometry.
 
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=2)
-        mock_universe.trajectory.__iter__ = MagicMock(
-            return_value=iter([MagicMock(), MagicMock()])
-        )
-        mock_mda.Universe.return_value = mock_universe
+        Relies on the fixture's CONECT bond records (donor-hydrogen lookup) and
+        the Lys-Asp interface, where the amine donates to the carboxylate.
+        """
+        lys = traj_ppi.u.select_atoms("chainID A and resname LYS")
+        asp = traj_ppi.u.select_atoms("chainID B and resname ASP")
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
+        result = traj_ppi.analyze_hbond(lys, asp)
 
-            # Mock survey_donors_acceptors
-            mock_donors = MagicMock()
-            mock_acceptors = MagicMock()
-            ppi.survey_donors_acceptors = MagicMock(
-                return_value=(mock_donors, mock_acceptors)
-            )
-
-            # Mock evaluate_hbond to return 1 (hbond found)
-            ppi.evaluate_hbond = MagicMock(return_value=1)
-
-            mock_res1 = MagicMock()
-            mock_res2 = MagicMock()
-
-            result = ppi.analyze_hbond(mock_res1, mock_res2)
-
-            assert isinstance(result, float)
-            assert 0.0 <= result <= 1.0
+        assert isinstance(result, float)
+        assert 0.0 <= result <= 1.0
+        assert result > 0.0
 
 
 class TestPPInteractionsRun:

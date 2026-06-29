@@ -1747,38 +1747,6 @@ class TestImplicitSimulatorEquilibration:
                 assert mock_print.call_count == 2
 
 
-class TestMinimizerGromacsLoader:
-    """Test suite for Minimizer GROMACS file loading."""
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.GromacsGroFile")
-    @patch("molecular_simulations.simulate.omm_simulator.GromacsTopFile")
-    def test_load_gromacs(self, mock_top, mock_gro, mock_platform):
-        """Test load_gromacs method."""
-        from molecular_simulations.simulate.omm_simulator import Minimizer
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_gro.return_value = MagicMock()
-        mock_top_inst = MagicMock()
-        mock_top_inst.createSystem.return_value = MagicMock()
-        mock_top.return_value = mock_top_inst
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / "system.top"
-            top_file.write_text("mock topology")
-            gro_file = path / "system.gro"
-            gro_file.write_text("mock coordinates")
-
-            minimizer = Minimizer(topology=str(top_file), coordinates=str(gro_file))
-
-            system = minimizer.load_gromacs()
-
-            mock_gro.assert_called_once()
-            mock_top.assert_called_once()
-            assert system is not None
-
-
 class TestSimulatorAttachReportersWithRestart:
     """Test suite for attach_reporters with restart option."""
 

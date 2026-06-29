@@ -50,6 +50,7 @@ docs = [
     'sphinx',
     'sphinx-rtd-theme',
     'sphinx-wagtail-theme',
+    'sphinx-autodoc-typehints',
     'myst-parser',
     'docutils'
 ]
@@ -58,6 +59,7 @@ dev = [
     'coverage[toml]>=7.0',
     'numpy>=1.22',
     'ruff>=0.11',
+    'gemmi',
 ]
 
 [tool.hatch.metadata]

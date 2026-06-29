@@ -14,6 +14,10 @@ import pytest
 # This must be set before numba is imported.
 os.environ["NUMBA_DISABLE_JIT"] = "1"
 
+# Force a non-interactive matplotlib backend so plotting code can run headless
+# (CI, no display) and write real figure files. Must precede any pyplot import.
+os.environ.setdefault("MPLBACKEND", "Agg")
+
 
 # ---------------------------------------------------------------------------
 # Path Helpers
@@ -143,6 +147,22 @@ def alanine_dipeptide_pdb() -> Path:
         Path to the static alanine dipeptide PDB file.
     """
     return get_test_data_dir() / "pdb" / "alanine_dipeptide.pdb"
+
+
+@pytest.fixture
+def two_chain_pdb() -> Path:
+    """Return a real two-chain PDB with a charged interface pair.
+
+    Chain A is Ace-Lys-Nme, chain B is Ace-Asp-Nme, positioned so the Lys NZ
+    and Asp carboxylate sit ~3.4 A apart -- within the default salt-bridge
+    (6.0 A) and hydrogen-bond (3.5 A) cutoffs. This exercises the
+    ``chainID A`` / ``chainID B`` interface logic in cov_ppi and ipSAE that the
+    single-chain alanine dipeptide cannot.
+
+    Returns:
+        Path to the static two-chain PDB file.
+    """
+    return get_test_data_dir() / "pdb" / "two_chain_saltbridge.pdb"
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +312,40 @@ Test system coordinates
         "inpcrd": inpcrd_file,
         "path": tmp_path,
     }
+
+
+@pytest.fixture
+def real_amber_system_files(tmp_path: Path) -> dict:
+    """Provide a real, complete AMBER system (Ace-Ala-Nme) for testing.
+
+    Unlike :func:`amber_system_files` (a hand-written minimal prmtop that
+    fails real parsing), these files were generated with tleap
+    (``leaprc.protein.ff19SB``) and load cleanly via OpenMM's
+    ``AmberPrmtopFile.createSystem`` (explicit and ``implicitSolvent=GBn2``)
+    and via MDAnalysis (``backbone`` -> indices [4, 5, 6, 8, 14, 15, 16, 18]).
+    The committed copies are copied into a per-test ``tmp_path`` so tests may
+    write outputs alongside them without mutating the fixtures.
+
+    Returns:
+        Dictionary with ``prmtop``, ``inpcrd``, ``pdb``, ``dcd`` (a short 5-frame
+        trajectory matching the topology) and ``path`` (the temp directory).
+    """
+    import shutil
+
+    src = get_test_data_dir() / "amber"
+    files = {}
+    for key, name in (
+        ("prmtop", "ala_dipeptide.prmtop"),
+        ("inpcrd", "ala_dipeptide.inpcrd"),
+        ("pdb", "ala_dipeptide.pdb"),
+        ("dcd", "ala_dipeptide.dcd"),
+    ):
+        dest = tmp_path / name
+        shutil.copy(src / name, dest)
+        files[key] = dest
+
+    files["path"] = tmp_path
+    return files
 
 
 # ---------------------------------------------------------------------------

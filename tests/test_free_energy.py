@@ -16,121 +16,65 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture
-def mock_mda_universe():
-    """Mock MDAnalysis Universe for tests that use string-based atom selectors.
-
-    Returns a mock Universe that returns proper atom selection results without
-    needing to parse real topology files.
-    """
-
-    def create_mock_atom(index):
-        mock_atom = MagicMock()
-        mock_atom.ix = np.array([index])
-        mock_atom.positions = np.array([[float(index), 0.0, 0.0]])
-        return mock_atom
-
-    mock_universe = MagicMock()
-
-    def select_atoms(selection_string):
-        # Parse simple integer selection strings
-        try:
-            index = int(selection_string)
-            return create_mock_atom(index)
-        except ValueError:
-            # For more complex selections, return atom 0
-            return create_mock_atom(0)
-
-    mock_universe.select_atoms = select_atoms
-    return mock_universe
-
-
 class TestEVBInit:
     """Test suite for EVB class initialization."""
 
-    def test_evb_init_with_valid_inputs(
-        self, mock_mda_universe
-    ) -> None:
+    def test_evb_init_with_valid_inputs(self, alanine_dipeptide_pdb) -> None:
         """Test EVB initialization with valid input files and parameters.
 
         Verifies that the EVB class correctly initializes all attributes
         including paths, atom indices, and simulation parameters.
         """
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            # Create mock input files
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
+            log_path = Path(tmpdir) / "logs"
 
-            mock_config = MagicMock()
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=[-0.3, 0.3, 0.1],
+                parsl_config=None,
+                log_path=log_path,
+            )
 
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=[-0.3, 0.3, 0.1],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                )
-
-            assert evb.topology == topology
-            assert evb.coordinates == coordinates
-            assert evb.parsl_config is mock_config
+            assert evb.topology == alanine_dipeptide_pdb
+            assert evb.coordinates == alanine_dipeptide_pdb
+            assert evb.parsl_config is None
             assert evb.log_path == log_path
 
-    def test_evb_init_custom_parameters(
-        self, mock_mda_universe
-    ) -> None:
+    def test_evb_init_custom_parameters(self, alanine_dipeptide_pdb) -> None:
         """Test EVB initialization with custom simulation parameters.
 
         Verifies that custom values for force constants, timestep, and
         other simulation parameters are correctly set.
         """
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
+            log_path = Path(tmpdir) / "logs"
 
-            mock_config = MagicMock()
-
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=[-0.3, 0.3, 0.1],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                    steps=1000000,
-                    dt=0.001,
-                    k=200000.0,
-                    k_path=150.0,
-                    D_e=400.0,
-                    alpha=15.0,
-                    r0=0.11,
-                    platform="CPU",
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=[-0.3, 0.3, 0.1],
+                parsl_config=None,
+                log_path=log_path,
+                steps=1000000,
+                dt=0.001,
+                k=200000.0,
+                k_path=150.0,
+                D_e=400.0,
+                alpha=15.0,
+                r0=0.11,
+                platform="CPU",
+            )
 
             assert evb.steps == 1000000
             assert evb.dt == 0.001
@@ -141,36 +85,23 @@ class TestEVBInit:
             assert evb.r0 == 0.11
             assert evb.platform == "CPU"
 
-    def test_evb_init_default_parameters(
-        self, mock_mda_universe
-    ) -> None:
+    def test_evb_init_default_parameters(self, alanine_dipeptide_pdb) -> None:
         """Test EVB initialization with default parameter values."""
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
+            log_path = Path(tmpdir) / "logs"
 
-            mock_config = MagicMock()
-
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=[-0.3, 0.3, 0.1],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=[-0.3, 0.3, 0.1],
+                parsl_config=None,
+                log_path=log_path,
+            )
 
             # Check default values
             assert evb.log_prefix == "reactant"
@@ -189,38 +120,27 @@ class TestEVBInit:
 class TestEVBConstructRC:
     """Test suite for EVB reaction coordinate construction."""
 
-    def test_construct_rc_basic(self, mock_mda_universe) -> None:
+    def test_construct_rc_basic(self, alanine_dipeptide_pdb) -> None:
         """Test construction of linearly spaced reaction coordinate.
 
         The reaction coordinate is specified as [start, end, increment]
         and should produce an array from start to end (inclusive).
         """
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
+            log_path = Path(tmpdir) / "logs"
 
-            mock_config = MagicMock()
-
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=[-0.2, 0.2, 0.1],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=[-0.2, 0.2, 0.1],
+                parsl_config=None,
+                log_path=log_path,
+            )
 
             expected = np.array([-0.2, -0.1, 0.0, 0.1, 0.2])
             np.testing.assert_array_almost_equal(
@@ -228,35 +148,24 @@ class TestEVBConstructRC:
             )
 
     def test_construct_rc_single_step(
-        self, mock_mda_universe
+        self, alanine_dipeptide_pdb
     ) -> None:
         """Test reaction coordinate with large increment resulting in few windows."""
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
+            log_path = Path(tmpdir) / "logs"
 
-            mock_config = MagicMock()
-
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=[0.0, 0.5, 0.5],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=[0.0, 0.5, 0.5],
+                parsl_config=None,
+                log_path=log_path,
+            )
 
             expected = np.array([0.0, 0.5])
             np.testing.assert_array_almost_equal(
@@ -264,69 +173,47 @@ class TestEVBConstructRC:
             )
 
     def test_construct_rc_negative_range(
-        self, mock_mda_universe
+        self, alanine_dipeptide_pdb
     ) -> None:
         """Test reaction coordinate spanning negative to positive values."""
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
+            log_path = Path(tmpdir) / "logs"
 
-            mock_config = MagicMock()
-
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=[-0.3, 0.3, 0.05],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=[-0.3, 0.3, 0.05],
+                parsl_config=None,
+                log_path=log_path,
+            )
 
             # Should have 13 windows
             assert evb.reaction_coordinate.shape[0] == 13
 
     def test_construct_rc_direct_method(
-        self, mock_mda_universe
+        self, alanine_dipeptide_pdb
     ) -> None:
         """Test construct_rc method directly."""
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
+            log_path = Path(tmpdir) / "logs"
 
-            mock_config = MagicMock()
-
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=[-0.2, 0.2, 0.1],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=[-0.2, 0.2, 0.1],
+                parsl_config=None,
+                log_path=log_path,
+            )
 
             # Test the method directly
             rc = evb.construct_rc([0.0, 1.0, 0.2])
@@ -337,7 +224,7 @@ class TestEVBConstructRC:
 class TestEVBProperties:
     """Test suite for EVB property methods."""
 
-    def test_umbrella_property(self, mock_mda_universe) -> None:
+    def test_umbrella_property(self, alanine_dipeptide_pdb) -> None:
         """Test umbrella property returns correct dictionary structure.
 
         The umbrella property should return a dictionary containing:
@@ -346,47 +233,34 @@ class TestEVBProperties:
         - k_path: path restraint force constant
         - rc0: None (set at runtime per window)
         """
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
+            log_path = Path(tmpdir) / "logs"
 
-            mock_config = MagicMock()
-
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="10",
-                    acceptor_atom="20",
-                    reactive_atom="30",
-                    reaction_coordinate=[-0.2, 0.2, 0.1],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                    k=180000.0,
-                    k_path=120.0,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 10",
+                acceptor_atom="index 15",
+                reactive_atom="index 20",
+                reaction_coordinate=[-0.2, 0.2, 0.1],
+                parsl_config=None,
+                log_path=log_path,
+                k=180000.0,
+                k_path=120.0,
+            )
 
             umbrella = evb.umbrella
 
             assert umbrella["atom_i"] == 10
-            assert umbrella["atom_j"] == 20
-            assert umbrella["atom_k"] == 30
+            assert umbrella["atom_j"] == 15
+            assert umbrella["atom_k"] == 20
             assert umbrella["k"] == 180000.0
             assert umbrella["k_path"] == 120.0
             assert umbrella["rc0"] is None
 
-    def test_morse_bond_property(
-        self, mock_mda_universe
-    ) -> None:
+    def test_morse_bond_property(self, alanine_dipeptide_pdb) -> None:
         """Test morse_bond property returns correct dictionary structure.
 
         The morse_bond property should return a dictionary containing:
@@ -395,40 +269,29 @@ class TestEVBProperties:
         - alpha: width parameter
         - r0: equilibrium distance
         """
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
+            log_path = Path(tmpdir) / "logs"
 
-            mock_config = MagicMock()
-
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="10",
-                    acceptor_atom="20",
-                    reactive_atom="30",
-                    reaction_coordinate=[-0.2, 0.2, 0.1],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                    D_e=400.0,
-                    alpha=14.0,
-                    r0=0.11,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 10",
+                acceptor_atom="index 15",
+                reactive_atom="index 20",
+                reaction_coordinate=[-0.2, 0.2, 0.1],
+                parsl_config=None,
+                log_path=log_path,
+                D_e=400.0,
+                alpha=14.0,
+                r0=0.11,
+            )
 
             morse = evb.morse_bond
 
             assert morse["atom_i"] == 10
-            assert morse["atom_j"] == 30
+            assert morse["atom_j"] == 20
             assert morse["D_e"] == 400.0
             assert morse["alpha"] == 14.0
             assert morse["r0"] == 0.11
@@ -438,36 +301,26 @@ class TestEVBParslManagement:
     """Test suite for EVB Parsl initialization and shutdown."""
 
     def test_initialize_loads_parsl(
-        self, mock_mda_universe
+        self, alanine_dipeptide_pdb
     ) -> None:
         """Test that initialize() loads the Parsl configuration."""
         import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
-
             mock_config = MagicMock()
             mock_dfk = MagicMock()
 
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=[-0.2, 0.2, 0.1],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=[-0.2, 0.2, 0.1],
+                parsl_config=mock_config,
+                log_path=Path(tmpdir) / "logs",
+            )
 
             assert evb.dfk is None
 
@@ -480,36 +333,26 @@ class TestEVBParslManagement:
                 assert evb.dfk is mock_dfk
 
     def test_shutdown_cleans_up_parsl(
-        self, mock_mda_universe
+        self, alanine_dipeptide_pdb
     ) -> None:
         """Test that shutdown() properly cleans up Parsl resources."""
         import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
-
             mock_config = MagicMock()
             mock_dfk = MagicMock()
 
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=[-0.2, 0.2, 0.1],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=[-0.2, 0.2, 0.1],
+                parsl_config=mock_config,
+                log_path=Path(tmpdir) / "logs",
+            )
 
             with patch.object(fe_module.parsl, "load", return_value=mock_dfk):
                 evb.initialize()
@@ -521,35 +364,25 @@ class TestEVBParslManagement:
                 assert evb.dfk is None
 
     def test_shutdown_when_not_initialized(
-        self, mock_mda_universe
+        self, alanine_dipeptide_pdb
     ) -> None:
         """Test that shutdown() handles case when dfk is None."""
         import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
-
             mock_config = MagicMock()
 
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=[-0.2, 0.2, 0.1],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=[-0.2, 0.2, 0.1],
+                parsl_config=mock_config,
+                log_path=Path(tmpdir) / "logs",
+            )
 
             # Should not raise even when dfk is None
             # parsl.clear() should NOT be called since dfk is None
@@ -562,53 +395,48 @@ class TestEVBParslManagement:
 class TestEVBCalculationInit:
     """Test suite for EVBCalculation class initialization."""
 
-    def test_evb_calculation_init(self) -> None:
-        """Test EVBCalculation initialization creates Simulator with correct args."""
-        import molecular_simulations.simulate.free_energy as fe_module
-        from molecular_simulations.simulate.free_energy import EVBCalculation
+    def test_evb_calculation_init(self, real_amber_system_files) -> None:
+        """Test EVBCalculation initialization builds a real Simulator engine."""
+        from molecular_simulations.simulate.free_energy import (
+            EVBCalculation,
+            Simulator,
+        )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coord_file = path / "system.inpcrd"
-            coord_file.write_text("mock coordinates")
-            out_path = path / "output"
-            rc_file = path / "rc.log"
+        topology = real_amber_system_files["prmtop"]
+        coord_file = real_amber_system_files["inpcrd"]
+        out_path = real_amber_system_files["path"] / "output"
+        rc_file = real_amber_system_files["path"] / "rc.log"
 
-            umbrella = {
-                "atom_i": 0,
-                "atom_j": 1,
-                "atom_k": 2,
-                "k": 160000.0,
-                "k_path": 100.0,
-                "rc0": 0.1,
-            }
-            morse_bond = {
-                "atom_i": 0,
-                "atom_j": 2,
-                "D_e": 392.46,
-                "alpha": 13.275,
-                "r0": 0.1,
-            }
+        umbrella = {
+            "atom_i": 0,
+            "atom_j": 1,
+            "atom_k": 2,
+            "k": 160000.0,
+            "k_path": 100.0,
+            "rc0": 0.1,
+        }
+        morse_bond = {
+            "atom_i": 0,
+            "atom_j": 2,
+            "D_e": 392.46,
+            "alpha": 13.275,
+            "r0": 0.1,
+        }
 
-            mock_simulator = MagicMock()
-            with patch.object(
-                fe_module, "Simulator", return_value=mock_simulator
-            ) as mock_sim_class:
-                evb_calc = EVBCalculation(
-                    topology=topology,
-                    coord_file=coord_file,
-                    out_path=out_path,
-                    rc_file=rc_file,
-                    umbrella=umbrella,
-                    morse_bond=morse_bond,
-                )
+        evb_calc = EVBCalculation(
+            topology=topology,
+            coord_file=coord_file,
+            out_path=out_path,
+            rc_file=rc_file,
+            umbrella=umbrella,
+            morse_bond=morse_bond,
+            platform="CPU",
+        )
 
-                mock_sim_class.assert_called_once()
-                assert evb_calc.rc_file == rc_file
-                assert evb_calc.umbrella == umbrella
-                assert evb_calc.morse_bond == morse_bond
+        assert isinstance(evb_calc.sim_engine, Simulator)
+        assert evb_calc.rc_file == rc_file
+        assert evb_calc.umbrella == umbrella
+        assert evb_calc.morse_bond == morse_bond
 
     def test_evb_calculation_cuda_precision(self) -> None:
         """Test EVBCalculation sets mixed precision for CUDA platform."""
@@ -656,97 +484,81 @@ class TestEVBCalculationInit:
                 # Should set mixed precision
                 assert evb_calc.sim_engine.properties == {"Precision": "mixed"}
 
-    def test_evb_calculation_cpu_no_precision(self) -> None:
+    def test_evb_calculation_cpu_no_precision(self, real_amber_system_files) -> None:
         """Test EVBCalculation does not set precision for CPU platform."""
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVBCalculation
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coord_file = path / "system.inpcrd"
-            coord_file.write_text("mock coordinates")
-            out_path = path / "output"
-            rc_file = path / "rc.log"
+        topology = real_amber_system_files["prmtop"]
+        coord_file = real_amber_system_files["inpcrd"]
+        out_path = real_amber_system_files["path"] / "output"
+        rc_file = real_amber_system_files["path"] / "rc.log"
 
-            umbrella = {
-                "atom_i": 0,
-                "atom_j": 1,
-                "atom_k": 2,
-                "k": 160000.0,
-                "k_path": 100.0,
-                "rc0": 0.1,
-            }
-            morse_bond = {
-                "atom_i": 0,
-                "atom_j": 2,
-                "D_e": 392.46,
-                "alpha": 13.275,
-                "r0": 0.1,
-            }
+        umbrella = {
+            "atom_i": 0,
+            "atom_j": 1,
+            "atom_k": 2,
+            "k": 160000.0,
+            "k_path": 100.0,
+            "rc0": 0.1,
+        }
+        morse_bond = {
+            "atom_i": 0,
+            "atom_j": 2,
+            "D_e": 392.46,
+            "alpha": 13.275,
+            "r0": 0.1,
+        }
 
-            mock_simulator = MagicMock()
-            mock_simulator.properties = {}
-            with patch.object(fe_module, "Simulator", return_value=mock_simulator):
-                evb_calc = EVBCalculation(
-                    topology=topology,
-                    coord_file=coord_file,
-                    out_path=out_path,
-                    rc_file=rc_file,
-                    umbrella=umbrella,
-                    morse_bond=morse_bond,
-                    platform="CPU",
-                )
+        evb_calc = EVBCalculation(
+            topology=topology,
+            coord_file=coord_file,
+            out_path=out_path,
+            rc_file=rc_file,
+            umbrella=umbrella,
+            morse_bond=morse_bond,
+            platform="CPU",
+        )
 
-                # Should have empty properties
-                assert evb_calc.sim_engine.properties == {}
+        # CPU platform sets no precision properties
+        assert evb_calc.sim_engine.properties == {}
 
-    def test_evb_calculation_opencl_precision(self) -> None:
+    def test_evb_calculation_opencl_precision(self, real_amber_system_files) -> None:
         """Test EVBCalculation sets mixed precision for OpenCL platform."""
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVBCalculation
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coord_file = path / "system.inpcrd"
-            coord_file.write_text("mock coordinates")
-            out_path = path / "output"
-            rc_file = path / "rc.log"
+        topology = real_amber_system_files["prmtop"]
+        coord_file = real_amber_system_files["inpcrd"]
+        out_path = real_amber_system_files["path"] / "output"
+        rc_file = real_amber_system_files["path"] / "rc.log"
 
-            umbrella = {
-                "atom_i": 0,
-                "atom_j": 1,
-                "atom_k": 2,
-                "k": 160000.0,
-                "k_path": 100.0,
-                "rc0": 0.1,
-            }
-            morse_bond = {
-                "atom_i": 0,
-                "atom_j": 2,
-                "D_e": 392.46,
-                "alpha": 13.275,
-                "r0": 0.1,
-            }
+        umbrella = {
+            "atom_i": 0,
+            "atom_j": 1,
+            "atom_k": 2,
+            "k": 160000.0,
+            "k_path": 100.0,
+            "rc0": 0.1,
+        }
+        morse_bond = {
+            "atom_i": 0,
+            "atom_j": 2,
+            "D_e": 392.46,
+            "alpha": 13.275,
+            "r0": 0.1,
+        }
 
-            mock_simulator = MagicMock()
-            mock_simulator.properties = {"Precision": "mixed"}
-            with patch.object(fe_module, "Simulator", return_value=mock_simulator):
-                evb_calc = EVBCalculation(
-                    topology=topology,
-                    coord_file=coord_file,
-                    out_path=out_path,
-                    rc_file=rc_file,
-                    umbrella=umbrella,
-                    morse_bond=morse_bond,
-                    platform="OpenCL",
-                )
+        evb_calc = EVBCalculation(
+            topology=topology,
+            coord_file=coord_file,
+            out_path=out_path,
+            rc_file=rc_file,
+            umbrella=umbrella,
+            morse_bond=morse_bond,
+            platform="OpenCL",
+        )
 
-                # Should set mixed precision for OpenCL too
-                assert evb_calc.sim_engine.properties == {"Precision": "mixed"}
+        # OpenCL (like CUDA) uses mixed precision
+        assert evb_calc.sim_engine.properties == {"Precision": "mixed"}
 
 
 class TestEVBCalculationStaticMethods:
@@ -954,37 +766,26 @@ class TestEVBConstructRCParametrized:
 
     def test_construct_rc_lengths(
         self,
-        mock_mda_universe,
+        alanine_dipeptide_pdb,
         rc_input: list[float],
         expected_length: int,
     ) -> None:
         """Test that reaction coordinate has expected number of windows."""
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
+            log_path = Path(tmpdir) / "logs"
 
-            mock_config = MagicMock()
-
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=rc_input,
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=rc_input,
+                parsl_config=None,
+                log_path=log_path,
+            )
 
             assert len(evb.reaction_coordinate) == expected_length
 
@@ -992,39 +793,26 @@ class TestEVBConstructRCParametrized:
 class TestEVBPath:
     """Test suite for EVB path handling."""
 
-    def test_evb_creates_correct_path(
-        self, mock_mda_universe
-    ) -> None:
+    def test_evb_creates_correct_path(self, alanine_dipeptide_pdb) -> None:
         """Test EVB creates correct path for output directory."""
-        import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coordinates = path / "system.inpcrd"
-            coordinates.write_text("mock coordinates")
-            log_path = path / "logs"
+            log_path = Path(tmpdir) / "logs"
 
-            mock_config = MagicMock()
-
-            with patch.object(
-                fe_module.mda, "Universe", return_value=mock_mda_universe
-            ):
-                evb = EVB(
-                    topology=topology,
-                    coordinates=coordinates,
-                    donor_atom="0",
-                    acceptor_atom="1",
-                    reactive_atom="2",
-                    reaction_coordinate=[-0.2, 0.2, 0.1],
-                    parsl_config=mock_config,
-                    log_path=log_path,
-                )
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom="index 0",
+                acceptor_atom="index 1",
+                reactive_atom="index 2",
+                reaction_coordinate=[-0.2, 0.2, 0.1],
+                parsl_config=None,
+                log_path=log_path,
+            )
 
             # EVB path should be parent of topology / 'evb'
-            expected_path = topology.parent / "evb"
+            expected_path = alanine_dipeptide_pdb.parent / "evb"
             assert evb.path == expected_path
 
 

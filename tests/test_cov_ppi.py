@@ -9,6 +9,7 @@ without MDAnalysis installed.
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -45,6 +46,23 @@ def test_data_dir():
 def alanine_pdb(test_data_dir):
     """Return the path to the alanine dipeptide PDB."""
     return test_data_dir / "pdb" / "alanine_dipeptide.pdb"
+
+
+@pytest.fixture
+def saltbridge_ppi(two_chain_pdb, tmp_path):
+    """Real PPInteractions on the two-chain Lys/Asp salt-bridge PDB.
+
+    Chain A is Ace-Lys-Nme, chain B is Ace-Asp-Nme, with the Lys NZ ~3.4 A from
+    the Asp carboxylate -- a genuine salt bridge within the default cutoff.
+    """
+    from molecular_simulations.analysis.cov_ppi import PPInteractions
+
+    return PPInteractions(
+        top=str(two_chain_pdb),
+        traj=str(two_chain_pdb),
+        out=tmp_path / "results.json",
+        plot=False,
+    )
 
 
 # ============================================================================
@@ -612,87 +630,36 @@ class TestAnalyzeHydrophobic:
 
 
 class TestAnalyzeSaltbridge:
-    """Test the analyze_saltbridge method"""
+    """Test the analyze_saltbridge method on a real Lys/Asp interface."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_analyze_saltbridge_incompatible_residues(self, mock_mda):
-        """Test saltbridge analysis returns 0 for incompatible residues"""
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
+    def test_analyze_saltbridge_real_pair(self, saltbridge_ppi):
+        """A real Lys-Asp pair within cutoff is a full-occupancy salt bridge."""
+        lys = saltbridge_ppi.u.select_atoms("chainID A and resname LYS")
+        asp = saltbridge_ppi.u.select_atoms("chainID B and resname ASP")
 
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
+        # Single frame, NZ <-> carboxylate ~3.4 A < 6.0 A cutoff -> occupancy 1.0
+        assert saltbridge_ppi.analyze_saltbridge(lys, asp) == 1.0
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
+    def test_analyze_saltbridge_incompatible_residues(self, saltbridge_ppi):
+        """Saltbridge analysis returns 0 for non-charged residues."""
+        res1 = SimpleNamespace(resnames=["ALA"])
+        res2 = SimpleNamespace(resnames=["GLY"])
 
-            # Create mock residue that's not charged (ALA)
-            mock_res1 = MagicMock()
-            mock_res1.resnames = ["ALA"]
+        assert saltbridge_ppi.analyze_saltbridge(res1, res2) == 0.0
 
-            mock_res2 = MagicMock()
-            mock_res2.resnames = ["GLY"]
+    def test_analyze_saltbridge_same_charge(self, saltbridge_ppi):
+        """Saltbridge analysis returns 0 for two positively-charged residues."""
+        res1 = SimpleNamespace(resnames=["LYS"])
+        res2 = SimpleNamespace(resnames=["ARG"])
 
-            result = ppi.analyze_saltbridge(mock_res1, mock_res2)
-            assert result == 0.0
+        assert saltbridge_ppi.analyze_saltbridge(res1, res2) == 0.0
 
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_analyze_saltbridge_same_charge(self, mock_mda):
-        """Test saltbridge analysis returns 0 for same-charge residues"""
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
+    def test_analyze_saltbridge_two_negative(self, saltbridge_ppi):
+        """Saltbridge analysis returns 0 for two negatively-charged residues."""
+        res1 = SimpleNamespace(resnames=["ASP"])
+        res2 = SimpleNamespace(resnames=["GLU"])
 
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
-
-            # Create two positive residues
-            mock_res1 = MagicMock()
-            mock_res1.resnames = ["LYS"]
-
-            mock_res2 = MagicMock()
-            mock_res2.resnames = ["ARG"]
-
-            result = ppi.analyze_saltbridge(mock_res1, mock_res2)
-            assert result == 0.0
-
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_analyze_saltbridge_two_negative(self, mock_mda):
-        """Test saltbridge analysis returns 0 for two negative residues"""
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
-
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
-
-            mock_res1 = MagicMock()
-            mock_res1.resnames = ["ASP"]
-
-            mock_res2 = MagicMock()
-            mock_res2.resnames = ["GLU"]
-
-            result = ppi.analyze_saltbridge(mock_res1, mock_res2)
-            assert result == 0.0
+        assert saltbridge_ppi.analyze_saltbridge(res1, res2) == 0.0
 
 
 class TestComputeInteractions:

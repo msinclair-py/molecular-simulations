@@ -18,11 +18,9 @@ Testing strategy:
 - Verify statistical algorithms with known inputs/outputs
 """
 
-import sys
 import tempfile
 from dataclasses import fields
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import polars as pl
@@ -38,55 +36,6 @@ pytestmark = pytest.mark.unit
 
 # We need to mock heavy dependencies before importing free_energy module
 # The module imports openmm, parsl, MDAnalysis at module load time
-
-
-@pytest.fixture(autouse=True)
-def mock_free_energy_deps():
-    """Mock heavy dependencies before importing free_energy module.
-
-    The free_energy module imports openmm, parsl, MDAnalysis, and other
-    heavy dependencies at module load time. For unit tests of the analysis
-    functionality (dataclasses, EVBAnalyzer), we mock these imports to:
-    1. Speed up test execution
-    2. Allow testing without requiring OpenMM/Parsl installation
-    3. Focus tests on the analysis algorithms, not simulation code
-    """
-    # Create mock modules for heavy dependencies
-    mock_omm_simulator = MagicMock()
-    mock_reporters = MagicMock()
-
-    # Store original modules if they exist
-    original_modules = {}
-    modules_to_mock = [
-        "molecular_simulations.simulate.omm_simulator",
-        "molecular_simulations.simulate.reporters",
-    ]
-
-    for mod in modules_to_mock:
-        if mod in sys.modules:
-            original_modules[mod] = sys.modules[mod]
-
-    # Clear cached import of free_energy if it exists (to force reimport)
-    if "molecular_simulations.simulate.free_energy" in sys.modules:
-        del sys.modules["molecular_simulations.simulate.free_energy"]
-
-    # Apply mocks
-    with patch.dict(
-        sys.modules,
-        {
-            "molecular_simulations.simulate.omm_simulator": mock_omm_simulator,
-            "molecular_simulations.simulate.reporters": mock_reporters,
-        },
-    ):
-        # Also need to mock the relative import paths
-        mock_omm_simulator.Simulator = MagicMock()
-        mock_reporters.RCReporter = MagicMock()
-
-        yield mock_omm_simulator, mock_reporters
-
-    # Restore original modules
-    for mod, original in original_modules.items():
-        sys.modules[mod] = original
 
 
 # =============================================================================
@@ -251,14 +200,22 @@ def synthetic_rc_data_with_equilibration():
 
 
 @pytest.fixture
-def mock_evb_instance():
-    """Create a mock EVB instance for testing from_evb_instance."""
-    mock = MagicMock()
-    mock.log_path = Path("/mock/log/path")
-    mock.log_prefix = "reactant"
-    mock.k = 160000.0
-    mock.reaction_coordinate = np.linspace(-0.2, 0.2, 10)
-    return mock
+def real_evb_instance(alanine_dipeptide_pdb, tmp_path):
+    """A real EVB instance for testing from_evb_instance."""
+    from molecular_simulations.simulate.free_energy import EVB
+
+    log_path = tmp_path / "logs"
+    log_path.mkdir()
+    return EVB(
+        topology=alanine_dipeptide_pdb,
+        coordinates=alanine_dipeptide_pdb,
+        donor_atom="index 0",
+        acceptor_atom="index 1",
+        reactive_atom="index 2",
+        reaction_coordinate=[-0.2, 0.2, 0.1],
+        parsl_config=None,
+        log_path=log_path,
+    )
 
 
 # =============================================================================
@@ -623,22 +580,18 @@ output_path = "{output_path}"
 class TestEVBAnalyzerFromEVBInstance:
     """Tests for EVBAnalyzer.from_evb_instance class method."""
 
-    def test_from_evb_instance(self, mock_evb_instance):
-        """Test creating EVBAnalyzer from mock EVB instance."""
+    def test_from_evb_instance(self, real_evb_instance):
+        """Test creating EVBAnalyzer from a real EVB instance."""
         from molecular_simulations.simulate.free_energy import EVBAnalyzer
 
-        # Need to create the log_path directory for the analyzer
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mock_evb_instance.log_path = Path(tmpdir)
+        analyzer = EVBAnalyzer.from_evb_instance(real_evb_instance)
 
-            analyzer = EVBAnalyzer.from_evb_instance(mock_evb_instance)
-
-            assert analyzer.log_path == mock_evb_instance.log_path
-            assert analyzer.log_prefix == mock_evb_instance.log_prefix
-            assert analyzer.k == mock_evb_instance.k
-            np.testing.assert_array_equal(
-                analyzer.reaction_coordinate, mock_evb_instance.reaction_coordinate
-            )
+        assert analyzer.log_path == real_evb_instance.log_path
+        assert analyzer.log_prefix == real_evb_instance.log_prefix
+        assert analyzer.k == real_evb_instance.k
+        np.testing.assert_array_equal(
+            analyzer.reaction_coordinate, real_evb_instance.reaction_coordinate
+        )
 
 
 class TestEVBAnalyzerSaveMetadata:
@@ -1244,14 +1197,8 @@ class TestEVBAnalyzerComputePMF:
                 rc0_values=rc0_values,
             )
 
-            # Mock pymbar import to fail
-            with patch.dict(sys.modules, {"pymbar": None}):
-                # Force ImportError
-                with patch(
-                    "molecular_simulations.simulate.free_energy.EVBAnalyzer._compute_pmf_mbar",
-                    side_effect=ImportError("No module named 'pymbar'"),
-                ):
-                    result = analyzer.compute_pmf(rc_data)
+            # pymbar is not installed, so compute_pmf falls back to real WHAM
+            result = analyzer.compute_pmf(rc_data)
 
             assert isinstance(result.bin_centers, np.ndarray)
             assert isinstance(result.pmf, np.ndarray)

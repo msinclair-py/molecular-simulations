@@ -198,163 +198,116 @@ class TestInteractionEnergyAbstractIntegration:
 
 
 class TestStaticInteractionEnergy:
-    """Test suite for StaticInteractionEnergy class - uses mocks for unavailable deps."""
+    """Real StaticInteractionEnergy tests against the two-chain salt-bridge PDB.
 
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
-    def test_static_interaction_energy_init(self, mock_platform):
-        """Test StaticInteractionEnergy initialization."""
+    Chain A is Ace-Lys-Nme (atoms 0-33: ACE 0-5, LYS 6-27, NME 28-33), chain B
+    is Ace-Asp-Nme (atoms 34-57). Real CPU platform; no Platform mock needed.
+    """
+
+    @staticmethod
+    def _topology(pdb):
+        from openmm.app import PDBFile
+
+        return PDBFile(str(pdb)).topology
+
+    def test_static_interaction_energy_init(self, two_chain_pdb):
+        """Test StaticInteractionEnergy initialization stores parameters."""
         from molecular_simulations.analysis.interaction_energy import (
             StaticInteractionEnergy,
         )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
         sie = StaticInteractionEnergy(
-            pdb="test.pdb", chain="B", platform="CPU", first_residue=10, last_residue=50
+            pdb=str(two_chain_pdb),
+            chain="B",
+            platform="CPU",
+            first_residue=10,
+            last_residue=50,
         )
 
-        assert sie.pdb == "test.pdb"
+        assert sie.pdb == str(two_chain_pdb)
         assert sie.chain == "B"
         assert sie.first == 10
         assert sie.last == 50
-        mock_platform.getPlatformByName.assert_called_with("CPU")
 
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
-    def test_static_interaction_energy_init_defaults(self, mock_platform):
+    def test_static_interaction_energy_init_defaults(self, two_chain_pdb):
         """Test StaticInteractionEnergy default values."""
         from molecular_simulations.analysis.interaction_energy import (
             StaticInteractionEnergy,
         )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        sie = StaticInteractionEnergy(pdb="test.pdb")
+        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), platform="CPU")
 
         assert sie.chain == "A"
         assert sie.first is None
         assert sie.last is None
 
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
-    def test_get_selection_full_chain(self, mock_platform):
-        """Test get_selection for full chain"""
+    def test_get_selection_full_chain(self, two_chain_pdb):
+        """Test get_selection picks every atom of the requested chain."""
         from molecular_simulations.analysis.interaction_energy import (
             StaticInteractionEnergy,
         )
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        # Create mock topology
-        mock_atom1 = MagicMock()
-        mock_atom1.index = 0
-        mock_atom1.residue.chain.id = "A"
-
-        mock_atom2 = MagicMock()
-        mock_atom2.index = 1
-        mock_atom2.residue.chain.id = "A"
-
-        mock_atom3 = MagicMock()
-        mock_atom3.index = 2
-        mock_atom3.residue.chain.id = "B"
-
-        mock_topology = MagicMock()
-        mock_topology.atoms.return_value = [mock_atom1, mock_atom2, mock_atom3]
-
-        sie = StaticInteractionEnergy(pdb="test.pdb", chain="A")
-        sie.get_selection(mock_topology)
-
-        # Should select only chain A atoms
-        assert sie.selection == [0, 1]
-
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
-    def test_get_selection_with_first_residue(self, mock_platform):
-        """Test get_selection with first_residue filter"""
-        from molecular_simulations.analysis.interaction_energy import (
-            StaticInteractionEnergy,
-        )
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        mock_atoms = []
-        for i in range(5):
-            atom = MagicMock()
-            atom.index = i
-            atom.residue.chain.id = "A"
-            atom.residue.id = str(i + 1)  # Residues 1-5
-            mock_atoms.append(atom)
-
-        mock_topology = MagicMock()
-        mock_topology.atoms.return_value = mock_atoms
-
-        sie = StaticInteractionEnergy(pdb="test.pdb", chain="A", first_residue=3)
-        sie.get_selection(mock_topology)
-
-        # Should select residues >= 3 (indices 2, 3, 4)
-        assert sie.selection == [2, 3, 4]
-
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
-    def test_get_selection_with_last_residue(self, mock_platform):
-        """Test get_selection with last_residue filter"""
-        from molecular_simulations.analysis.interaction_energy import (
-            StaticInteractionEnergy,
-        )
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        mock_atoms = []
-        for i in range(5):
-            atom = MagicMock()
-            atom.index = i
-            atom.residue.chain.id = "A"
-            atom.residue.id = str(i + 1)  # Residues 1-5
-            mock_atoms.append(atom)
-
-        mock_topology = MagicMock()
-        mock_topology.atoms.return_value = mock_atoms
-
-        sie = StaticInteractionEnergy(pdb="test.pdb", chain="A", last_residue=3)
-        sie.get_selection(mock_topology)
-
-        # Should select residues <= 3 (indices 0, 1, 2)
-        assert sie.selection == [0, 1, 2]
-
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
-    def test_get_selection_with_range(self, mock_platform):
-        """Test get_selection with first and last residue"""
-        from molecular_simulations.analysis.interaction_energy import (
-            StaticInteractionEnergy,
-        )
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        mock_atoms = []
-        for i in range(5):
-            atom = MagicMock()
-            atom.index = i
-            atom.residue.chain.id = "A"
-            atom.residue.id = str(i + 1)  # Residues 1-5
-            mock_atoms.append(atom)
-
-        mock_topology = MagicMock()
-        mock_topology.atoms.return_value = mock_atoms
 
         sie = StaticInteractionEnergy(
-            pdb="test.pdb", chain="A", first_residue=2, last_residue=4
+            pdb=str(two_chain_pdb), chain="A", platform="CPU"
         )
-        sie.get_selection(mock_topology)
+        sie.get_selection(self._topology(two_chain_pdb))
 
-        # Should select residues 2-4 (indices 1, 2, 3)
-        assert sie.selection == [1, 2, 3]
+        # Chain A is the first 34 atoms (Ace-Lys-Nme)
+        assert sie.selection == list(range(34))
 
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
-    def test_interactions_property(self, mock_platform):
-        """Test interactions property"""
+    def test_get_selection_with_first_residue(self, two_chain_pdb):
+        """Test get_selection with first_residue filter."""
         from molecular_simulations.analysis.interaction_energy import (
             StaticInteractionEnergy,
         )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sie = StaticInteractionEnergy(
+            pdb=str(two_chain_pdb), chain="A", platform="CPU", first_residue=2
+        )
+        sie.get_selection(self._topology(two_chain_pdb))
 
-        sie = StaticInteractionEnergy(pdb="test.pdb")
+        # Residues 2-3 (LYS, NME) -> atoms 6-33
+        assert sie.selection == list(range(6, 34))
+
+    def test_get_selection_with_last_residue(self, two_chain_pdb):
+        """Test get_selection with last_residue filter."""
+        from molecular_simulations.analysis.interaction_energy import (
+            StaticInteractionEnergy,
+        )
+
+        sie = StaticInteractionEnergy(
+            pdb=str(two_chain_pdb), chain="A", platform="CPU", last_residue=2
+        )
+        sie.get_selection(self._topology(two_chain_pdb))
+
+        # Residues 1-2 (ACE, LYS) -> atoms 0-27
+        assert sie.selection == list(range(0, 28))
+
+    def test_get_selection_with_range(self, two_chain_pdb):
+        """Test get_selection with first and last residue."""
+        from molecular_simulations.analysis.interaction_energy import (
+            StaticInteractionEnergy,
+        )
+
+        sie = StaticInteractionEnergy(
+            pdb=str(two_chain_pdb),
+            chain="A",
+            platform="CPU",
+            first_residue=2,
+            last_residue=2,
+        )
+        sie.get_selection(self._topology(two_chain_pdb))
+
+        # Residue 2 only (LYS) -> atoms 6-27
+        assert sie.selection == list(range(6, 28))
+
+    def test_interactions_property(self, two_chain_pdb):
+        """Test interactions property stacks lj and coulomb."""
+        from molecular_simulations.analysis.interaction_energy import (
+            StaticInteractionEnergy,
+        )
+
+        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), platform="CPU")
         sie.lj = -5.0
         sie.coulomb = -10.0
 
@@ -365,7 +318,12 @@ class TestStaticInteractionEnergy:
         assert result[1, 0] == -10.0
 
     def test_energy_static_method(self):
-        """Test energy static method"""
+        """Test energy static method sets the scaling parameters.
+
+        Uses a mock Context: a real Context requires the fully assembled
+        custom-force system, which is exercised end-to-end in
+        test_compute_real_interaction_energy below.
+        """
         from molecular_simulations.analysis.interaction_energy import (
             StaticInteractionEnergy,
         )
@@ -387,28 +345,35 @@ class TestStaticInteractionEnergy:
         mock_context.setParameter.assert_any_call("solute_lj_scale", 0)
         assert result == 100.0
 
-    @patch("molecular_simulations.analysis.interaction_energy.PDBFixer")
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
-    def test_fix_pdb(self, mock_platform, mock_pdbfixer):
-        """Test fix_pdb method"""
+    def test_fix_pdb(self, two_chain_pdb):
+        """Test fix_pdb runs PDBFixer and returns a usable topology."""
         from molecular_simulations.analysis.interaction_energy import (
             StaticInteractionEnergy,
         )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        mock_fixer = MagicMock()
-        mock_fixer.positions = [[0, 0, 0]]
-        mock_fixer.topology = MagicMock()
-        mock_pdbfixer.return_value = mock_fixer
-
-        sie = StaticInteractionEnergy(pdb="test.pdb")
+        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), platform="CPU")
         positions, topology = sie.fix_pdb()
 
-        mock_fixer.findMissingResidues.assert_called_once()
-        mock_fixer.findMissingAtoms.assert_called_once()
-        mock_fixer.addMissingAtoms.assert_called_once()
-        mock_fixer.addMissingHydrogens.assert_called_once_with(7.0)
+        # The structure is already complete -> 58 atoms preserved
+        assert topology.getNumAtoms() == 58
+        assert len(positions) == 58
+
+    def test_compute_real_interaction_energy(self, two_chain_pdb):
+        """End-to-end: real LJ/Coulomb interaction of chain A vs the rest."""
+        from molecular_simulations.analysis.interaction_energy import (
+            StaticInteractionEnergy,
+        )
+
+        sie = StaticInteractionEnergy(
+            pdb=str(two_chain_pdb), chain="A", platform="CPU"
+        )
+        sie.compute()
+
+        assert np.isfinite(sie.lj)
+        assert np.isfinite(sie.coulomb)
+        # A Lys-Asp salt bridge across the interface is attractive (coulomb < 0)
+        assert sie.coulomb < 0.0
+        assert sie.interactions.shape == (2, 1)
 
 
 class TestInteractionEnergyFrame:

@@ -159,10 +159,32 @@ def two_chain_pdb() -> Path:
     ``chainID A`` / ``chainID B`` interface logic in cov_ppi and ipSAE that the
     single-chain alanine dipeptide cannot.
 
+    The PDB carries CONECT bond records, so analyses that need connectivity
+    (e.g. cov_ppi hydrogen-bond donor/acceptor surveys) work directly.
+
     Returns:
         Path to the static two-chain PDB file.
     """
     return get_test_data_dir() / "pdb" / "two_chain_saltbridge.pdb"
+
+
+@pytest.fixture
+def two_chain_trajectory() -> dict:
+    """Return the two-chain PDB topology plus a short matching trajectory.
+
+    The 5-frame DCD drifts chain B away from chain A so the salt bridge is
+    present in the first frame and broken in later ones -- giving non-trivial
+    occupancy fractions for trajectory analyses (DynamicInteractionEnergy,
+    cov_ppi over a trajectory) rather than a single static frame.
+
+    Returns:
+        Dictionary with ``top`` (the two-chain PDB) and ``traj`` (the DCD).
+    """
+    pdb_dir = get_test_data_dir() / "pdb"
+    return {
+        "top": pdb_dir / "two_chain_saltbridge.pdb",
+        "traj": pdb_dir / "two_chain_saltbridge.dcd",
+    }
 
 
 # ---------------------------------------------------------------------------

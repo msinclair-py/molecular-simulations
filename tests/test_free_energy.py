@@ -5,7 +5,6 @@ This module tests the EVB (Empirical Valence Bond) calculation classes
 used for free energy simulations.
 """
 
-import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -15,33 +14,6 @@ import pytest
 
 # Mark tests that don't require OpenMM as unit tests
 pytestmark = pytest.mark.unit
-
-
-# Module-level fixtures to mock dependencies before importing free_energy
-@pytest.fixture(autouse=True)
-def mock_free_energy_deps():
-    """Mock the omm_simulator and reporters modules before importing free_energy.
-
-    The free_energy module uses absolute imports (not relative) for omm_simulator
-    and reporters to support Parsl serialization. We need to mock these modules
-    before the free_energy module is imported.
-    """
-    # Create mock modules
-    mock_omm_simulator = MagicMock()
-    mock_reporters = MagicMock()
-
-    # Add to sys.modules so imports work
-    with patch.dict(
-        sys.modules,
-        {
-            "omm_simulator": mock_omm_simulator,
-            "reporters": mock_reporters,
-        },
-    ):
-        # Clear the cached import if it exists
-        if "molecular_simulations.simulate.free_energy" in sys.modules:
-            del sys.modules["molecular_simulations.simulate.free_energy"]
-        yield mock_omm_simulator, mock_reporters
 
 
 @pytest.fixture
@@ -77,7 +49,7 @@ class TestEVBInit:
     """Test suite for EVB class initialization."""
 
     def test_evb_init_with_valid_inputs(
-        self, mock_free_energy_deps, mock_mda_universe
+        self, mock_mda_universe
     ) -> None:
         """Test EVB initialization with valid input files and parameters.
 
@@ -118,7 +90,7 @@ class TestEVBInit:
             assert evb.log_path == log_path
 
     def test_evb_init_custom_parameters(
-        self, mock_free_energy_deps, mock_mda_universe
+        self, mock_mda_universe
     ) -> None:
         """Test EVB initialization with custom simulation parameters.
 
@@ -170,7 +142,7 @@ class TestEVBInit:
             assert evb.platform == "CPU"
 
     def test_evb_init_default_parameters(
-        self, mock_free_energy_deps, mock_mda_universe
+        self, mock_mda_universe
     ) -> None:
         """Test EVB initialization with default parameter values."""
         import molecular_simulations.simulate.free_energy as fe_module
@@ -217,7 +189,7 @@ class TestEVBInit:
 class TestEVBConstructRC:
     """Test suite for EVB reaction coordinate construction."""
 
-    def test_construct_rc_basic(self, mock_free_energy_deps, mock_mda_universe) -> None:
+    def test_construct_rc_basic(self, mock_mda_universe) -> None:
         """Test construction of linearly spaced reaction coordinate.
 
         The reaction coordinate is specified as [start, end, increment]
@@ -256,7 +228,7 @@ class TestEVBConstructRC:
             )
 
     def test_construct_rc_single_step(
-        self, mock_free_energy_deps, mock_mda_universe
+        self, mock_mda_universe
     ) -> None:
         """Test reaction coordinate with large increment resulting in few windows."""
         import molecular_simulations.simulate.free_energy as fe_module
@@ -292,7 +264,7 @@ class TestEVBConstructRC:
             )
 
     def test_construct_rc_negative_range(
-        self, mock_free_energy_deps, mock_mda_universe
+        self, mock_mda_universe
     ) -> None:
         """Test reaction coordinate spanning negative to positive values."""
         import molecular_simulations.simulate.free_energy as fe_module
@@ -326,7 +298,7 @@ class TestEVBConstructRC:
             assert evb.reaction_coordinate.shape[0] == 13
 
     def test_construct_rc_direct_method(
-        self, mock_free_energy_deps, mock_mda_universe
+        self, mock_mda_universe
     ) -> None:
         """Test construct_rc method directly."""
         import molecular_simulations.simulate.free_energy as fe_module
@@ -365,7 +337,7 @@ class TestEVBConstructRC:
 class TestEVBProperties:
     """Test suite for EVB property methods."""
 
-    def test_umbrella_property(self, mock_free_energy_deps, mock_mda_universe) -> None:
+    def test_umbrella_property(self, mock_mda_universe) -> None:
         """Test umbrella property returns correct dictionary structure.
 
         The umbrella property should return a dictionary containing:
@@ -413,7 +385,7 @@ class TestEVBProperties:
             assert umbrella["rc0"] is None
 
     def test_morse_bond_property(
-        self, mock_free_energy_deps, mock_mda_universe
+        self, mock_mda_universe
     ) -> None:
         """Test morse_bond property returns correct dictionary structure.
 
@@ -466,7 +438,7 @@ class TestEVBParslManagement:
     """Test suite for EVB Parsl initialization and shutdown."""
 
     def test_initialize_loads_parsl(
-        self, mock_free_energy_deps, mock_mda_universe
+        self, mock_mda_universe
     ) -> None:
         """Test that initialize() loads the Parsl configuration."""
         import molecular_simulations.simulate.free_energy as fe_module
@@ -508,7 +480,7 @@ class TestEVBParslManagement:
                 assert evb.dfk is mock_dfk
 
     def test_shutdown_cleans_up_parsl(
-        self, mock_free_energy_deps, mock_mda_universe
+        self, mock_mda_universe
     ) -> None:
         """Test that shutdown() properly cleans up Parsl resources."""
         import molecular_simulations.simulate.free_energy as fe_module
@@ -549,7 +521,7 @@ class TestEVBParslManagement:
                 assert evb.dfk is None
 
     def test_shutdown_when_not_initialized(
-        self, mock_free_energy_deps, mock_mda_universe
+        self, mock_mda_universe
     ) -> None:
         """Test that shutdown() handles case when dfk is None."""
         import molecular_simulations.simulate.free_energy as fe_module
@@ -590,7 +562,7 @@ class TestEVBParslManagement:
 class TestEVBCalculationInit:
     """Test suite for EVBCalculation class initialization."""
 
-    def test_evb_calculation_init(self, mock_free_energy_deps) -> None:
+    def test_evb_calculation_init(self) -> None:
         """Test EVBCalculation initialization creates Simulator with correct args."""
         import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVBCalculation
@@ -638,7 +610,7 @@ class TestEVBCalculationInit:
                 assert evb_calc.umbrella == umbrella
                 assert evb_calc.morse_bond == morse_bond
 
-    def test_evb_calculation_cuda_precision(self, mock_free_energy_deps) -> None:
+    def test_evb_calculation_cuda_precision(self) -> None:
         """Test EVBCalculation sets mixed precision for CUDA platform."""
         import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVBCalculation
@@ -684,7 +656,7 @@ class TestEVBCalculationInit:
                 # Should set mixed precision
                 assert evb_calc.sim_engine.properties == {"Precision": "mixed"}
 
-    def test_evb_calculation_cpu_no_precision(self, mock_free_energy_deps) -> None:
+    def test_evb_calculation_cpu_no_precision(self) -> None:
         """Test EVBCalculation does not set precision for CPU platform."""
         import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVBCalculation
@@ -730,7 +702,7 @@ class TestEVBCalculationInit:
                 # Should have empty properties
                 assert evb_calc.sim_engine.properties == {}
 
-    def test_evb_calculation_opencl_precision(self, mock_free_energy_deps) -> None:
+    def test_evb_calculation_opencl_precision(self) -> None:
         """Test EVBCalculation sets mixed precision for OpenCL platform."""
         import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVBCalculation
@@ -780,7 +752,7 @@ class TestEVBCalculationInit:
 class TestEVBCalculationStaticMethods:
     """Test suite for EVBCalculation static force-generation methods."""
 
-    def test_umbrella_force_parameters(self, mock_free_energy_deps) -> None:
+    def test_umbrella_force_parameters(self) -> None:
         """Test umbrella_force static method creates correct force.
 
         The umbrella force uses the difference of distances formula:
@@ -804,7 +776,7 @@ class TestEVBCalculationStaticMethods:
         # Force should have 1 bond added
         assert force.getNumBonds() == 1
 
-    def test_umbrella_force_ignores_extra_kwargs(self, mock_free_energy_deps) -> None:
+    def test_umbrella_force_ignores_extra_kwargs(self) -> None:
         """Test umbrella_force ignores extra keyword arguments.
 
         This is important because the umbrella dict may contain k_path
@@ -827,7 +799,7 @@ class TestEVBCalculationStaticMethods:
 
         assert isinstance(force, CustomCompoundBondForce)
 
-    def test_path_restraint_parameters(self, mock_free_energy_deps) -> None:
+    def test_path_restraint_parameters(self) -> None:
         """Test path_restraint static method creates correct force.
 
         The path restraint enforces collinearity using cosine angle:
@@ -847,7 +819,7 @@ class TestEVBCalculationStaticMethods:
         assert isinstance(force, CustomCompoundBondForce)
         assert force.getNumBonds() == 1
 
-    def test_morse_bond_force_parameters(self, mock_free_energy_deps) -> None:
+    def test_morse_bond_force_parameters(self) -> None:
         """Test morse_bond_force static method creates correct force.
 
         The Morse potential has the form:
@@ -873,7 +845,7 @@ class TestEVBCalculationRemoveHarmonicBond:
     """Test suite for remove_harmonic_bond static method."""
 
     def test_remove_harmonic_bond_zeros_force_constant(
-        self, mock_free_energy_deps
+        self
     ) -> None:
         """Test that remove_harmonic_bond zeros out the bond force constant.
 
@@ -901,7 +873,7 @@ class TestEVBCalculationRemoveHarmonicBond:
         assert length.value_in_unit(nanometers) == pytest.approx(0.1)
 
     def test_remove_harmonic_bond_removes_constraint(
-        self, mock_free_energy_deps
+        self
     ) -> None:
         """Test that remove_harmonic_bond removes SHAKE constraints."""
         from openmm import System
@@ -920,7 +892,7 @@ class TestEVBCalculationRemoveHarmonicBond:
         assert system.getNumConstraints() == 0
 
     def test_remove_harmonic_bond_handles_missing_bond(
-        self, mock_free_energy_deps
+        self
     ) -> None:
         """Test remove_harmonic_bond handles case where bond does not exist."""
         from openmm import HarmonicBondForce, System
@@ -945,7 +917,7 @@ class TestEVBCalculationRemoveHarmonicBond:
         p1, p2, length, k = bond_force.getBondParameters(0)
         assert k.value_in_unit(kilojoules_per_mole / nanometers**2) == 1000.0
 
-    def test_remove_harmonic_bond_reversed_indices(self, mock_free_energy_deps) -> None:
+    def test_remove_harmonic_bond_reversed_indices(self) -> None:
         """Test remove_harmonic_bond works with reversed atom indices."""
         from openmm import HarmonicBondForce, System
         from openmm.unit import kilojoules_per_mole, nanometers
@@ -982,7 +954,6 @@ class TestEVBConstructRCParametrized:
 
     def test_construct_rc_lengths(
         self,
-        mock_free_energy_deps,
         mock_mda_universe,
         rc_input: list[float],
         expected_length: int,
@@ -1022,7 +993,7 @@ class TestEVBPath:
     """Test suite for EVB path handling."""
 
     def test_evb_creates_correct_path(
-        self, mock_free_energy_deps, mock_mda_universe
+        self, mock_mda_universe
     ) -> None:
         """Test EVB creates correct path for output directory."""
         import molecular_simulations.simulate.free_energy as fe_module

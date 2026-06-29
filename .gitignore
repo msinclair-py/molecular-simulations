@@ -4,6 +4,7 @@ examples/test_sim
 *.swp
 .DS_Store
 dist/
+docs/_build/
 .venv
 joss/
 .claude

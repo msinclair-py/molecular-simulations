@@ -59,8 +59,8 @@ Classes for executing MD simulations and related calculations.
 
    molecular_simulations.simulate.Simulator
    molecular_simulations.simulate.mmpbsa.MMPBSA
-   molecular_simulations.simulate.parsl_settings.LocalSettings
-   molecular_simulations.simulate.parsl_settings.PolarisSettings
+   molecular_simulations.utils.parsl_settings.LocalSettings
+   molecular_simulations.utils.parsl_settings.PolarisSettings
 
 :class:`~molecular_simulations.simulate.Simulator`
    Run OpenMM simulations with automatic equilibration (NVT → NPT) and 
@@ -69,10 +69,10 @@ Classes for executing MD simulations and related calculations.
 :class:`~molecular_simulations.simulate.mmpbsa.MMPBSA`
    Calculate MM-PBSA binding free energies with frame-level parallelization.
 
-:class:`~molecular_simulations.simulate.parsl_settings.LocalSettings`
+:class:`~molecular_simulations.utils.parsl_settings.LocalSettings`
    Parsl configuration for local workstations and small clusters.
 
-:class:`~molecular_simulations.simulate.parsl_settings.PolarisSettings`
+:class:`~molecular_simulations.utils.parsl_settings.PolarisSettings`
    Parsl configuration for ALCF Polaris supercomputer.
 
 Analyzing Trajectories (``molecular_simulations.analysis``)
@@ -85,7 +85,7 @@ Classes for analyzing MD trajectories and structures.
 
    molecular_simulations.analysis.AutoKMeans
    molecular_simulations.analysis.Fingerprinter
-   molecular_simulations.analysis.PPInteractions
+   molecular_simulations.analysis.cov_ppi.PPInteractions
    molecular_simulations.analysis.ipSAE
    molecular_simulations.analysis.SASA
    molecular_simulations.analysis.RelativeSASA
@@ -97,7 +97,7 @@ Classes for analyzing MD trajectories and structures.
 :class:`~molecular_simulations.analysis.Fingerprinter`
    Calculate per-residue interaction energy fingerprints (electrostatic + LJ).
 
-:class:`~molecular_simulations.analysis.PPInteractions`
+:class:`~molecular_simulations.analysis.cov_ppi.PPInteractions`
    Analyze protein-protein interactions using covariance-based contact detection. 
    Identifies hydrogen bonds, salt bridges, and hydrophobic contacts.
 

@@ -1758,13 +1758,16 @@ class EVB:
         (https://bde.ml.nrel.gov). Must be in kJ/mol for OpenMM.
 
         alpha is the potential well width computed from the harmonic force
-        constant via the Taylor expansion of the second derivative:
+        constant via the Taylor expansion of the second derivative::
+
             alpha = sqrt(k_bond / (2 * D_e))
 
-        Unit conversions from AMBER frcmod (kcal/mol/A^2) to OpenMM (kJ/mol/nm^2):
+        Unit conversions from AMBER frcmod (kcal/mol/A^2) to OpenMM (kJ/mol/nm^2)::
+
             k_openmm = k_amber * 4.184 * 100
 
-        Example calculation for C-H bond:
+        Example calculation for C-H bond::
+
             D_e = 93.8 kcal/mol = 392.46 kJ/mol
             k_bond = 330.6 kcal/(mol*A^2) = 138323 kJ/(mol*nm^2)
             alpha = sqrt(138323 / (2 * 392.46)) = 13.275 nm^-1

@@ -5,6 +5,7 @@
 
 import os
 import sys
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 # -- Path setup --------------------------------------------------------------
 sys.path.insert(0, os.path.abspath('../src'))
@@ -13,8 +14,11 @@ sys.path.insert(0, os.path.abspath('../src'))
 project = 'molecular-simulations'
 copyright = '2025, Matt Sinclair'
 author = 'Matt Sinclair'
-release = '0.3.28'
-version = '0.3'
+try:
+    release = _pkg_version('molecular_simulations')
+except PackageNotFoundError:
+    release = '0.0.0'
+version = '.'.join(release.split('.')[:2])
 
 # -- General configuration ---------------------------------------------------
 extensions = [
@@ -55,29 +59,20 @@ napoleon_include_special_with_doc = True
 napoleon_use_admonition_for_examples = True
 napoleon_use_admonition_for_notes = True
 napoleon_use_admonition_for_references = False
-napoleon_use_ivar = False
+napoleon_use_ivar = True
 napoleon_use_param = True
 napoleon_use_rtype = True
 napoleon_attr_annotations = True
 
-# Mock imports for packages that may not be installed during doc build
+# Mock only optional deps not installed during the docs build. The docs CI job
+# installs .[docs], which pulls in all core runtime deps, so only the `ligand`
+# extras (openbabel, rdkit) are absent. Mocking installed packages such as numpy
+# breaks runtime-evaluated annotations (e.g. ``np.ndarray | None``) and makes
+# autosummary report spurious import failures.
 autodoc_mock_imports = [
-    'numba',
     'openbabel',
-    'parmed',
-    'pdbfixer',
-    'openmm',
-    'MDAnalysis',
-    'mdtraj',
-    'parsl',
-    'polars',
     'rdkit',
-    'rust_simulation_tools',
-    'seaborn',
-    'sklearn',
-    'scipy',
-    'numpy',
-    'natsort',
+    'calvados',
 ]
 
 # Templates

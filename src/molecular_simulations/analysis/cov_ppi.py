@@ -164,10 +164,12 @@ class PPInteractions:
         """Compute the positional covariance matrix between selections.
 
         Loops over all C-alpha atoms and computes the positional
-        covariance using the functional form:
+        covariance using the functional form::
+
             C = <(R1 - <R1>)(R2 - <R2>)^T>
 
-        where each element corresponds to the ensemble average movement:
+        where each element corresponds to the ensemble average movement::
+
             C_ij = <deltaR_i * deltaR_j>
 
         The magnitude indicates correlation strength and the sign

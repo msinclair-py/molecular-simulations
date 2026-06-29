@@ -14,5 +14,4 @@ Submodules
 
    molecular_simulations.build.build_amber
    molecular_simulations.build.build_calvados
-   molecular_simulations.build.build_interface
    molecular_simulations.build.build_ligand

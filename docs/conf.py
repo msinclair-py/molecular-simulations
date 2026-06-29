@@ -31,6 +31,7 @@ extensions = [
     'sphinx_autodoc_typehints',
     'sphinx_copybutton',        # Copy button for code blocks (add to deps)
     'sphinx_wagtail_theme',
+    'myst_parser',              # Markdown support (renders the root CHANGELOG.md)
 ]
 
 # Autosummary settings

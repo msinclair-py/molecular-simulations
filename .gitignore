@@ -9,3 +9,6 @@ docs/_build/
 joss/
 .claude
 *.md
+!README.md
+!CHANGELOG.md
+!docs/changelog.md

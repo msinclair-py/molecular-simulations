@@ -50,6 +50,7 @@ docs = [
     'sphinx',
     'sphinx-rtd-theme',
     'sphinx-wagtail-theme',
+    'myst-parser',
     'docutils'
 ]
 dev = [

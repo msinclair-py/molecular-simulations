@@ -25,13 +25,13 @@ def get_node_count():
         environment variables are found.
     """
     import os
-    
-    if (num_nodes := os.environ['SLURM_JOB_NUM_NODES']):
-        return num_nodes
 
-    if (nodefile := os.environ['PBS_NODEFILE']):
+    if num_nodes := os.environ.get('SLURM_JOB_NUM_NODES'):
+        return int(num_nodes)
+
+    if nodefile := os.environ.get('PBS_NODEFILE'):
         with open(nodefile, 'r') as f:
-            return len(nodefile.readlines())
+            return len(f.readlines())
 
     return 1
 

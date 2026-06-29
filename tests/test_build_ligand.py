@@ -1208,7 +1208,15 @@ class TestComplexBuilderAssembleSystem:
 
             builder.assemble_system(dim=80.0, num_ions=50)
 
-            mock_subprocess_run.assert_called_once()
+            # tleap is invoked once to assemble the complex; ignore unrelated
+            # import-time subprocess calls (e.g. an lscpu CPU probe) that the
+            # global subprocess.run patch may also capture.
+            tleap_calls = [
+                c
+                for c in mock_subprocess_run.call_args_list
+                if c.args and "tleap" in str(c.args[0])
+            ]
+            assert len(tleap_calls) == 1
 
     @patch.dict(os.environ, {"AMBERHOME": "/fake/amber"})
     @patch("subprocess.run")
@@ -1241,7 +1249,15 @@ class TestComplexBuilderAssembleSystem:
 
             builder.assemble_system(dim=80.0, num_ions=50)
 
-            mock_subprocess_run.assert_called_once()
+            # tleap is invoked once to assemble the complex; ignore unrelated
+            # import-time subprocess calls (e.g. an lscpu CPU probe) that the
+            # global subprocess.run patch may also capture.
+            tleap_calls = [
+                c
+                for c in mock_subprocess_run.call_args_list
+                if c.args and "tleap" in str(c.args[0])
+            ]
+            assert len(tleap_calls) == 1
 
 
 class TestComplexBuilderProcessLigandEdgeCases:

@@ -127,7 +127,7 @@ class LigandBuilder:
         quit
         """
 
-        self.process_input()
+        self.process_input(ext)
         self.convert_to_mol2()
 
         os.system(convert_to_gaff)

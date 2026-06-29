@@ -1,0 +1,68 @@
+name: Release
+
+# Runs on every push to main (i.e. when a PR is merged).
+#
+# release-please inspects commit history since the previous tag and, if it
+# finds releasable commits (conventional commits: feat, fix, etc.), opens a
+# "release PR" that bumps the version in pyproject.toml and updates
+# CHANGELOG.md. Merging that release PR creates the git tag + GitHub Release
+# and, in the same run, builds and publishes the package to PyPI.
+#
+# Publishing lives in this workflow (gated on release-please's
+# `release_created` output) rather than a separate tag-triggered workflow:
+# tags pushed by the default GITHUB_TOKEN do not trigger other workflows, so a
+# standalone `on: push: tags` publish job would silently never run.
+#
+# Full flow:
+#   1. Feature PR merged to main   -> release-please opens/updates release PR
+#   2. Release PR reviewed + merged -> tag vX.Y.Z + GitHub Release + PyPI upload
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build dependencies
+        run: pip install build
+
+      - name: Build package
+        run: |
+          rm -rf dist/*
+          python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_TOKEN }}
+          skip-existing: true

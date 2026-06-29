@@ -114,4 +114,10 @@ copybutton_prompt_is_regexp = True
 todo_include_todos = True
 
 # -- Suppress specific warnings ----------------------------------------------
-suppress_warnings = ['autodoc.import']
+# 'sphinx_autodoc_typehints.forward_reference': pydantic re-exports types such
+# as JsonValue as forward references the extension cannot resolve; harmless for
+# our docs but fatal under the strict (-W) build.
+suppress_warnings = [
+    'autodoc.import',
+    'sphinx_autodoc_typehints.forward_reference',
+]

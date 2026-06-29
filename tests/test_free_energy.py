@@ -16,6 +16,21 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
+def _has_opencl() -> bool:
+    """Return True if an OpenCL OpenMM platform is registered.
+
+    CI's pip-installed OpenMM ships only Reference and CPU platforms, so the
+    real-OpenCL test must skip there rather than fail.
+    """
+    try:
+        from openmm import Platform
+
+        Platform.getPlatformByName("OpenCL")
+        return True
+    except Exception:
+        return False
+
+
 class TestEVBInit:
     """Test suite for EVB class initialization."""
 
@@ -522,6 +537,9 @@ class TestEVBCalculationInit:
         # CPU platform sets no precision properties
         assert evb_calc.sim_engine.properties == {}
 
+    @pytest.mark.skipif(
+        not _has_opencl(), reason="OpenCL platform not available in this OpenMM build"
+    )
     def test_evb_calculation_opencl_precision(self, real_amber_system_files) -> None:
         """Test EVBCalculation sets mixed precision for OpenCL platform."""
         from molecular_simulations.simulate.free_energy import EVBCalculation

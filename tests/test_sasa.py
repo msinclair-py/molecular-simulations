@@ -177,6 +177,29 @@ class TestSASAIntegration:
             with pytest.raises(ValueError):
                 RelativeSASA(ag)
 
+    @requires_mdanalysis
+    def test_relative_sasa_runs_on_bonded_system(self, real_amber_system_files):
+        """RelativeSASA computes per-residue relative areas on a real system.
+
+        Regression test for the broadcast bug (issue #9): measure_sasa must use
+        the radii of each per-residue sub-selection, not the full AtomGroup.
+        """
+        import MDAnalysis as mda
+
+        from molecular_simulations.analysis import RelativeSASA
+
+        u = mda.Universe(
+            str(real_amber_system_files['prmtop']),
+            str(real_amber_system_files['inpcrd']),
+        )
+        protein = u.select_atoms('protein')
+        rsasa = RelativeSASA(protein)
+        rsasa.run()
+
+        area = rsasa.results.relative_area
+        assert area.shape == (protein.n_residues,)
+        assert np.all(np.isfinite(area))
+
 
 # ============================================================================
 # Original unit tests with mocks

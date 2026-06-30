@@ -219,6 +219,7 @@ class AutoKMeans:
         stride: int = 1,
         reduction_algorithm: str = 'PCA',
         reduction_kws: dict[str, Any] = {'n_components': 2},  # noqa: B006
+        random_state: int | None = 42,
     ):
         """Initialize the automatic clustering workflow.
 
@@ -230,6 +231,8 @@ class AutoKMeans:
             stride: Step size for cluster number sweep.
             reduction_algorithm: Dimensionality reduction method.
             reduction_kws: Arguments for the reduction algorithm.
+            random_state: Seed for KMeans for reproducible clustering. Defaults
+                to 42; pass None for non-deterministic initialization.
         """
         self.data_dir = Path(data_directory)
         self.dataloader: DataloaderProtocol = dataloader(
@@ -240,6 +243,7 @@ class AutoKMeans:
 
         self.n_clusters = max_clusters
         self.stride = stride
+        self.random_state = random_state
 
         self.decomposition = Decomposition(reduction_algorithm, **reduction_kws)
 
@@ -283,7 +287,7 @@ class AutoKMeans:
             leave=False,
             desc='Sweeping `n_clusters`',
         ):
-            clusterer = KMeans(n_clusters=n)
+            clusterer = KMeans(n_clusters=n, random_state=self.random_state)
             labels = clusterer.fit_predict(self.reduced)
             average_score = silhouette_score(self.reduced, labels)
 

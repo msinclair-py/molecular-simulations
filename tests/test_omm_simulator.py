@@ -56,6 +56,38 @@ def _build_real_implicit_simulation(
     return sim, simulation, integrator
 
 
+def _build_real_explicit_simulation(real_amber_explicit_files, **extra):
+    """Build a real CPU Simulator + restrained Simulation on the solvated box.
+
+    The solvated Ace-Ala-Nme carries a periodic box, so PME and the NPT
+    MonteCarloBarostat added by _equilibrate run for real. Adds the backbone
+    position restraint (the global 'k' parameter _equilibrate relaxes) and lightly
+    minimizes. Returns ``(sim, simulation)``.
+    """
+    from molecular_simulations.simulate.omm_simulator import Simulator
+
+    sim = Simulator(
+        path=real_amber_explicit_files["path"],
+        top_name="ala_dipeptide_solv.prmtop",
+        coor_name="ala_dipeptide_solv.inpcrd",
+        platform="CPU",
+        **extra,
+    )
+    system = sim.load_system()
+    system = sim.add_backbone_posres(
+        system,
+        sim.coordinate.positions,
+        sim.topology.topology.atoms(),
+        sim.indices,
+        sim.k,
+    )
+    simulation, _ = sim.setup_sim(system, dt=0.002)
+    simulation.context.setPositions(sim.coordinate.positions)
+    simulation.minimizeEnergy(maxIterations=20)
+
+    return sim, simulation
+
+
 def _check_openmm_available():
     """Check if OpenMM is available with a working platform."""
     try:
@@ -372,31 +404,21 @@ class TestSimulatorLoadSystem:
         with pytest.raises(AttributeError, match="amber"):
             sim.load_system()
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.AmberInpcrdFile")
-    @patch("molecular_simulations.simulate.omm_simulator.AmberPrmtopFile")
-    def test_load_amber_files(self, mock_prmtop, mock_inpcrd, mock_platform):
-        """Test load_amber_files method"""
+    def test_load_amber_files(self, real_amber_explicit_files):
+        """load_amber_files builds a real PME system from the solvated box."""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_inpcrd.return_value = MagicMock(
-            boxVectors=[[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        sim = Simulator(
+            path=real_amber_explicit_files["path"],
+            top_name="ala_dipeptide_solv.prmtop",
+            coor_name="ala_dipeptide_solv.inpcrd",
+            platform="CPU",
         )
-        mock_topology = MagicMock()
-        mock_topology.createSystem.return_value = MagicMock()
-        mock_prmtop.return_value = mock_topology
+        system = sim.load_amber_files()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path, ff="amber")
-            system = sim.load_amber_files()
-
-            mock_topology.createSystem.assert_called_once()
-            assert system is not None
+        # Real solvated system: 913 atoms with a periodic box (PME)
+        assert system.getNumParticles() == 913
+        assert system.usesPeriodicBoundaryConditions()
 
 
 class TestSimulatorSetupSim:
@@ -1010,55 +1032,38 @@ class TestSimulatorHeating:
 class TestSimulatorEquilibrateMethod:
     """Test suite for _equilibrate method."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_equilibrate_restraint_relaxation(self, mock_platform):
-        """Test _equilibrate performs restraint relaxation in 5 levels."""
+    def test_equilibrate_restraint_relaxation(self, real_amber_explicit_files):
+        """_equilibrate relaxes the restraint to zero and saves state/checkpoint."""
+        sim, simulation = _build_real_explicit_simulation(
+            real_amber_explicit_files, equil_steps=8, n_equil_cycles=1
+        )
 
-        from molecular_simulations.simulate.omm_simulator import Simulator
+        sim._equilibrate(simulation)
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        # The backbone restraint is fully relaxed to k=0 by the end
+        assert simulation.context.getParameter("k") == 0.0
+        # State and checkpoint are written
+        assert sim.eq_state.exists()
+        assert sim.eq_chkpt.exists()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+    def test_equilibrate_adds_barostat(self, real_amber_explicit_files):
+        """_equilibrate adds a MonteCarloBarostat for the NPT phase."""
+        from openmm import MonteCarloBarostat
 
-            sim = Simulator(path=path, equil_steps=60000, n_equil_cycles=3)
+        sim, simulation = _build_real_explicit_simulation(
+            real_amber_explicit_files, equil_steps=8, n_equil_cycles=1
+        )
 
-            mock_simulation = MagicMock()
-            mock_simulation.system = MagicMock()
+        before = sum(
+            isinstance(f, MonteCarloBarostat) for f in simulation.system.getForces()
+        )
+        sim._equilibrate(simulation)
+        after = sum(
+            isinstance(f, MonteCarloBarostat) for f in simulation.system.getForces()
+        )
 
-            sim._equilibrate(mock_simulation)
-
-            # Verify context was reinitialized
-            mock_simulation.context.reinitialize.assert_called_once_with(True)
-            # Verify restraint parameter was set multiple times (5 levels + final zero)
-            assert mock_simulation.context.setParameter.call_count >= 6
-            # Verify state and checkpoint were saved
-            mock_simulation.saveState.assert_called_once()
-            mock_simulation.saveCheckpoint.assert_called_once()
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_equilibrate_adds_barostat(self, mock_platform):
-        """Test _equilibrate adds barostat for NPT."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path, equil_steps=60000, n_equil_cycles=3)
-
-            mock_simulation = MagicMock()
-            mock_simulation.system = MagicMock()
-
-            sim._equilibrate(mock_simulation)
-
-            # Verify barostat was added to system
-            mock_simulation.system.addForce.assert_called_once()
+        assert before == 0
+        assert after == 1
 
 
 class TestSimulatorProductionMethod:

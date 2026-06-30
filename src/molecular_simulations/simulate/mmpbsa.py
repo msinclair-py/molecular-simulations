@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# ruff: noqa: SIM115
+# ruff: noqa: SIM115, E402
 """MM-P(G)BSA calculation module.
 
 This module provides a reconstructed implementation of MM-P(G)BSA from AMBER,
@@ -9,7 +9,6 @@ parallelization for efficient processing of long trajectories.
 """
 
 import json
-import MDAnalysis as mda
 import os
 import re
 import subprocess
@@ -19,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import MDAnalysis as mda
 import pandas as pd
 import polars as pl
 
@@ -217,7 +217,7 @@ class MMPBSA(MMPBSASettings):
 
     Example:
         >>> mmpbsa = MMPBSA(
-        ...     "system.prmtop", "traj.dcd", [":1-100", ":101-150"], n_cpus=4
+        ...     'system.prmtop', 'traj.dcd', [':1-100', ':101-150'], n_cpus=4
         ... )
         >>> mmpbsa.run()
         >>> print(mmpbsa.free_energy)
@@ -653,7 +653,9 @@ class MMPBSA(MMPBSASettings):
             else:
                 with open(sasa_file) as f:
                     data_lines = [
-                        line for line in f if line.strip() and not line.strip().startswith('#')
+                        line
+                        for line in f
+                        if line.strip() and not line.strip().startswith('#')
                     ]
                     if len(data_lines) == 0:
                         invalid_files.append(f'{sasa_file} (no data lines)')
@@ -679,7 +681,7 @@ class MMPBSA(MMPBSASettings):
             errors.append(f'Invalid files: {invalid_files}')
 
         if errors:
-            raise RuntimeError(f"Output verification failed: {'; '.join(errors)}")
+            raise RuntimeError(f'Output verification failed: {"; ".join(errors)}')
 
     def get_selections(self) -> list[str]:
         """Infer receptor and ligand selections when none are provided.
@@ -695,13 +697,13 @@ class MMPBSA(MMPBSASettings):
         u = mda.Universe(self.top)
         protein = u.select_atoms('protein').residues.resids
         oxts = u.select_atoms('name OXT').residues.resids
-        last_oxt = oxts[-2] # if we don't have two chains we should be crashing
+        last_oxt = oxts[-2]  # if we don't have two chains we should be crashing
 
         sel1 = [resid for resid in protein if resid <= last_oxt]
         sel2 = [resid for resid in protein if resid > last_oxt]
 
         return [self.format_for_cpptraj(sel1), self.format_for_cpptraj(sel2)]
-    
+
     @staticmethod
     def format_for_cpptraj(resids) -> str:
         """Format a list of resids into an AMBER-style selection.
@@ -1035,11 +1037,13 @@ class OutputAnalyzer:
             dfs: List of DataFrames for GB and PB results.
         """
         print_statement = []
-        for df, level in zip(dfs, ['Generalized Born ', 'Poisson Boltzmann'], strict=True):
+        for df, level in zip(
+            dfs, ['Generalized Born ', 'Poisson Boltzmann'], strict=True
+        ):
             print_statement += [
-                f"{' ':<20}=========================",
-                f"{' ':<20}=== {level} ===",
-                f"{' ':<20}=========================",
+                f'{" ":<20}=========================',
+                f'{" ":<20}=== {level} ===',
+                f'{" ":<20}=========================',
                 'Energy Component    Average         Std. Dev.       Std. Err. of Mean',
                 '---------------------------------------------------------------------',
             ]
@@ -1052,9 +1056,8 @@ class OutputAnalyzer:
                 if col in ['G gas', '∆G Binding']:
                     print_statement.append('')
 
-                if col == '∆G Binding':
-                    if level == 'Poisson Boltzmann':
-                        self.free_energy = [mean, std]
+                if col == '∆G Binding' and level == 'Poisson Boltzmann':
+                    self.free_energy = [mean, std]
 
                 print_statement.append(report)
 
@@ -1326,10 +1329,12 @@ class FileHandler:
             system: [] for system in ['complex', 'receptor', 'ligand']
         }
 
-        for (top, traj, system) in zip(self.topologies,
-                                       self.trajectories,
-                                       ['complex', 'receptor', 'ligand'],
-                                       strict=True):
+        for top, traj, system in zip(
+            self.topologies,
+            self.trajectories,
+            ['complex', 'receptor', 'ligand'],
+            strict=True,
+        ):
             for chunk_idx in range(actual_chunks):
                 start_frame = chunk_idx * frames_per_chunk + 1
 

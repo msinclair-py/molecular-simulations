@@ -20,7 +20,7 @@ import pytest
 def _check_openmm():
     """Check if OpenMM is available."""
     try:
-        import openmm
+        import openmm  # noqa: F401
 
         return True
     except ImportError:
@@ -32,30 +32,30 @@ def _check_openmm_cpu():
     try:
         from openmm import Platform
 
-        Platform.getPlatformByName("CPU")
+        Platform.getPlatformByName('CPU')
         return True
     except Exception:
         return False
 
 
-requires_openmm = pytest.mark.skipif(not _check_openmm(), reason="OpenMM not installed")
+requires_openmm = pytest.mark.skipif(not _check_openmm(), reason='OpenMM not installed')
 
 
 requires_openmm_cpu = pytest.mark.skipif(
-    not _check_openmm_cpu(), reason="OpenMM CPU platform not available"
+    not _check_openmm_cpu(), reason='OpenMM CPU platform not available'
 )
 
 
 @pytest.fixture
 def test_data_dir():
     """Return the path to test data directory."""
-    return Path(__file__).parent / "data"
+    return Path(__file__).parent / 'data'
 
 
 @pytest.fixture
 def alanine_pdb(test_data_dir):
     """Return the path to the alanine dipeptide PDB."""
-    return test_data_dir / "pdb" / "alanine_dipeptide.pdb"
+    return test_data_dir / 'pdb' / 'alanine_dipeptide.pdb'
 
 
 # ============================================================================
@@ -69,65 +69,61 @@ class TestInteractionEnergyPureLogic:
     def test_get_selection_logic_full_chain(self):
         """Test selection logic for full chain - no mocks."""
         # Test the selection logic without instantiating the class
-        chain = "A"
-        first = None
-        last = None
+        chain = 'A'
 
         # Simulate atoms
         atoms = [
-            {"index": 0, "chain_id": "A", "resid": "1"},
-            {"index": 1, "chain_id": "A", "resid": "2"},
-            {"index": 2, "chain_id": "B", "resid": "1"},
+            {'index': 0, 'chain_id': 'A', 'resid': '1'},
+            {'index': 1, 'chain_id': 'A', 'resid': '2'},
+            {'index': 2, 'chain_id': 'B', 'resid': '1'},
         ]
 
-        selection = [a["index"] for a in atoms if a["chain_id"] == chain]
+        selection = [a['index'] for a in atoms if a['chain_id'] == chain]
 
         assert selection == [0, 1]
 
     def test_get_selection_logic_with_first_residue(self):
         """Test selection logic with first_residue - no mocks."""
-        chain = "A"
+        chain = 'A'
         first = 3
-        last = None
 
-        atoms = [{"index": i, "chain_id": "A", "resid": str(i + 1)} for i in range(5)]
+        atoms = [{'index': i, 'chain_id': 'A', 'resid': str(i + 1)} for i in range(5)]
 
         selection = [
-            a["index"]
+            a['index']
             for a in atoms
-            if a["chain_id"] == chain and int(first) <= int(a["resid"])
+            if a['chain_id'] == chain and int(first) <= int(a['resid'])
         ]
 
         assert selection == [2, 3, 4]
 
     def test_get_selection_logic_with_last_residue(self):
         """Test selection logic with last_residue - no mocks."""
-        chain = "A"
-        first = None
+        chain = 'A'
         last = 3
 
-        atoms = [{"index": i, "chain_id": "A", "resid": str(i + 1)} for i in range(5)]
+        atoms = [{'index': i, 'chain_id': 'A', 'resid': str(i + 1)} for i in range(5)]
 
         selection = [
-            a["index"]
+            a['index']
             for a in atoms
-            if a["chain_id"] == chain and int(last) >= int(a["resid"])
+            if a['chain_id'] == chain and int(last) >= int(a['resid'])
         ]
 
         assert selection == [0, 1, 2]
 
     def test_get_selection_logic_with_range(self):
         """Test selection logic with residue range - no mocks."""
-        chain = "A"
+        chain = 'A'
         first = 2
         last = 4
 
-        atoms = [{"index": i, "chain_id": "A", "resid": str(i + 1)} for i in range(5)]
+        atoms = [{'index': i, 'chain_id': 'A', 'resid': str(i + 1)} for i in range(5)]
 
         selection = [
-            a["index"]
+            a['index']
             for a in atoms
-            if a["chain_id"] == chain and int(first) <= int(a["resid"]) <= int(last)
+            if a['chain_id'] == chain and int(first) <= int(a['resid']) <= int(last)
         ]
 
         assert selection == [1, 2, 3]
@@ -172,10 +168,10 @@ class TestStaticInteractionEnergyIntegration:
             StaticInteractionEnergy,
         )
 
-        sie = StaticInteractionEnergy(pdb=str(alanine_pdb), chain="A", platform="CPU")
+        sie = StaticInteractionEnergy(pdb=str(alanine_pdb), chain='A', platform='CPU')
 
         assert sie.pdb == str(alanine_pdb)
-        assert sie.chain == "A"
+        assert sie.chain == 'A'
         assert sie.platform is not None
 
 
@@ -217,14 +213,14 @@ class TestStaticInteractionEnergy:
 
         sie = StaticInteractionEnergy(
             pdb=str(two_chain_pdb),
-            chain="B",
-            platform="CPU",
+            chain='B',
+            platform='CPU',
             first_residue=10,
             last_residue=50,
         )
 
         assert sie.pdb == str(two_chain_pdb)
-        assert sie.chain == "B"
+        assert sie.chain == 'B'
         assert sie.first == 10
         assert sie.last == 50
 
@@ -234,9 +230,9 @@ class TestStaticInteractionEnergy:
             StaticInteractionEnergy,
         )
 
-        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), platform="CPU")
+        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), platform='CPU')
 
-        assert sie.chain == "A"
+        assert sie.chain == 'A'
         assert sie.first is None
         assert sie.last is None
 
@@ -246,9 +242,7 @@ class TestStaticInteractionEnergy:
             StaticInteractionEnergy,
         )
 
-        sie = StaticInteractionEnergy(
-            pdb=str(two_chain_pdb), chain="A", platform="CPU"
-        )
+        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), chain='A', platform='CPU')
         sie.get_selection(self._topology(two_chain_pdb))
 
         # Chain A is the first 34 atoms (Ace-Lys-Nme)
@@ -261,7 +255,7 @@ class TestStaticInteractionEnergy:
         )
 
         sie = StaticInteractionEnergy(
-            pdb=str(two_chain_pdb), chain="A", platform="CPU", first_residue=2
+            pdb=str(two_chain_pdb), chain='A', platform='CPU', first_residue=2
         )
         sie.get_selection(self._topology(two_chain_pdb))
 
@@ -275,7 +269,7 @@ class TestStaticInteractionEnergy:
         )
 
         sie = StaticInteractionEnergy(
-            pdb=str(two_chain_pdb), chain="A", platform="CPU", last_residue=2
+            pdb=str(two_chain_pdb), chain='A', platform='CPU', last_residue=2
         )
         sie.get_selection(self._topology(two_chain_pdb))
 
@@ -290,8 +284,8 @@ class TestStaticInteractionEnergy:
 
         sie = StaticInteractionEnergy(
             pdb=str(two_chain_pdb),
-            chain="A",
-            platform="CPU",
+            chain='A',
+            platform='CPU',
             first_residue=2,
             last_residue=2,
         )
@@ -306,7 +300,7 @@ class TestStaticInteractionEnergy:
             StaticInteractionEnergy,
         )
 
-        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), platform="CPU")
+        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), platform='CPU')
         sie.lj = -5.0
         sie.coulomb = -10.0
 
@@ -340,8 +334,8 @@ class TestStaticInteractionEnergy:
             solvent_lj_scale=0,
         )
 
-        mock_context.setParameter.assert_any_call("solute_coulomb_scale", 1)
-        mock_context.setParameter.assert_any_call("solute_lj_scale", 0)
+        mock_context.setParameter.assert_any_call('solute_coulomb_scale', 1)
+        mock_context.setParameter.assert_any_call('solute_lj_scale', 0)
         assert result == 100.0
 
     def test_fix_pdb(self, two_chain_pdb):
@@ -350,7 +344,7 @@ class TestStaticInteractionEnergy:
             StaticInteractionEnergy,
         )
 
-        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), platform="CPU")
+        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), platform='CPU')
         positions, topology = sie.fix_pdb()
 
         # The structure is already complete -> 58 atoms preserved
@@ -363,9 +357,7 @@ class TestStaticInteractionEnergy:
             StaticInteractionEnergy,
         )
 
-        sie = StaticInteractionEnergy(
-            pdb=str(two_chain_pdb), chain="A", platform="CPU"
-        )
+        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), chain='A', platform='CPU')
         sie.compute()
 
         assert np.isfinite(sie.lj)
@@ -378,7 +370,7 @@ class TestStaticInteractionEnergy:
 class TestInteractionEnergyFrame:
     """Test suite for InteractionEnergyFrame class"""
 
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
+    @patch('molecular_simulations.analysis.interaction_energy.Platform')
     def test_interaction_energy_frame_init(self, mock_platform):
         """Test InteractionEnergyFrame initialization"""
         from molecular_simulations.analysis.interaction_energy import (
@@ -393,19 +385,19 @@ class TestInteractionEnergyFrame:
         ief = InteractionEnergyFrame(
             system=mock_system,
             top=mock_topology,
-            chain="C",
-            platform="CPU",
+            chain='C',
+            platform='CPU',
             first_residue=5,
             last_residue=15,
         )
 
         assert ief.system == mock_system
         assert ief.top == mock_topology
-        assert ief.chain == "C"
+        assert ief.chain == 'C'
         assert ief.first == 5
         assert ief.last == 15
 
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
+    @patch('molecular_simulations.analysis.interaction_energy.Platform')
     def test_interaction_energy_frame_get_system(self, mock_platform):
         """Test InteractionEnergyFrame get_system method"""
         from molecular_simulations.analysis.interaction_energy import (
@@ -423,7 +415,7 @@ class TestInteractionEnergyFrame:
         result = ief.get_system()
 
         assert result == mock_system
-        assert hasattr(ief, "selection")
+        assert hasattr(ief, 'selection')
 
 
 class TestDynamicInteractionEnergy:
@@ -436,11 +428,11 @@ class TestDynamicInteractionEnergy:
         )
 
         die = DynamicInteractionEnergy(
-            top=str(two_chain_trajectory["top"]),
-            traj=str(two_chain_trajectory["traj"]),
+            top=str(two_chain_trajectory['top']),
+            traj=str(two_chain_trajectory['traj']),
             stride=2,
-            chain="A",
-            platform="CPU",
+            chain='A',
+            platform='CPU',
             first_residue=1,
             last_residue=10,
             progress_bar=True,
@@ -458,10 +450,10 @@ class TestDynamicInteractionEnergy:
         )
 
         die = DynamicInteractionEnergy(
-            top=str(two_chain_trajectory["top"]),
-            traj=str(two_chain_trajectory["traj"]),
-            chain="A",
-            platform="CPU",
+            top=str(two_chain_trajectory['top']),
+            traj=str(two_chain_trajectory['traj']),
+            chain='A',
+            platform='CPU',
         )
 
         assert die.system.getNumParticles() == 58
@@ -472,14 +464,14 @@ class TestDynamicInteractionEnergy:
             DynamicInteractionEnergy,
         )
 
-        bad_top = tmp_path / "system.xyz"
-        bad_top.write_text("dummy")
-        traj_path = tmp_path / "traj.dcd"
-        traj_path.write_text("dummy")
+        bad_top = tmp_path / 'system.xyz'
+        bad_top.write_text('dummy')
+        traj_path = tmp_path / 'traj.dcd'
+        traj_path.write_text('dummy')
 
         # build_system runs first in __init__, so it raises before any load
         with pytest.raises(NotImplementedError):
-            DynamicInteractionEnergy(top=bad_top, traj=traj_path, platform="CPU")
+            DynamicInteractionEnergy(top=bad_top, traj=traj_path, platform='CPU')
 
     def test_compute_energies_breaks_salt_bridge(self, two_chain_trajectory):
         """End-to-end: per-frame energies weaken as chain B drifts away."""
@@ -488,10 +480,10 @@ class TestDynamicInteractionEnergy:
         )
 
         die = DynamicInteractionEnergy(
-            top=str(two_chain_trajectory["top"]),
-            traj=str(two_chain_trajectory["traj"]),
-            chain="A",
-            platform="CPU",
+            top=str(two_chain_trajectory['top']),
+            traj=str(two_chain_trajectory['traj']),
+            chain='A',
+            platform='CPU',
             progress_bar=False,
         )
         die.compute_energies()
@@ -521,10 +513,10 @@ class TestDynamicInteractionEnergyAdditional:
         """Test setup_pbar creates progress bar."""
         with (
             patch(
-                "molecular_simulations.analysis.interaction_energy.Platform"
+                'molecular_simulations.analysis.interaction_energy.Platform'
             ) as mock_platform,
             patch(
-                "molecular_simulations.analysis.interaction_energy.tqdm"
+                'molecular_simulations.analysis.interaction_energy.tqdm'
             ) as mock_tqdm,
         ):
             mock_platform.getPlatformByName.return_value = MagicMock()
@@ -543,7 +535,7 @@ class TestDynamicInteractionEnergyAdditional:
     def test_compute_energies_no_progress_bar(self):
         """Test compute_energies without progress bar."""
         with patch(
-            "molecular_simulations.analysis.interaction_energy.Platform"
+            'molecular_simulations.analysis.interaction_energy.Platform'
         ) as mock_platform:
             mock_platform.getPlatformByName.return_value = MagicMock()
 
@@ -574,10 +566,10 @@ class TestDynamicInteractionEnergyAdditional:
         """Test compute_energies with progress bar enabled."""
         with (
             patch(
-                "molecular_simulations.analysis.interaction_energy.Platform"
+                'molecular_simulations.analysis.interaction_energy.Platform'
             ) as mock_platform,
             patch(
-                "molecular_simulations.analysis.interaction_energy.tqdm"
+                'molecular_simulations.analysis.interaction_energy.tqdm'
             ) as mock_tqdm,
         ):
             mock_platform.getPlatformByName.return_value = MagicMock()
@@ -613,7 +605,7 @@ class TestDynamicInteractionEnergyAdditional:
         die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
 
         result = die.load_traj(
-            two_chain_trajectory["top"], two_chain_trajectory["traj"]
+            two_chain_trajectory['top'], two_chain_trajectory['traj']
         )
 
         # 5 frames, 58 atoms, xyz
@@ -643,7 +635,7 @@ class TestDynamicInteractionEnergyBuildSystem:
         )
 
         die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
-        result = die.build_system(real_amber_system_files["prmtop"])
+        result = die.build_system(real_amber_system_files['prmtop'])
 
         assert result.getNumParticles() == 22
 
@@ -656,7 +648,7 @@ class TestDynamicInteractionEnergyBuildSystem:
         die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
 
         with pytest.raises(NotImplementedError):
-            die.build_system(Path("test.gro"))
+            die.build_system(Path('test.gro'))
 
 
 class TestDynamicInteractionEnergySetupPbar:
@@ -666,10 +658,10 @@ class TestDynamicInteractionEnergySetupPbar:
         """Test setup_pbar creates a tqdm progress bar."""
         with (
             patch(
-                "molecular_simulations.analysis.interaction_energy.Platform"
+                'molecular_simulations.analysis.interaction_energy.Platform'
             ) as mock_platform,
             patch(
-                "molecular_simulations.analysis.interaction_energy.tqdm"
+                'molecular_simulations.analysis.interaction_energy.tqdm'
             ) as mock_tqdm,
         ):
             mock_platform.getPlatformByName.return_value = MagicMock()
@@ -692,7 +684,7 @@ class TestInteractionEnergyFrameGetSystem:
     def test_get_system_returns_existing_system(self):
         """Test get_system returns the pre-built system."""
         with patch(
-            "molecular_simulations.analysis.interaction_energy.Platform"
+            'molecular_simulations.analysis.interaction_energy.Platform'
         ) as mock_platform:
             mock_platform.getPlatformByName.return_value = MagicMock()
 
@@ -705,7 +697,7 @@ class TestInteractionEnergyFrameGetSystem:
             mock_top.atoms.return_value = []
 
             ie = InteractionEnergyFrame(
-                system=mock_system, top=mock_top, chain="A", platform="CPU"
+                system=mock_system, top=mock_top, chain='A', platform='CPU'
             )
 
             result = ie.get_system()
@@ -718,7 +710,7 @@ class TestStaticInteractionEnergyInteractions:
     def test_interactions_property(self):
         """Test interactions returns stacked LJ and Coulomb."""
         with patch(
-            "molecular_simulations.analysis.interaction_energy.Platform"
+            'molecular_simulations.analysis.interaction_energy.Platform'
         ) as mock_platform:
             mock_platform.getPlatformByName.return_value = MagicMock()
 
@@ -752,9 +744,9 @@ class _MockQuantity:
 class TestStaticInteractionEnergyGetSystem:
     """Tests for StaticInteractionEnergy.get_system (lines 128-148)."""
 
-    @patch("molecular_simulations.analysis.interaction_energy.ForceField")
-    @patch("molecular_simulations.analysis.interaction_energy.PDBFile")
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
+    @patch('molecular_simulations.analysis.interaction_energy.ForceField')
+    @patch('molecular_simulations.analysis.interaction_energy.PDBFile')
+    @patch('molecular_simulations.analysis.interaction_energy.Platform')
     def test_get_system_success(self, mock_platform, mock_pdb_cls, mock_ff_cls):
         """Test get_system builds system on first try."""
         from molecular_simulations.analysis.interaction_energy import (
@@ -774,24 +766,24 @@ class TestStaticInteractionEnergyGetSystem:
         mock_ff_cls.return_value = mock_ff
 
         sie = StaticInteractionEnergy.__new__(StaticInteractionEnergy)
-        sie.pdb = "test.pdb"
-        sie.chain = "A"
+        sie.pdb = 'test.pdb'
+        sie.chain = 'A'
         sie.first = None
         sie.last = None
         sie.platform = MagicMock()
 
         # Mock get_selection so it doesn't interfere
-        with patch.object(sie, "get_selection"):
+        with patch.object(sie, 'get_selection'):
             result = sie.get_system()
 
         assert result is mock_system
         assert sie.positions == [[0, 0, 0]]
-        mock_ff_cls.assert_called_once_with("amber14-all.xml", "implicit/gbn2.xml")
+        mock_ff_cls.assert_called_once_with('amber14-all.xml', 'implicit/gbn2.xml')
         mock_ff.createSystem.assert_called_once()
 
-    @patch("molecular_simulations.analysis.interaction_energy.ForceField")
-    @patch("molecular_simulations.analysis.interaction_energy.PDBFile")
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
+    @patch('molecular_simulations.analysis.interaction_energy.ForceField')
+    @patch('molecular_simulations.analysis.interaction_energy.PDBFile')
+    @patch('molecular_simulations.analysis.interaction_energy.Platform')
     def test_get_system_value_error_fallback(
         self, mock_platform, mock_pdb_cls, mock_ff_cls
     ):
@@ -810,12 +802,12 @@ class TestStaticInteractionEnergyGetSystem:
         mock_ff = MagicMock()
         mock_system = MagicMock()
         # First call raises ValueError, second succeeds
-        mock_ff.createSystem.side_effect = [ValueError("bad topology"), mock_system]
+        mock_ff.createSystem.side_effect = [ValueError('bad topology'), mock_system]
         mock_ff_cls.return_value = mock_ff
 
         sie = StaticInteractionEnergy.__new__(StaticInteractionEnergy)
-        sie.pdb = "test.pdb"
-        sie.chain = "A"
+        sie.pdb = 'test.pdb'
+        sie.chain = 'A'
         sie.first = None
         sie.last = None
         sie.platform = MagicMock()
@@ -825,9 +817,9 @@ class TestStaticInteractionEnergyGetSystem:
 
         with (
             patch.object(
-                sie, "fix_pdb", return_value=(fixed_positions, fixed_topology)
+                sie, 'fix_pdb', return_value=(fixed_positions, fixed_topology)
             ),
-            patch.object(sie, "get_selection"),
+            patch.object(sie, 'get_selection'),
         ):
             result = sie.get_system()
 
@@ -839,9 +831,9 @@ class TestStaticInteractionEnergyGetSystem:
 class TestStaticInteractionEnergyCompute:
     """Tests for StaticInteractionEnergy.compute (lines 160-215)."""
 
-    @patch("molecular_simulations.analysis.interaction_energy.Context")
-    @patch("molecular_simulations.analysis.interaction_energy.VerletIntegrator")
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
+    @patch('molecular_simulations.analysis.interaction_energy.Context')
+    @patch('molecular_simulations.analysis.interaction_energy.VerletIntegrator')
+    @patch('molecular_simulations.analysis.interaction_energy.Platform')
     def test_compute_full(self, mock_platform, mock_integrator_cls, mock_context_cls):
         """Test compute runs full interaction energy calculation."""
         from openmm import NonbondedForce
@@ -884,15 +876,15 @@ class TestStaticInteractionEnergyCompute:
         )
 
         sie = StaticInteractionEnergy.__new__(StaticInteractionEnergy)
-        sie.pdb = "test.pdb"
-        sie.chain = "A"
+        sie.pdb = 'test.pdb'
+        sie.chain = 'A'
         sie.platform = MagicMock()
         sie.first = None
         sie.last = None
         sie.selection = [0, 1]
         sie.positions = [[0, 0, 0], [1, 1, 1], [2, 2, 2]]
 
-        with patch.object(sie, "get_system", return_value=mock_system):
+        with patch.object(sie, 'get_system', return_value=mock_system):
             sie.compute()
 
         # Check that energies were computed
@@ -904,9 +896,9 @@ class TestStaticInteractionEnergyCompute:
         # Other force should be set to group 2
         mock_other_force.setForceGroup.assert_called_with(2)
 
-    @patch("molecular_simulations.analysis.interaction_energy.Context")
-    @patch("molecular_simulations.analysis.interaction_energy.VerletIntegrator")
-    @patch("molecular_simulations.analysis.interaction_energy.Platform")
+    @patch('molecular_simulations.analysis.interaction_energy.Context')
+    @patch('molecular_simulations.analysis.interaction_energy.VerletIntegrator')
+    @patch('molecular_simulations.analysis.interaction_energy.Platform')
     def test_compute_with_explicit_positions(
         self, mock_platform, mock_integrator_cls, mock_context_cls
     ):
@@ -942,8 +934,8 @@ class TestStaticInteractionEnergyCompute:
         )
 
         sie = StaticInteractionEnergy.__new__(StaticInteractionEnergy)
-        sie.pdb = "test.pdb"
-        sie.chain = "A"
+        sie.pdb = 'test.pdb'
+        sie.chain = 'A'
         sie.platform = MagicMock()
         sie.first = None
         sie.last = None
@@ -952,7 +944,7 @@ class TestStaticInteractionEnergyCompute:
 
         explicit_positions = [[2, 2, 2], [3, 3, 3]]
 
-        with patch.object(sie, "get_system", return_value=mock_system):
+        with patch.object(sie, 'get_system', return_value=mock_system):
             sie.compute(positions=explicit_positions)
 
         # Should use explicit positions
@@ -962,5 +954,5 @@ class TestStaticInteractionEnergyCompute:
         assert sie.lj == -50.0
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

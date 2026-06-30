@@ -19,11 +19,16 @@ from openmm.app import (
     PDBFile,
     Topology,
 )
-from openmm.unit import kilocalories_per_mole, nanometers, picosecond  # type: ignore[attr-defined]
+from openmm.unit import (  # type: ignore[attr-defined]
+    kilocalories_per_mole,
+    nanometers,
+    picosecond,
+)
 from pdbfixer import PDBFixer
 from tqdm import tqdm
 
 PathLike = Path | str
+
 
 class InteractionEnergy(ABC):
     """Abstract base class for interaction energy calculations.
@@ -89,9 +94,9 @@ class StaticInteractionEnergy(InteractionEnergy):
             at this resid. Defaults to None.
 
     Example:
-        >>> ie = StaticInteractionEnergy("complex.pdb", chain="B")
+        >>> ie = StaticInteractionEnergy('complex.pdb', chain='B')
         >>> ie.compute()
-        >>> print(f"LJ: {ie.lj}, Coulomb: {ie.coulomb}")
+        >>> print(f'LJ: {ie.lj}, Coulomb: {ie.coulomb}')
     """
 
     def __init__(
@@ -320,7 +325,7 @@ class InteractionEnergyFrame(StaticInteractionEnergy):
 
     Example:
         >>> system = build_system(topology)
-        >>> ie = InteractionEnergyFrame(system, topology, chain="A")
+        >>> ie = InteractionEnergyFrame(system, topology, chain='A')
         >>> ie.compute(positions)
     """
 
@@ -385,7 +390,7 @@ class DynamicInteractionEnergy:
             Defaults to False.
 
     Example:
-        >>> die = DynamicInteractionEnergy("system.prmtop", "traj.dcd")
+        >>> die = DynamicInteractionEnergy('system.prmtop', 'traj.dcd')
         >>> die.compute_energies()
         >>> print(die.energies.shape)  # (n_frames, 2)
     """
@@ -421,7 +426,12 @@ class DynamicInteractionEnergy:
         self.progress = progress_bar
 
         self.IE = InteractionEnergyFrame(
-            self.system, self.top, chain, platform, first_residue, last_residue  # type: ignore[arg-type]
+            self.system,
+            self.top,
+            chain,
+            platform,
+            first_residue,
+            last_residue,  # type: ignore[arg-type]
         )
 
     def compute_energies(self) -> None:

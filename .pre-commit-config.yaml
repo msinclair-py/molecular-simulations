@@ -1,0 +1,11 @@
+# Pre-commit hooks for molecular-simulations.
+# Currently ruff-only (lint + format); mypy/codespell may be added later.
+# The ruff version is pinned to match the `ruff` in the `dev` extra so local
+# and CI results agree.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.1
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format

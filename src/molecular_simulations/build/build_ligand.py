@@ -13,23 +13,19 @@ Classes:
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 from pathlib import Path
-from typing import Any
 
-from MDAnalysis.lib.util import convert_aa_code
 from openbabel import pybel  # ty: ignore[unresolved-import]
-from openmm.app import PDBFile
-from pdbfixer import PDBFixer
 from pdbfixer.pdbfixer import Sequence
 from rdkit import Chem
 
-from .build_amber import ExplicitSolvent, ImplicitSolvent
+from .build_amber import ExplicitSolvent
 
 PathLike = str | Path
 Sequences = list[Sequence]
+
 
 class LigandError(Exception):
     """Custom exception for ligand parameterization errors.
@@ -76,11 +72,7 @@ class LigandBuilder:
     """
 
     def __init__(
-        self, 
-        path: PathLike, 
-        lig: PathLike, 
-        lig_number: int = 0, 
-        file_prefix: str = ''
+        self, path: PathLike, lig: PathLike, lig_number: int = 0, file_prefix: str = ''
     ):
         """Initialize the LigandBuilder."""
         self.path = Path(path)
@@ -140,8 +132,7 @@ class LigandBuilder:
         except FileNotFoundError as exc:
             raise LigandError(f'Antechamber failed! {self.lig}') from exc
 
-    def process_input(self,
-                      extension: str) -> None:
+    def process_input(self, extension: str) -> None:
         """Process input ligand of filetypes mol2, pdb or sdf.
 
         Adds hydrogens using RDKit and writes the result to a new SDF file.
@@ -321,7 +312,9 @@ class ComplexBuilder(ExplicitSolvent):
 
         file_prefix = '' if prefix is None else str(prefix)
 
-        lig_builder = LigandBuilder(self.build_dir, str(lig_path.name), file_prefix=file_prefix)
+        lig_builder = LigandBuilder(
+            self.build_dir, str(lig_path.name), file_prefix=file_prefix
+        )
         lig_builder.parameterize_ligand()
 
         return lig_builder.out_lig

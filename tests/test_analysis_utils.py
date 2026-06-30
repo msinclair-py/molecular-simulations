@@ -17,7 +17,7 @@ def pdb_copy(tmp_path: Path, alanine_dipeptide_pdb: Path) -> Path:
     EmbedData writes back to its input path and backs the original up, so tests
     must operate on a copy rather than the committed fixture file.
     """
-    dest = tmp_path / "structure.pdb"
+    dest = tmp_path / 'structure.pdb'
     shutil.copyfile(alanine_dipeptide_pdb, dest)
     return dest
 
@@ -29,7 +29,7 @@ class TestEmbedData:
         """Test EmbedData initialization loads a real Universe."""
         from molecular_simulations.analysis.utils import EmbedData
 
-        embedding_dict = {"protein": np.array([1.0, 2.0, 3.0])}
+        embedding_dict = {'protein': np.array([1.0, 2.0, 3.0])}
         embedder = EmbedData(pdb_copy, embedding_dict)
 
         assert embedder.pdb == pdb_copy
@@ -42,8 +42,8 @@ class TestEmbedData:
         """Test EmbedData with custom output path"""
         from molecular_simulations.analysis.utils import EmbedData
 
-        out_path = tmp_path / "output.pdb"
-        embedding_dict = {"protein": np.array([1.0, 2.0, 3.0])}
+        out_path = tmp_path / 'output.pdb'
+        embedding_dict = {'protein': np.array([1.0, 2.0, 3.0])}
         embedder = EmbedData(pdb_copy, embedding_dict, out=out_path)
 
         assert embedder.out == out_path
@@ -52,12 +52,12 @@ class TestEmbedData:
         """Test embed_selection writes data into each residue's beta column."""
         from molecular_simulations.analysis.utils import EmbedData
 
-        embedder = EmbedData(pdb_copy, {"protein": np.array([1.0, 2.0, 3.0])})
+        embedder = EmbedData(pdb_copy, {'protein': np.array([1.0, 2.0, 3.0])})
 
-        embedder.embed_selection("protein", np.array([1.0, 2.0, 3.0]))
+        embedder.embed_selection('protein', np.array([1.0, 2.0, 3.0]))
 
         # Each residue's atoms get their beta factor set to the matching datum
-        residues = embedder.u.select_atoms("protein").residues
+        residues = embedder.u.select_atoms('protein').residues
         assert np.allclose(residues[0].atoms.tempfactors, 1.0)
         assert np.allclose(residues[1].atoms.tempfactors, 2.0)
         assert np.allclose(residues[2].atoms.tempfactors, 3.0)
@@ -66,11 +66,11 @@ class TestEmbedData:
         """Test write_new_pdb backs up the original and writes a valid PDB."""
         from molecular_simulations.analysis.utils import EmbedData
 
-        embedder = EmbedData(pdb_copy, {"protein": np.array([1.0, 2.0, 3.0])})
+        embedder = EmbedData(pdb_copy, {'protein': np.array([1.0, 2.0, 3.0])})
         embedder.write_new_pdb()
 
         # Writing back over the input creates a one-time backup
-        backup = pdb_copy.with_suffix(".orig.pdb")
+        backup = pdb_copy.with_suffix('.orig.pdb')
         assert backup.exists()
         # The output is a real, re-parseable PDB with the same atom count
         rewritten = mda.Universe(str(pdb_copy))
@@ -80,9 +80,9 @@ class TestEmbedData:
         """Test the full embed workflow writes embedded beta factors."""
         from molecular_simulations.analysis.utils import EmbedData
 
-        out_path = tmp_path / "embedded.pdb"
+        out_path = tmp_path / 'embedded.pdb'
         embedder = EmbedData(
-            pdb_copy, {"protein": np.array([1.0, 2.0, 3.0])}, out=out_path
+            pdb_copy, {'protein': np.array([1.0, 2.0, 3.0])}, out=out_path
         )
 
         embedder.embed()
@@ -108,11 +108,11 @@ class TestEmbedEnergyData:
             ]
         )
 
-        embedder = EmbedEnergyData(pdb_copy, {"protein": energy_data})
+        embedder = EmbedEnergyData(pdb_copy, {'protein': energy_data})
 
         # Preprocessing reduces to one value per residue
-        assert "protein" in embedder.embeddings
-        assert embedder.embeddings["protein"].shape == (3,)
+        assert 'protein' in embedder.embeddings
+        assert embedder.embeddings['protein'].shape == (3,)
 
     def test_sanitize_data_3d(self):
         """Test sanitize_data with 3D input (n_frames, n_residues, n_terms)"""
@@ -169,12 +169,12 @@ class TestEmbedEnergyData:
             ]
         )
 
-        embedder = EmbedEnergyData(pdb_copy, {"sel1": energy_data})
+        embedder = EmbedEnergyData(pdb_copy, {'sel1': energy_data})
 
         # All rescaled values should be <= 1
         for data in embedder.embeddings.values():
             assert np.all(data <= 1.0)
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

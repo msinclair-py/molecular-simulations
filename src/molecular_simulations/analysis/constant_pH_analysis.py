@@ -102,7 +102,7 @@ class UWHAMSolver:
         for k in range(self.nstates):
             n_k = self.nsamples[k]
             u_k = np.zeros((self.nstates, n_k))
-            for l in range(self.nstates): # noqa: E741
+            for l in range(self.nstates):  # noqa: E741
                 u_k[l, :] = self.log10 * self.pH_values[l] * self.nprotons_total[k]
             self.u_kl.append(u_k)
 
@@ -197,7 +197,7 @@ class UWHAMSolver:
             warnings.warn(
                 f'UWHAM did not converge after {self.maxiter} iterations '
                 f'(final delta = {delta:.2e})',
-                stacklevel=2
+                stacklevel=2,
             )
 
         self.f = f
@@ -324,7 +324,7 @@ class TitrationCurve:
             self.df, resids = self.parse_log(log_file)
 
         # Store residue IDs (converted to strings to match column names)
-        assert resids is not None, "No residue IDs found in any log file"
+        assert resids is not None, 'No residue IDs found in any log file'
         self.resid_cols = [str(r) for r in resids]
 
         self.make_plots = make_plots
@@ -393,8 +393,10 @@ class TitrationCurve:
                 'current_pH': current_pH,
             }
             row.update(
-                {str(resid): state
-                 for resid, state in zip(resids, states_list, strict=True)}
+                {
+                    str(resid): state
+                    for resid, state in zip(resids, states_list, strict=True)
+                }
             )
             rows.append(row)
 
@@ -745,7 +747,9 @@ class TitrationCurve:
 
         pH_min_val = self.df['current_pH'].min()
         pH_max_val = self.df['current_pH'].max()
-        assert isinstance(pH_min_val, (int, float)) and isinstance(pH_max_val, (int, float)), "No pH data found"
+        assert isinstance(pH_min_val, (int, float)) and isinstance(
+            pH_max_val, (int, float)
+        ), 'No pH data found'
         pH_grid = np.linspace(float(pH_min_val), float(pH_max_val), 200)
 
         curves = []
@@ -816,13 +820,13 @@ class TitrationCurve:
             print(f'\nDiagnostics for residue {resid} ({resname}):')
             print('  State distribution:')
             for row in state_counts.iter_rows(named=True):
-                print(f"    {row['state']}: {row['count']}")
+                print(f'    {row["state"]}: {row["count"]}')
             print('\n  Titration curve (simple average):')
-            print(f"  {'pH':>6s}  {'frac':>6s}  {'n':>5s}")
+            print(f'  {"pH":>6s}  {"frac":>6s}  {"n":>5s}')
             for pH, f, n in zip(pH_vals, frac_prot, n_samples, strict=True):
                 print(f'  {pH:6.2f}  {f:6.3f}  {n:5d}')
             print(
-                f"\n  Fraction range: {result['frac_min']:.3f} - {result['frac_max']:.3f}"
+                f'\n  Fraction range: {result["frac_min"]:.3f} - {result["frac_max"]:.3f}'
             )
 
             if result['frac_min'] > 0.5:
@@ -928,12 +932,12 @@ class TitrationAnalyzer:
     generates comparisons, and creates publication-quality plots.
 
     Example:
-        >>> analyzer = TitrationAnalyzer(["cpH.log"])
+        >>> analyzer = TitrationAnalyzer(['cpH.log'])
         >>> analyzer.run()
         >>> analyzer.summary()
-        >>> analyzer.plot_residue("145")
-        >>> analyzer.plot_all(output_dir="plots/")
-        >>> analyzer.save_results("results/")
+        >>> analyzer.plot_residue('145')
+        >>> analyzer.plot_all(output_dir='plots/')
+        >>> analyzer.save_results('results/')
     """
 
     def __init__(
@@ -949,7 +953,9 @@ class TitrationAnalyzer:
             output_dir: Directory for output files. If None, uses current
                 directory.
         """
-        log_file_list: list[Path | str] = [log_files] if isinstance(log_files, (str, Path)) else list(log_files)
+        log_file_list: list[Path | str] = (
+            [log_files] if isinstance(log_files, (str, Path)) else list(log_files)
+        )
         self.log_files = [Path(f) for f in log_file_list]
 
         self.output_dir = Path(output_dir) if output_dir else Path('.')
@@ -973,7 +979,7 @@ class TitrationAnalyzer:
 
     def run(
         self,
-        methods: list[str] = ['curvefit', 'weighted'], # noqa: B006
+        methods: list[str] = ['curvefit', 'weighted'],  # noqa: B006
         verbose: bool = True,
         n_bootstrap: int = 1000,
     ) -> TitrationAnalyzer:
@@ -1198,13 +1204,13 @@ class TitrationAnalyzer:
             fig, ax = plt.subplots(figsize=figsize)
         else:
             _fig = ax.get_figure()
-            assert _fig is not None, "Axes has no associated Figure"
+            assert _fig is not None, 'Axes has no associated Figure'
             fig = _fig
 
         resname = self.resid_to_resname.get(resid, 'UNK')
 
         # Raw data
-        assert self.titration_data is not None, "No titration data available"
+        assert self.titration_data is not None, 'No titration data available'
         resid_data = self.titration_data.filter(pl.col('resid') == resid)
         pH_data = resid_data['current_pH'].to_numpy()
         frac_data = resid_data['fraction_protonated'].to_numpy()
@@ -1424,7 +1430,7 @@ class TitrationAnalyzer:
         self,
         output_dir: str | Path | None = None,
         prefix: str = '',
-        formats: list[str] = ['csv'], # noqa: B006
+        formats: list[str] = ['csv'],  # noqa: B006
     ) -> None:
         """
         Save all results to files.
@@ -1598,9 +1604,9 @@ class TitrationAnalyzer:
         result = pl.DataFrame(recommendations)
 
         if verbose:
-            print(f"\n{'=' * 60}")
+            print(f'\n{"=" * 60}')
             print(f'Protonation Recommendations at pH {target_pH}')
-            print(f"{'=' * 60}")
+            print(f'{"=" * 60}')
 
             # Summary counts
             n_prot = result.filter(pl.col('recommendation') == 'protonated').height
@@ -1637,9 +1643,9 @@ class TitrationAnalyzer:
                     named=True
                 ):
                     print(
-                        f"    {row['resname']} {row['resid']}: "
-                        f"P(prot)={row['prob_protonated']:.1%}, "
-                        f"pKa={row['pKa']:.1f} → {row['state_name']}"
+                        f'    {row["resname"]} {row["resid"]}: '
+                        f'P(prot)={row["prob_protonated"]:.1%}, '
+                        f'pKa={row["pKa"]:.1f} → {row["state_name"]}'
                     )
 
             # Show residues with pKa near target pH
@@ -1652,9 +1658,9 @@ class TitrationAnalyzer:
                 print(f'\n📍 Residues with pKa near pH {target_pH} (±1.5 units):')
                 for row in near_pKa.sort('pKa').iter_rows(named=True):
                     print(
-                        f"    {row['resname']} {row['resid']}: "
-                        f"pKa={row['pKa']:.2f}, "
-                        f"P(prot)={row['prob_protonated']:.1%} → {row['state_name']}"
+                        f'    {row["resname"]} {row["resid"]}: '
+                        f'pKa={row["pKa"]:.2f}, '
+                        f'P(prot)={row["prob_protonated"]:.1%} → {row["state_name"]}'
                     )
 
         return result
@@ -1683,7 +1689,7 @@ class TitrationAnalyzer:
 
         parts = []
         for row in recs.iter_rows(named=True):
-            parts.append(f"{row['resid']}:{row['state_name']}")
+            parts.append(f'{row["resid"]}:{row["state_name"]}')
 
         return ','.join(parts)
 
@@ -1730,9 +1736,9 @@ class TitrationAnalyzer:
                 f.write('# resid  resname  state  prob_prot  confidence\n')
                 for row in recs.iter_rows(named=True):
                     f.write(
-                        f"{row['resid']:>6s}  {row['resname']:>7s}  "
-                        f"{row['state_name']:>5s}  {row['prob_protonated']:>9.3f}  "
-                        f"{row['confidence']}\n"
+                        f'{row["resid"]:>6s}  {row["resname"]:>7s}  '
+                        f'{row["state_name"]:>5s}  {row["prob_protonated"]:>9.3f}  '
+                        f'{row["confidence"]}\n'
                     )
 
         print(f'Saved protonation recommendations to {output_file}')
@@ -1846,7 +1852,7 @@ class TitrationAnalyzer:
 def analyze_cph(
     log_files: Path | list[Path] | str | list[str],
     output_dir: str | Path | None = None,
-    methods: list[str] = ['curvefit', 'weighted'], # noqa: B006
+    methods: list[str] = ['curvefit', 'weighted'],  # noqa: B006
     plot: bool = True,
     verbose: bool = True,
 ) -> TitrationAnalyzer:
@@ -1865,9 +1871,9 @@ def analyze_cph(
         TitrationAnalyzer with results.
 
     Example:
-        >>> results = analyze_cph("cpH.log", output_dir="analysis/")
+        >>> results = analyze_cph('cpH.log', output_dir='analysis/')
         >>> results.summary()
-        >>> results.plot_residue("145")
+        >>> results.plot_residue('145')
     """
     analyzer = TitrationAnalyzer(log_files, output_dir=output_dir)
     analyzer.run(methods=methods, verbose=verbose)
@@ -1949,6 +1955,7 @@ if __name__ == '__main__':
 
     # Visualize
     import contextlib
+
     with contextlib.suppress(ImportError):
         analyzer.plot_protonation_summary(
             target_pH=3.0, save='cph_analysis/protonation_pH3.0.png'

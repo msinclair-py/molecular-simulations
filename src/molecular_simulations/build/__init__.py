@@ -8,6 +8,7 @@ with contextlib.suppress(ImportError):
 
 PathLike = Path | str
 
+
 def convert_cif_with_biopython(cif: PathLike) -> PathLike:
     """Convert a CIF file to a PDB file using biopython.
 

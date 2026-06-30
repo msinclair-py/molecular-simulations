@@ -1,18 +1,20 @@
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-import json
+from pathlib import Path
+from typing import TypeVar
+
+import yaml
 from parsl.addresses import address_by_hostname
 from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
 from parsl.launchers import MpiExecLauncher
 from parsl.providers import LocalProvider, PBSProProvider
 from pydantic import BaseModel, Field
-from pathlib import Path
-from typing import TypeVar
-import yaml
 
 PathLike = str | Path
 _T = TypeVar('_T')
+
 
 def get_node_count():
     """Infer the node count for a job from the scheduler environment.
@@ -30,10 +32,11 @@ def get_node_count():
         return int(num_nodes)
 
     if nodefile := os.environ.get('PBS_NODEFILE'):
-        with open(nodefile, 'r') as f:
+        with open(nodefile) as f:
             return len(f.readlines())
 
     return 1
+
 
 class BaseSettings(BaseModel):
     """Base pydantic model with YAML serialization helpers."""
@@ -75,6 +78,7 @@ class BaseComputeSettings(ABC, BaseSettings):
         Returns:
             A Parsl Config for this compute platform.
         """
+
 
 class BaseLocalSettings(BaseComputeSettings):
     """Shared settings for LocalProvider-based compute platforms."""

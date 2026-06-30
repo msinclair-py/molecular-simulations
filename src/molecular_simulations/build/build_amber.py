@@ -58,7 +58,7 @@ class ImplicitSolvent:
         ValueError: If AMBERHOME is not set and amberhome is None.
 
     Example:
-        >>> builder = ImplicitSolvent(path="./build", pdb="protein.pdb", protein=True)
+        >>> builder = ImplicitSolvent(path='./build', pdb='protein.pdb', protein=True)
         >>> builder.build()
     """
 
@@ -148,7 +148,7 @@ class ImplicitSolvent:
         prot = loadpdb {self.pdb}
         set default pbradii mbondi3
         savepdb prot {self.out}
-        saveamberparm prot {self.out.with_suffix(".prmtop")} {self.out.with_suffix(".inpcrd")}
+        saveamberparm prot {self.out.with_suffix('.prmtop')} {self.out.with_suffix('.inpcrd')}
         quit
         """
 
@@ -239,7 +239,7 @@ class ExplicitSolvent(ImplicitSolvent):
             or a newline if none were specified.
 
     Example:
-        >>> builder = ExplicitSolvent(path="./build", pdb="protein.pdb", padding=12.0)
+        >>> builder = ExplicitSolvent(path='./build', pdb='protein.pdb', padding=12.0)
         >>> builder.build()
     """
 
@@ -280,9 +280,11 @@ class ExplicitSolvent(ImplicitSolvent):
         self.pad = padding
         self.ffs.extend(['leaprc.water.opc'])
         self.water_box = 'OPCBOX'
-        
+
         if disulfide_residues is not None:
-            self.disulfides = '\n'.join([f'protein.{resid} = CYX' for resid in disulfide_residues])
+            self.disulfides = '\n'.join(
+                [f'protein.{resid} = CYX' for resid in disulfide_residues]
+            )
         else:
             self.disulfides = '\n'
 
@@ -313,7 +315,7 @@ class ExplicitSolvent(ImplicitSolvent):
         design use cases). For that reason, we are utilizing the more
         feature-rich prepareforleap function in cpptraj.
         """
-        self.ss_bonds_leap = self.path  / 'ss_bonds.leap'
+        self.ss_bonds_leap = self.path / 'ss_bonds.leap'
         prepared_pdb = self.path / 'protein.pdb'
         cpptraj_in = [
             f'parm {self.pdb}',
@@ -323,15 +325,15 @@ class ExplicitSolvent(ImplicitSolvent):
                 f'pdbout {prepared_pdb} noh existingdisulfides '
                 f'leapunitname PROT out {self.ss_bonds_leap}'
             ),
-            'quit'
+            'quit',
         ]
 
         cpptraj = str(self.amberhome / 'bin' / 'cpptraj')
         subprocess.run(
-            [cpptraj], 
+            [cpptraj],
             input='\n'.join(cpptraj_in),
-            text=True, 
-            cwd=str(self.path), 
+            text=True,
+            cwd=str(self.path),
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -443,4 +445,3 @@ class ExplicitSolvent(ImplicitSolvent):
             Number of each ion type (Na+ and Cl-) needed for 150mM.
         """
         return round(volume * 10e-6 * 9.03)
-

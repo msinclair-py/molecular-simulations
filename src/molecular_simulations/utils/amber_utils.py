@@ -1,5 +1,7 @@
-import MDAnalysis as mda
 import string
+
+import MDAnalysis as mda
+
 
 def assign_chainids(
     u: mda.Universe, terminus_selection: str = 'name OXT'

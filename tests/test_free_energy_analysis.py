@@ -55,13 +55,13 @@ def mock_free_energy_deps():
     with patch.dict(
         sys.modules,
         {
-            "omm_simulator": mock_omm_simulator,
-            "reporters": mock_reporters,
+            'omm_simulator': mock_omm_simulator,
+            'reporters': mock_reporters,
         },
     ):
         # Clear cached import if exists
-        if "molecular_simulations.simulate.free_energy" in sys.modules:
-            del sys.modules["molecular_simulations.simulate.free_energy"]
+        if 'molecular_simulations.simulate.free_energy' in sys.modules:
+            del sys.modules['molecular_simulations.simulate.free_energy']
         yield mock_omm_simulator, mock_reporters
 
 
@@ -209,7 +209,7 @@ def generate_overlapping_windows(
     Returns:
         Tuple of (list of RC arrays per window, array of window centers).
     """
-    rng = np.random.default_rng(seed)
+    np.random.default_rng(seed)
 
     rc0_values = np.linspace(rc_min, rc_max, n_windows)
     rc_data = []
@@ -249,7 +249,7 @@ def generate_non_overlapping_windows(
     Returns:
         Tuple of (list of RC arrays per window, array of window centers).
     """
-    rng = np.random.default_rng(seed)
+    np.random.default_rng(seed)
 
     rc0_values = np.arange(n_windows) * window_spacing
     rc_data = []
@@ -302,7 +302,7 @@ def generate_harmonic_pmf_data(
             - Array of window centers
             - Function that computes true PMF at given RC values
     """
-    rng = np.random.default_rng(seed)
+    np.random.default_rng(seed)
     beta = 1.0 / (KB * temperature)
 
     rc0_values = np.linspace(rc_min, rc_max, n_windows)
@@ -361,7 +361,7 @@ def generate_double_well_pmf_data(
     Returns:
         Tuple of (RC data, window centers, true PMF function).
     """
-    rng = np.random.default_rng(seed)
+    np.random.default_rng(seed)
     beta = 1.0 / (KB * temperature)
 
     # Position parameter for double well
@@ -525,14 +525,14 @@ class TestDetectEquilibrationAutocorr:
         t0, g, n_eff = analyzer_class._detect_equilibration_autocorr(data)
 
         # Well-equilibrated data: t0 should be small (< 10% of trajectory)
-        assert t0 < 100, f"t0={t0} too large for equilibrated data"
-        assert g >= 1.0, "Statistical inefficiency must be >= 1"
-        assert n_eff > 0, "Effective samples must be positive"
-        assert n_eff <= len(data), "n_eff cannot exceed total samples"
+        assert t0 < 100, f't0={t0} too large for equilibrated data'
+        assert g >= 1.0, 'Statistical inefficiency must be >= 1'
+        assert n_eff > 0, 'Effective samples must be positive'
+        assert n_eff <= len(data), 'n_eff cannot exceed total samples'
 
     def test_poorly_equilibrated_detects_drift(self, analyzer_class):
         """Poorly equilibrated data should detect equilibration time."""
-        data, true_t0 = generate_poorly_equilibrated_timeseries(
+        data, _true_t0 = generate_poorly_equilibrated_timeseries(
             n_samples=1000,
             equilibration_time=300,
             initial_offset=1.0,
@@ -541,13 +541,13 @@ class TestDetectEquilibrationAutocorr:
             seed=123,
         )
 
-        t0, g, n_eff = analyzer_class._detect_equilibration_autocorr(data)
+        t0, g, _n_eff = analyzer_class._detect_equilibration_autocorr(data)
 
         # Should detect equilibration - allow some tolerance
         # The algorithm may not find exact t0 but should be in ballpark
-        assert t0 >= 0, "t0 must be non-negative"
+        assert t0 >= 0, 't0 must be non-negative'
         # Key insight: n_eff should improve when discarding equilibration
-        full_n_eff = len(data) / g if g > 0 else len(data)
+        len(data) / g if g > 0 else len(data)
 
     def test_constant_data_returns_trivial_result(self, analyzer_class):
         """Constant (zero variance) data should return t0=0, g=1."""
@@ -555,10 +555,10 @@ class TestDetectEquilibrationAutocorr:
 
         t0, g, n_eff = analyzer_class._detect_equilibration_autocorr(data)
 
-        assert t0 == 0, "Constant data should have t0=0"
-        assert g == pytest.approx(1.0), "Constant data should have g=1"
+        assert t0 == 0, 'Constant data should have t0=0'
+        assert g == pytest.approx(1.0), 'Constant data should have g=1'
         assert n_eff == pytest.approx(float(len(data))), (
-            "Constant data should have n_eff = n"
+            'Constant data should have n_eff = n'
         )
 
     def test_short_timeseries(self, analyzer_class):
@@ -579,10 +579,10 @@ class TestDetectEquilibrationAutocorr:
         )
 
         # With very small max_lag, g will be underestimated
-        t0_small, g_small, _ = analyzer_class._detect_equilibration_autocorr(
+        _t0_small, g_small, _ = analyzer_class._detect_equilibration_autocorr(
             data, max_lag=5
         )
-        t0_large, g_large, _ = analyzer_class._detect_equilibration_autocorr(
+        _t0_large, g_large, _ = analyzer_class._detect_equilibration_autocorr(
             data, max_lag=200
         )
 
@@ -598,21 +598,21 @@ class TestDetectEquilibrationAutocorr:
             n_samples=2000, correlation_time=100, seed=42
         )
 
-        t0, g, n_eff = analyzer_class._detect_equilibration_autocorr(data)
+        _t0, g, n_eff = analyzer_class._detect_equilibration_autocorr(data)
 
         # High correlation should give g >> 1
-        assert g > 5.0, f"Expected g > 5 for highly correlated data, got {g}"
-        assert n_eff < len(data) / 2, "n_eff should be much less than n"
+        assert g > 5.0, f'Expected g > 5 for highly correlated data, got {g}'
+        assert n_eff < len(data) / 2, 'n_eff should be much less than n'
 
     def test_uncorrelated_data_has_g_near_one(self, analyzer_class):
         """Uncorrelated (white noise) data should have g close to 1."""
         rng = np.random.default_rng(42)
         data = rng.normal(0, 0.1, 1000)  # IID samples
 
-        t0, g, n_eff = analyzer_class._detect_equilibration_autocorr(data)
+        _t0, g, _n_eff = analyzer_class._detect_equilibration_autocorr(data)
 
         # g should be close to 1 for uncorrelated data
-        assert 0.8 < g < 3.0, f"Expected g near 1 for IID data, got {g}"
+        assert 0.8 < g < 3.0, f'Expected g near 1 for IID data, got {g}'
 
 
 # =============================================================================
@@ -628,7 +628,7 @@ class TestCheckConvergence:
         # Create analyzer with dummy paths (we only use static method behavior)
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=np.linspace(-0.1, 0.1, 5),
         )
@@ -643,14 +643,14 @@ class TestCheckConvergence:
 
         assert len(results) == 5
         for r in results:
-            assert r.is_converged, f"Window {r.window_idx} should be converged"
+            assert r.is_converged, f'Window {r.window_idx} should be converged'
             assert r.sem < 0.01
 
     def test_unconverged_windows_identified(self, analyzer_class, tmp_path):
         """Windows with high variance should be marked as not converged."""
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=np.linspace(-0.1, 0.1, 3),
         )
@@ -666,14 +666,14 @@ class TestCheckConvergence:
         )
 
         for r in results:
-            assert not r.is_converged, f"Window {r.window_idx} should NOT be converged"
+            assert not r.is_converged, f'Window {r.window_idx} should NOT be converged'
             assert r.sem > 0.001
 
     def test_block_means_computed_correctly(self, analyzer_class, tmp_path):
         """Block means should equal manual calculation."""
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=np.array([0.0]),
         )
@@ -697,7 +697,7 @@ class TestCheckConvergence:
         """SEM should match manual calculation."""
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=np.array([0.0]),
         )
@@ -725,7 +725,7 @@ class TestCheckConvergence:
         """Default block size should be n // 10."""
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=np.array([0.0]),
         )
@@ -743,7 +743,7 @@ class TestCheckConvergence:
         """Should ensure at least 3 blocks for SEM calculation."""
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=np.array([0.0]),
         )
@@ -756,7 +756,7 @@ class TestCheckConvergence:
             rc_data, block_size=50
         )  # Would give 2 blocks
 
-        assert results[0].n_blocks >= 3, "Should have at least 3 blocks"
+        assert results[0].n_blocks >= 3, 'Should have at least 3 blocks'
 
 
 # =============================================================================
@@ -773,7 +773,7 @@ class TestAnalyzeOverlap:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -784,10 +784,10 @@ class TestAnalyzeOverlap:
 
         # Should have good overlap everywhere
         assert result.min_overlap > 0.03, (
-            f"Expected min overlap > 0.03, got {result.min_overlap}"
+            f'Expected min overlap > 0.03, got {result.min_overlap}'
         )
         assert len(result.problem_pairs) == 0, (
-            f"Expected no problem pairs, got {result.problem_pairs}"
+            f'Expected no problem pairs, got {result.problem_pairs}'
         )
         assert len(result.overlap_matrix) == len(rc_data) - 1
 
@@ -799,7 +799,7 @@ class TestAnalyzeOverlap:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=1600000.0,
             rc0_values=rc0_values,
         )
@@ -810,9 +810,9 @@ class TestAnalyzeOverlap:
 
         # Should detect problems
         assert result.min_overlap < 0.03, (
-            f"Expected min overlap < 0.03, got {result.min_overlap}"
+            f'Expected min overlap < 0.03, got {result.min_overlap}'
         )
-        assert len(result.problem_pairs) > 0, "Should detect problem pairs"
+        assert len(result.problem_pairs) > 0, 'Should detect problem pairs'
 
     def test_overlap_values_in_valid_range(self, analyzer_class, tmp_path):
         """Overlap values should be between 0 and 1."""
@@ -820,15 +820,15 @@ class TestAnalyzeOverlap:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
 
         result = analyzer.analyze_overlap(rc_data)
 
-        assert np.all(result.overlap_matrix >= 0), "Overlap cannot be negative"
-        assert np.all(result.overlap_matrix <= 1), "Overlap cannot exceed 1"
+        assert np.all(result.overlap_matrix >= 0), 'Overlap cannot be negative'
+        assert np.all(result.overlap_matrix <= 1), 'Overlap cannot exceed 1'
 
     def test_identical_windows_have_high_overlap(self, analyzer_class, tmp_path):
         """Identical distributions should have overlap = 1."""
@@ -840,7 +840,7 @@ class TestAnalyzeOverlap:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -849,7 +849,7 @@ class TestAnalyzeOverlap:
 
         # Identical distributions should have overlap close to 1
         assert result.overlap_matrix[0] > 0.95, (
-            f"Identical distributions should have high overlap, got {result.overlap_matrix[0]}"
+            f'Identical distributions should have high overlap, got {result.overlap_matrix[0]}'
         )
 
     def test_overlap_matrix_length(self, analyzer_class, tmp_path):
@@ -859,7 +859,7 @@ class TestAnalyzeOverlap:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -877,7 +877,7 @@ class TestAnalyzeOverlap:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=1000.0,
             rc0_values=rc0_values,
         )
@@ -906,7 +906,7 @@ class TestComputePMFHistogram:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -932,7 +932,7 @@ class TestComputePMFHistogram:
             # Compare shapes by looking at correlation
             correlation = np.corrcoef(computed_pmf[mask], expected_pmf[mask])[0, 1]
             assert correlation > 0.9, (
-                f"PMF shape correlation {correlation} too low (expected > 0.9)"
+                f'PMF shape correlation {correlation} too low (expected > 0.9)'
             )
 
     def test_pmf_minimum_is_zero(self, analyzer_class, tmp_path):
@@ -943,7 +943,7 @@ class TestComputePMFHistogram:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -955,7 +955,7 @@ class TestComputePMFHistogram:
         valid_pmf = result.pmf[~np.isnan(result.pmf)]
         if len(valid_pmf) > 0:
             assert valid_pmf.min() == pytest.approx(0.0, abs=1e-10), (
-                "PMF minimum should be shifted to zero"
+                'PMF minimum should be shifted to zero'
             )
 
     def test_pmf_result_structure(self, analyzer_class, tmp_path):
@@ -965,7 +965,7 @@ class TestComputePMFHistogram:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -988,7 +988,7 @@ class TestComputePMFHistogram:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -1009,7 +1009,7 @@ class TestComputePMFHistogram:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -1038,7 +1038,7 @@ class TestComputePMFHistogram:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -1051,7 +1051,7 @@ class TestComputePMFHistogram:
         # Check that we got reasonable output (not all NaN)
         valid_count = (~np.isnan(result.pmf)).sum()
         assert valid_count > len(result.pmf) // 2, (
-            "WHAM should produce mostly valid PMF values"
+            'WHAM should produce mostly valid PMF values'
         )
 
 
@@ -1063,16 +1063,16 @@ class TestComputePMFHistogram:
 class TestEdgeCases:
     """Tests for edge cases and boundary conditions."""
 
-    @pytest.mark.filterwarnings("ignore:Mean of empty slice:RuntimeWarning")
-    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
-    @pytest.mark.filterwarnings("ignore:Degrees of freedom <= 0:RuntimeWarning")
+    @pytest.mark.filterwarnings('ignore:Mean of empty slice:RuntimeWarning')
+    @pytest.mark.filterwarnings('ignore:invalid value encountered:RuntimeWarning')
+    @pytest.mark.filterwarnings('ignore:Degrees of freedom <= 0:RuntimeWarning')
     def test_empty_array_equilibration(self, analyzer_class):
         """Empty array should be handled gracefully in equilibration detection."""
         data = np.array([])
 
         # Should not crash - behavior may vary
         try:
-            t0, g, n_eff = analyzer_class._detect_equilibration_autocorr(data)
+            t0, _g, _n_eff = analyzer_class._detect_equilibration_autocorr(data)
             # If it returns, values should be sensible
             assert t0 == 0
         except (ValueError, IndexError):
@@ -1084,7 +1084,7 @@ class TestEdgeCases:
         data = np.array([0.5])
 
         try:
-            t0, g, n_eff = analyzer_class._detect_equilibration_autocorr(data)
+            t0, g, _n_eff = analyzer_class._detect_equilibration_autocorr(data)
             assert t0 == 0
             assert g >= 1.0
         except (ValueError, IndexError):
@@ -1094,7 +1094,7 @@ class TestEdgeCases:
         """Very short trajectories should still produce results."""
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=np.array([0.0]),
         )
@@ -1115,7 +1115,7 @@ class TestEdgeCases:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -1137,7 +1137,7 @@ class TestEdgeCases:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -1150,7 +1150,7 @@ class TestEdgeCases:
         """Test distinguishing all converged from none converged."""
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=np.linspace(-0.1, 0.1, 5),
         )
@@ -1163,7 +1163,7 @@ class TestEdgeCases:
             converged_data, sem_threshold=0.01
         )
         n_converged = sum(1 for r in converged_results if r.is_converged)
-        assert n_converged == 5, "All windows should be converged"
+        assert n_converged == 5, 'All windows should be converged'
 
         # None converged: high variance, strict threshold
         unconverged_data = [rng.normal(i * 0.05, 0.5, 1000) for i in range(-2, 3)]
@@ -1171,7 +1171,7 @@ class TestEdgeCases:
             unconverged_data, sem_threshold=0.0001
         )
         n_unconverged = sum(1 for r in unconverged_results if not r.is_converged)
-        assert n_unconverged == 5, "No windows should be converged"
+        assert n_unconverged == 5, 'No windows should be converged'
 
     def test_pmf_with_sparse_windows(self, analyzer_class, tmp_path):
         """PMF calculation with few windows should still work."""
@@ -1181,7 +1181,7 @@ class TestEdgeCases:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -1218,7 +1218,7 @@ class TestIntegration:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
@@ -1258,22 +1258,24 @@ class TestIntegration:
 
         analyzer = analyzer_class(
             log_path=tmp_path,
-            log_prefix="test",
+            log_prefix='test',
             k_umbrella=160000.0,
             rc0_values=rc0_values,
         )
 
         # Check convergence before removing equilibration
         conv_before = analyzer.check_convergence(rc_data)
-        sem_before = np.mean([c.sem for c in conv_before])
+        np.mean([c.sem for c in conv_before])
 
         # Detect and remove equilibration
         equil = analyzer.detect_equilibration(rc_data)
-        rc_data_trimmed = [data[e.t0 :] for data, e in zip(rc_data, equil)]
+        rc_data_trimmed = [
+            data[e.t0 :] for data, e in zip(rc_data, equil, strict=False)
+        ]
 
         # Check convergence after removing equilibration
         conv_after = analyzer.check_convergence(rc_data_trimmed)
-        sem_after = np.mean([c.sem for c in conv_after])
+        np.mean([c.sem for c in conv_after])
 
         # SEM should generally be lower after removing equilibration
         # (though not guaranteed for all cases due to reduced sample size)
@@ -1284,7 +1286,7 @@ class TestIntegration:
 # =============================================================================
 
 
-@pytest.mark.parametrize("n_samples", [50, 100, 500, 2000])
+@pytest.mark.parametrize('n_samples', [50, 100, 500, 2000])
 def test_equilibration_detection_various_lengths(analyzer_class, n_samples):
     """Equilibration detection should work for various trajectory lengths."""
     data = generate_equilibrated_timeseries(n_samples=n_samples, seed=42)
@@ -1296,7 +1298,7 @@ def test_equilibration_detection_various_lengths(analyzer_class, n_samples):
     assert 0 < n_eff <= n_samples
 
 
-@pytest.mark.parametrize("correlation_time", [1, 5, 20, 50])
+@pytest.mark.parametrize('correlation_time', [1, 5, 20, 50])
 def test_statistical_inefficiency_scales_with_correlation(
     analyzer_class, correlation_time
 ):
@@ -1307,21 +1309,21 @@ def test_statistical_inefficiency_scales_with_correlation(
         seed=42,
     )
 
-    t0, g, n_eff = analyzer_class._detect_equilibration_autocorr(data)
+    _t0, g, _n_eff = analyzer_class._detect_equilibration_autocorr(data)
 
     # g should roughly scale with correlation time
     # but this is approximate due to finite sampling
     assert g >= 1.0
 
 
-@pytest.mark.parametrize("n_windows", [3, 5, 10, 20])
+@pytest.mark.parametrize('n_windows', [3, 5, 10, 20])
 def test_overlap_analysis_various_window_counts(analyzer_class, tmp_path, n_windows):
     """Overlap analysis should work for various numbers of windows."""
     rc_data, rc0_values = generate_overlapping_windows(n_windows=n_windows, seed=42)
 
     analyzer = analyzer_class(
         log_path=tmp_path,
-        log_prefix="test",
+        log_prefix='test',
         k_umbrella=160000.0,
         rc0_values=rc0_values,
     )
@@ -1332,7 +1334,7 @@ def test_overlap_analysis_various_window_counts(analyzer_class, tmp_path, n_wind
     assert result.min_overlap >= 0
 
 
-@pytest.mark.parametrize("temperature", [200.0, 300.0, 400.0, 500.0])
+@pytest.mark.parametrize('temperature', [200.0, 300.0, 400.0, 500.0])
 def test_pmf_at_various_temperatures(analyzer_class, tmp_path, temperature):
     """PMF calculation should work at various temperatures."""
     rc_data, rc0_values = generate_overlapping_windows(
@@ -1341,7 +1343,7 @@ def test_pmf_at_various_temperatures(analyzer_class, tmp_path, temperature):
 
     analyzer = analyzer_class(
         log_path=tmp_path,
-        log_prefix="test",
+        log_prefix='test',
         k_umbrella=160000.0,
         rc0_values=rc0_values,
     )
@@ -1354,5 +1356,5 @@ def test_pmf_at_various_temperatures(analyzer_class, tmp_path, temperature):
     assert (~np.isnan(result.pmf)).sum() > 0
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

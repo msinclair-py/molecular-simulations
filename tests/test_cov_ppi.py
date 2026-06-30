@@ -22,7 +22,7 @@ import pytest
 def _check_mdanalysis():
     """Check if MDAnalysis is available."""
     try:
-        import MDAnalysis
+        import MDAnalysis  # noqa: F401
 
         return True
     except ImportError:
@@ -30,20 +30,20 @@ def _check_mdanalysis():
 
 
 requires_mdanalysis = pytest.mark.skipif(
-    not _check_mdanalysis(), reason="MDAnalysis not installed"
+    not _check_mdanalysis(), reason='MDAnalysis not installed'
 )
 
 
 @pytest.fixture
 def test_data_dir():
     """Return the path to test data directory."""
-    return Path(__file__).parent / "data"
+    return Path(__file__).parent / 'data'
 
 
 @pytest.fixture
 def alanine_pdb(test_data_dir):
     """Return the path to the alanine dipeptide PDB."""
-    return test_data_dir / "pdb" / "alanine_dipeptide.pdb"
+    return test_data_dir / 'pdb' / 'alanine_dipeptide.pdb'
 
 
 @pytest.fixture
@@ -58,7 +58,7 @@ def saltbridge_ppi(two_chain_pdb, tmp_path):
     return PPInteractions(
         top=str(two_chain_pdb),
         traj=str(two_chain_pdb),
-        out=tmp_path / "results.json",
+        out=tmp_path / 'results.json',
         plot=False,
     )
 
@@ -74,9 +74,9 @@ def traj_ppi(two_chain_trajectory, tmp_path):
     from molecular_simulations.analysis.cov_ppi import PPInteractions
 
     return PPInteractions(
-        top=str(two_chain_trajectory["top"]),
-        traj=str(two_chain_trajectory["traj"]),
-        out=tmp_path / "results.json",
+        top=str(two_chain_trajectory['top']),
+        traj=str(two_chain_trajectory['traj']),
+        out=tmp_path / 'results.json',
         plot=False,
     )
 
@@ -95,11 +95,11 @@ class TestPPInteractionsPureLogic:
         # We can test parse_results without initializing the full class
         # by creating a minimal mock object with just the method we need
         results = {
-            "positive": {
-                "A_ALA1-B_LYS10": {"hydrophobic": 0.5, "hbond": 0.3, "saltbridge": 0.0}
+            'positive': {
+                'A_ALA1-B_LYS10': {'hydrophobic': 0.5, 'hbond': 0.3, 'saltbridge': 0.0}
             },
-            "negative": {
-                "A_GLU5-B_ARG15": {"hydrophobic": 0.0, "hbond": 0.0, "saltbridge": 0.8}
+            'negative': {
+                'A_GLU5-B_ARG15': {'hydrophobic': 0.0, 'hbond': 0.0, 'saltbridge': 0.8}
             },
         }
 
@@ -109,30 +109,30 @@ class TestPPInteractionsPureLogic:
             for pair, data in pair_dict.items():
                 if any(val > 0.0 for val in data.values()):
                     row = {
-                        "Residue Pair": pair,
-                        "Hydrophobic": data["hydrophobic"],
-                        "Hydrogen Bond": data["hbond"],
-                        "Salt Bridge": data["saltbridge"],
-                        "Covariance": cov_type,
+                        'Residue Pair': pair,
+                        'Hydrophobic': data['hydrophobic'],
+                        'Hydrogen Bond': data['hbond'],
+                        'Salt Bridge': data['saltbridge'],
+                        'Covariance': cov_type,
                     }
                     data_rows.append(row)
 
         df = pl.DataFrame(data_rows)
 
         assert isinstance(df, pl.DataFrame)
-        assert "Residue Pair" in df.columns
-        assert "Hydrophobic" in df.columns
-        assert "Covariance" in df.columns
+        assert 'Residue Pair' in df.columns
+        assert 'Hydrophobic' in df.columns
+        assert 'Covariance' in df.columns
         assert len(df) == 2
 
     def test_parse_results_filters_zeros(self):
         """Test that parse_results filters out all-zero entries - no mocks."""
         results = {
-            "positive": {
-                "A_ALA1-B_LYS10": {"hydrophobic": 0.5, "hbond": 0.0, "saltbridge": 0.0},
-                "A_GLY2-B_SER11": {"hydrophobic": 0.0, "hbond": 0.0, "saltbridge": 0.0},
+            'positive': {
+                'A_ALA1-B_LYS10': {'hydrophobic': 0.5, 'hbond': 0.0, 'saltbridge': 0.0},
+                'A_GLY2-B_SER11': {'hydrophobic': 0.0, 'hbond': 0.0, 'saltbridge': 0.0},
             },
-            "negative": {},
+            'negative': {},
         }
 
         data_rows = []
@@ -140,22 +140,22 @@ class TestPPInteractionsPureLogic:
             for pair, data in pair_dict.items():
                 if any(val > 0.0 for val in data.values()):
                     row = {
-                        "Residue Pair": pair,
-                        "Hydrophobic": data["hydrophobic"],
-                        "Hydrogen Bond": data["hbond"],
-                        "Salt Bridge": data["saltbridge"],
-                        "Covariance": cov_type,
+                        'Residue Pair': pair,
+                        'Hydrophobic': data['hydrophobic'],
+                        'Hydrogen Bond': data['hbond'],
+                        'Salt Bridge': data['saltbridge'],
+                        'Covariance': cov_type,
                     }
                     data_rows.append(row)
 
         df = pl.DataFrame(data_rows)
         assert len(df) == 1
-        assert "A_ALA1-B_LYS10" in df["Residue Pair"].to_list()
+        assert 'A_ALA1-B_LYS10' in df['Residue Pair'].to_list()
 
     def test_interpret_covariance_logic(self):
         """Test interpret_covariance logic with numpy arrays - no mocks."""
         # Test the interpretation logic without the full class
-        mapping = {"ag1": {0: 1, 1: 2}, "ag2": {0: 10, 1: 11}}
+        mapping = {'ag1': {0: 1, 1: 2}, 'ag2': {0: 10, 1: 11}}
 
         cov_mat = np.array(
             [
@@ -170,8 +170,8 @@ class TestPPInteractionsPureLogic:
         seen = set()
         positive = []
         for i in range(len(pos_corr[0])):
-            res1 = mapping["ag1"][pos_corr[0][i]]
-            res2 = mapping["ag2"][pos_corr[1][i]]
+            res1 = mapping['ag1'][pos_corr[0][i]]
+            res2 = mapping['ag2'][pos_corr[1][i]]
             if (res1, res2) not in seen:
                 positive.append((res1, res2))
                 seen.add((res1, res2))
@@ -179,8 +179,8 @@ class TestPPInteractionsPureLogic:
 
         negative = []
         for i in range(len(neg_corr[0])):
-            res1 = mapping["ag1"][neg_corr[0][i]]
-            res2 = mapping["ag2"][neg_corr[1][i]]
+            res1 = mapping['ag1'][neg_corr[0][i]]
+            res2 = mapping['ag2'][neg_corr[1][i]]
             if (res1, res2) not in seen:
                 negative.append((res1, res2))
                 seen.add((res1, res2))
@@ -205,14 +205,14 @@ class TestPPInteractionsIntegration:
         """Test PPInteractions initialization with real PDB file."""
         from molecular_simulations.analysis.cov_ppi import PPInteractions
 
-        out_path = tmp_path / "results.json"
+        out_path = tmp_path / 'results.json'
 
         ppi = PPInteractions(
             top=str(alanine_pdb),
             traj=str(alanine_pdb),  # Single PDB as trajectory
             out=out_path,
-            sel1="resid 1",
-            sel2="resid 2",
+            sel1='resid 1',
+            sel2='resid 2',
             plot=False,
         )
 
@@ -224,39 +224,39 @@ class TestPPInteractionsIntegration:
         import MDAnalysis as mda
 
         u = mda.Universe(str(alanine_pdb))
-        ag1 = u.select_atoms("resid 1")
-        ag2 = u.select_atoms("resid 2")
+        ag1 = u.select_atoms('resid 1')
+        ag2 = u.select_atoms('resid 2')
 
         # Test the mapping logic
-        mapping = {"ag1": {}, "ag2": {}}
+        mapping = {'ag1': {}, 'ag2': {}}
         for i, resid in enumerate(ag1.resids):
-            mapping["ag1"][i] = resid
+            mapping['ag1'][i] = resid
         for i, resid in enumerate(ag2.resids):
-            mapping["ag2"][i] = resid
+            mapping['ag2'][i] = resid
 
-        assert 0 in mapping["ag1"]
-        assert 0 in mapping["ag2"]
+        assert 0 in mapping['ag1']
+        assert 0 in mapping['ag2']
 
     def test_save_and_load_results(self, alanine_pdb, tmp_path):
         """Test save method creates valid JSON."""
         from molecular_simulations.analysis.cov_ppi import PPInteractions
 
-        out_path = tmp_path / "results.json"
+        out_path = tmp_path / 'results.json'
 
         ppi = PPInteractions(
             top=str(alanine_pdb),
             traj=str(alanine_pdb),
             out=out_path,
-            sel1="resid 1",
-            sel2="resid 2",
+            sel1='resid 1',
+            sel2='resid 2',
             plot=False,
         )
 
         results = {
-            "positive": {
-                "A_ALA1-B_LYS10": {"hydrophobic": 0.5, "hbond": 0.3, "saltbridge": 0.0}
+            'positive': {
+                'A_ALA1-B_LYS10': {'hydrophobic': 0.5, 'hbond': 0.3, 'saltbridge': 0.0}
             },
-            "negative": {},
+            'negative': {},
         }
 
         ppi.save(results)
@@ -264,8 +264,8 @@ class TestPPInteractionsIntegration:
         assert out_path.exists()
         with open(out_path) as f:
             loaded = json.load(f)
-        assert "positive" in loaded
-        assert "A_ALA1-B_LYS10" in loaded["positive"]
+        assert 'positive' in loaded
+        assert 'A_ALA1-B_LYS10' in loaded['positive']
 
 
 # ============================================================================
@@ -283,9 +283,9 @@ class TestPPInteractions:
         ppi = PPInteractions(
             top=str(two_chain_pdb),
             traj=str(two_chain_pdb),
-            out=tmp_path / "results.json",
-            sel1="chainID A",
-            sel2="chainID B",
+            out=tmp_path / 'results.json',
+            sel1='chainID A',
+            sel2='chainID B',
             cov_cutoff=(11.0, 13.0),
             sb_cutoff=6.0,
             hbond_cutoff=3.5,
@@ -295,8 +295,8 @@ class TestPPInteractions:
         )
 
         assert ppi.n_frames == 1  # single-frame PDB used as its own trajectory
-        assert ppi.sel1 == "chainID A"
-        assert ppi.sel2 == "chainID B"
+        assert ppi.sel1 == 'chainID A'
+        assert ppi.sel2 == 'chainID B'
         assert ppi.cov_cutoff == (11.0, 13.0)
         assert ppi.sb == 6.0
         assert ppi.hb_d == 3.5
@@ -310,7 +310,7 @@ class TestPPInteractions:
         ppi = PPInteractions(
             top=str(two_chain_pdb),
             traj=str(two_chain_pdb),
-            out=tmp_path / "results.json",
+            out=tmp_path / 'results.json',
             hbond_angle=30.0,
             plot=False,
         )
@@ -320,18 +320,18 @@ class TestPPInteractions:
 
     def test_res_map(self, saltbridge_ppi):
         """Test res_map builds a per-atom residue index mapping."""
-        ag1 = saltbridge_ppi.u.select_atoms("chainID A")
-        ag2 = saltbridge_ppi.u.select_atoms("chainID B")
+        ag1 = saltbridge_ppi.u.select_atoms('chainID A')
+        ag2 = saltbridge_ppi.u.select_atoms('chainID B')
 
         saltbridge_ppi.res_map(ag1, ag2)
 
         # Chain A starts at resid 1 (ACE), chain B at resid 4 (ACE)
-        assert saltbridge_ppi.mapping["ag1"][0] == 1
-        assert saltbridge_ppi.mapping["ag2"][0] == 4
+        assert saltbridge_ppi.mapping['ag1'][0] == 1
+        assert saltbridge_ppi.mapping['ag2'][0] == 4
 
     def test_interpret_covariance(self, saltbridge_ppi):
         """Test interpret_covariance splits positive/negative correlations."""
-        saltbridge_ppi.mapping = {"ag1": {0: 1, 1: 2}, "ag2": {0: 10, 1: 11}}
+        saltbridge_ppi.mapping = {'ag1': {0: 1, 1: 2}, 'ag2': {0: 10, 1: 11}}
 
         cov_mat = np.array(
             [
@@ -347,21 +347,21 @@ class TestPPInteractions:
 
     def test_identify_interaction_type(self, saltbridge_ppi):
         """Test identify_interaction_type for a charged Asp-Lys pair."""
-        functions, labels = saltbridge_ppi.identify_interaction_type("ASP", "LYS")
+        _functions, labels = saltbridge_ppi.identify_interaction_type('ASP', 'LYS')
 
-        assert "saltbridge" in labels or "hydrophobic" in labels or "hbond" in labels
+        assert 'saltbridge' in labels or 'hydrophobic' in labels or 'hbond' in labels
 
     def test_save_results(self, saltbridge_ppi):
         """Test save writes a JSON results file."""
         results = {
-            "positive": {
-                "A_ALA1-B_LYS10": {
-                    "hydrophobic": 0.5,
-                    "hbond": 0.3,
-                    "saltbridge": 0.0,
+            'positive': {
+                'A_ALA1-B_LYS10': {
+                    'hydrophobic': 0.5,
+                    'hbond': 0.3,
+                    'saltbridge': 0.0,
                 }
             },
-            "negative": {},
+            'negative': {},
         }
 
         saltbridge_ppi.save(results)
@@ -369,23 +369,23 @@ class TestPPInteractions:
         assert saltbridge_ppi.out.exists()
         with open(saltbridge_ppi.out) as f:
             loaded = json.load(f)
-        assert "A_ALA1-B_LYS10" in loaded["positive"]
+        assert 'A_ALA1-B_LYS10' in loaded['positive']
 
     def test_parse_results(self, saltbridge_ppi):
         """Test parse_results returns a structured DataFrame."""
         results = {
-            "positive": {
-                "A_ALA1-B_LYS10": {
-                    "hydrophobic": 0.5,
-                    "hbond": 0.3,
-                    "saltbridge": 0.0,
+            'positive': {
+                'A_ALA1-B_LYS10': {
+                    'hydrophobic': 0.5,
+                    'hbond': 0.3,
+                    'saltbridge': 0.0,
                 }
             },
-            "negative": {
-                "A_GLU5-B_ARG15": {
-                    "hydrophobic": 0.0,
-                    "hbond": 0.0,
-                    "saltbridge": 0.8,
+            'negative': {
+                'A_GLU5-B_ARG15': {
+                    'hydrophobic': 0.0,
+                    'hbond': 0.0,
+                    'saltbridge': 0.8,
                 }
             },
         }
@@ -393,35 +393,35 @@ class TestPPInteractions:
         df = saltbridge_ppi.parse_results(results)
 
         assert isinstance(df, pl.DataFrame)
-        assert "Residue Pair" in df.columns
-        assert "Hydrophobic" in df.columns
-        assert "Hydrogen Bond" in df.columns
-        assert "Salt Bridge" in df.columns
-        assert "Covariance" in df.columns
+        assert 'Residue Pair' in df.columns
+        assert 'Hydrophobic' in df.columns
+        assert 'Hydrogen Bond' in df.columns
+        assert 'Salt Bridge' in df.columns
+        assert 'Covariance' in df.columns
 
     def test_parse_results_filters_zeros(self, saltbridge_ppi):
         """Test that parse_results filters out all-zero entries."""
         results = {
-            "positive": {
-                "A_ALA1-B_LYS10": {
-                    "hydrophobic": 0.5,
-                    "hbond": 0.0,
-                    "saltbridge": 0.0,
+            'positive': {
+                'A_ALA1-B_LYS10': {
+                    'hydrophobic': 0.5,
+                    'hbond': 0.0,
+                    'saltbridge': 0.0,
                 },
-                "A_GLY2-B_SER11": {
-                    "hydrophobic": 0.0,
-                    "hbond": 0.0,
-                    "saltbridge": 0.0,
+                'A_GLY2-B_SER11': {
+                    'hydrophobic': 0.0,
+                    'hbond': 0.0,
+                    'saltbridge': 0.0,
                 },
             },
-            "negative": {},
+            'negative': {},
         }
 
         df = saltbridge_ppi.parse_results(results)
 
         # Should only include the non-zero entry
         assert len(df) == 1
-        assert "A_ALA1-B_LYS10" in df["Residue Pair"].to_list()
+        assert 'A_ALA1-B_LYS10' in df['Residue Pair'].to_list()
 
 
 class TestEvaluateHBond:
@@ -429,8 +429,8 @@ class TestEvaluateHBond:
 
     def test_evaluate_hbond_found(self, traj_ppi):
         """evaluate_hbond scores real Lys-donor / Asp-acceptor geometry."""
-        lys = traj_ppi.u.select_atoms("chainID A and resname LYS")
-        asp = traj_ppi.u.select_atoms("chainID B and resname ASP")
+        lys = traj_ppi.u.select_atoms('chainID A and resname LYS')
+        asp = traj_ppi.u.select_atoms('chainID B and resname ASP')
 
         donors, acceptors = traj_ppi.survey_donors_acceptors(lys, asp)
         result = traj_ppi.evaluate_hbond(donors, acceptors)
@@ -444,8 +444,8 @@ class TestAnalyzeHydrophobic:
 
     def test_analyze_hydrophobic(self, traj_ppi):
         """analyze_hydrophobic returns a real frame-averaged occupancy."""
-        lys = traj_ppi.u.select_atoms("chainID A and resname LYS")
-        asp = traj_ppi.u.select_atoms("chainID B and resname ASP")
+        lys = traj_ppi.u.select_atoms('chainID A and resname LYS')
+        asp = traj_ppi.u.select_atoms('chainID B and resname ASP')
 
         result = traj_ppi.analyze_hydrophobic(lys, asp)
 
@@ -460,30 +460,30 @@ class TestAnalyzeSaltbridge:
 
     def test_analyze_saltbridge_real_pair(self, saltbridge_ppi):
         """A real Lys-Asp pair within cutoff is a full-occupancy salt bridge."""
-        lys = saltbridge_ppi.u.select_atoms("chainID A and resname LYS")
-        asp = saltbridge_ppi.u.select_atoms("chainID B and resname ASP")
+        lys = saltbridge_ppi.u.select_atoms('chainID A and resname LYS')
+        asp = saltbridge_ppi.u.select_atoms('chainID B and resname ASP')
 
         # Single frame, NZ <-> carboxylate ~3.4 A < 6.0 A cutoff -> occupancy 1.0
         assert saltbridge_ppi.analyze_saltbridge(lys, asp) == 1.0
 
     def test_analyze_saltbridge_incompatible_residues(self, saltbridge_ppi):
         """Saltbridge analysis returns 0 for non-charged residues."""
-        res1 = SimpleNamespace(resnames=["ALA"])
-        res2 = SimpleNamespace(resnames=["GLY"])
+        res1 = SimpleNamespace(resnames=['ALA'])
+        res2 = SimpleNamespace(resnames=['GLY'])
 
         assert saltbridge_ppi.analyze_saltbridge(res1, res2) == 0.0
 
     def test_analyze_saltbridge_same_charge(self, saltbridge_ppi):
         """Saltbridge analysis returns 0 for two positively-charged residues."""
-        res1 = SimpleNamespace(resnames=["LYS"])
-        res2 = SimpleNamespace(resnames=["ARG"])
+        res1 = SimpleNamespace(resnames=['LYS'])
+        res2 = SimpleNamespace(resnames=['ARG'])
 
         assert saltbridge_ppi.analyze_saltbridge(res1, res2) == 0.0
 
     def test_analyze_saltbridge_two_negative(self, saltbridge_ppi):
         """Saltbridge analysis returns 0 for two negatively-charged residues."""
-        res1 = SimpleNamespace(resnames=["ASP"])
-        res2 = SimpleNamespace(resnames=["GLU"])
+        res1 = SimpleNamespace(resnames=['ASP'])
+        res2 = SimpleNamespace(resnames=['GLU'])
 
         assert saltbridge_ppi.analyze_saltbridge(res1, res2) == 0.0
 
@@ -497,9 +497,9 @@ class TestComputeInteractions:
 
         assert isinstance(result, dict)
         # Key format is 'A_<aa><resid>-B_<aa><resid>'
-        assert "A_K2-B_D5" in result
-        scores = result["A_K2-B_D5"]
-        assert set(scores) == {"hydrophobic", "hbond", "saltbridge"}
+        assert 'A_K2-B_D5' in result
+        scores = result['A_K2-B_D5']
+        assert set(scores) == {'hydrophobic', 'hbond', 'saltbridge'}
         assert all(0.0 <= v <= 1.0 for v in scores.values())
 
 
@@ -509,22 +509,22 @@ class TestIdentifyInteractionType:
     def test_identify_interaction_type_polar(self, saltbridge_ppi):
         """Test interaction type identification for polar residues"""
         # Test SER-THR (should have hbond capability)
-        functions, labels = saltbridge_ppi.identify_interaction_type("SER", "THR")
-        assert "hydrophobic" in labels
-        assert "hbond" in labels
+        _functions, labels = saltbridge_ppi.identify_interaction_type('SER', 'THR')
+        assert 'hydrophobic' in labels
+        assert 'hbond' in labels
 
     def test_identify_interaction_type_charged(self, saltbridge_ppi):
         """Test interaction type identification for charged residues"""
         # Test ASP-LYS (should have saltbridge capability)
-        functions, labels = saltbridge_ppi.identify_interaction_type("ASP", "LYS")
-        assert "hydrophobic" in labels
-        assert "saltbridge" in labels
+        _functions, labels = saltbridge_ppi.identify_interaction_type('ASP', 'LYS')
+        assert 'hydrophobic' in labels
+        assert 'saltbridge' in labels
 
     def test_identify_interaction_type_hydrophobic(self, saltbridge_ppi):
         """Test interaction type identification for hydrophobic residues"""
         # Test ALA-VAL (hydrophobic only)
-        functions, labels = saltbridge_ppi.identify_interaction_type("ALA", "VAL")
-        assert "hydrophobic" in labels
+        _functions, labels = saltbridge_ppi.identify_interaction_type('ALA', 'VAL')
+        assert 'hydrophobic' in labels
         # ALA and VAL are not in the int_types dict, so only hydrophobic
 
 
@@ -535,16 +535,16 @@ class TestMakePlot:
         """Test make_plot renders a real figure file (Agg backend)."""
         data = pl.DataFrame(
             {
-                "Residue Pair": ["A_ALA1-B_LYS10"],
-                "Hydrophobic": [0.5],
-                "Hydrogen Bond": [0.3],
-                "Salt Bridge": [0.0],
-                "Covariance": ["positive"],
+                'Residue Pair': ['A_ALA1-B_LYS10'],
+                'Hydrophobic': [0.5],
+                'Hydrogen Bond': [0.3],
+                'Salt Bridge': [0.0],
+                'Covariance': ['positive'],
             }
         )
 
-        plot_path = tmp_path / "test_plot.png"
-        saltbridge_ppi.make_plot(data, "Hydrophobic", plot_path)
+        plot_path = tmp_path / 'test_plot.png'
+        saltbridge_ppi.make_plot(data, 'Hydrophobic', plot_path)
 
         # A real PNG is written to disk
         assert plot_path.exists()
@@ -560,22 +560,22 @@ class TestPlotResults:
         monkeypatch.chdir(tmp_path)
 
         results = {
-            "positive": {
-                "A_ALA1-B_LYS10": {
-                    "hydrophobic": 0.5,
-                    "hbond": 0.3,
-                    "saltbridge": 0.0,
+            'positive': {
+                'A_ALA1-B_LYS10': {
+                    'hydrophobic': 0.5,
+                    'hbond': 0.3,
+                    'saltbridge': 0.0,
                 }
             },
-            "negative": {},
+            'negative': {},
         }
 
         saltbridge_ppi.plot_results(results)
 
         # Positive hydrophobic + hydrogen-bond columns are non-zero -> two PNGs
-        pngs = sorted(p.name for p in (tmp_path / "plots").glob("*.png"))
-        assert "Positive_Covariance_Hydrophobic.png" in pngs
-        assert "Positive_Covariance_Hydrogen_Bond.png" in pngs
+        pngs = sorted(p.name for p in (tmp_path / 'plots').glob('*.png'))
+        assert 'Positive_Covariance_Hydrophobic.png' in pngs
+        assert 'Positive_Covariance_Hydrogen_Bond.png' in pngs
 
 
 class TestSurveyDonorsAcceptors:
@@ -583,8 +583,8 @@ class TestSurveyDonorsAcceptors:
 
     def test_survey_donors_acceptors(self, traj_ppi):
         """survey_donors_acceptors finds real donor/acceptor atoms via bonds."""
-        lys = traj_ppi.u.select_atoms("chainID A and resname LYS")
-        asp = traj_ppi.u.select_atoms("chainID B and resname ASP")
+        lys = traj_ppi.u.select_atoms('chainID A and resname LYS')
+        asp = traj_ppi.u.select_atoms('chainID B and resname ASP')
 
         donors, acceptors = traj_ppi.survey_donors_acceptors(lys, asp)
 
@@ -602,8 +602,8 @@ class TestAnalyzeHbond:
         Relies on the fixture's CONECT bond records (donor-hydrogen lookup) and
         the Lys-Asp interface, where the amine donates to the carboxylate.
         """
-        lys = traj_ppi.u.select_atoms("chainID A and resname LYS")
-        asp = traj_ppi.u.select_atoms("chainID B and resname ASP")
+        lys = traj_ppi.u.select_atoms('chainID A and resname LYS')
+        asp = traj_ppi.u.select_atoms('chainID B and resname ASP')
 
         result = traj_ppi.analyze_hbond(lys, asp)
 
@@ -621,7 +621,7 @@ class TestPPInteractionsRun:
 
         assert traj_ppi.out.exists()
         data = json.loads(traj_ppi.out.read_text())
-        assert set(data) == {"positive", "negative"}
+        assert set(data) == {'positive', 'negative'}
 
 
 class TestPPInteractionsComputeInteractions:
@@ -633,7 +633,7 @@ class TestPPInteractionsComputeInteractions:
 
         assert isinstance(result, dict)
         key = next(iter(result))
-        assert "hydrophobic" in result[key]
+        assert 'hydrophobic' in result[key]
 
 
 class TestPPInteractionsAnalyzeSaltbridge:
@@ -641,18 +641,18 @@ class TestPPInteractionsAnalyzeSaltbridge:
 
     def test_saltbridge_non_charged_returns_zero(self, saltbridge_ppi):
         """Saltbridge returns 0 for a non-charged residue."""
-        res1 = SimpleNamespace(resnames=["ALA"])
-        res2 = SimpleNamespace(resnames=["GLU"])
+        res1 = SimpleNamespace(resnames=['ALA'])
+        res2 = SimpleNamespace(resnames=['GLU'])
 
         assert saltbridge_ppi.analyze_saltbridge(res1, res2) == 0.0
 
     def test_saltbridge_same_charge_returns_zero(self, saltbridge_ppi):
         """Saltbridge returns 0 for two like-charged residues."""
         both_positive = saltbridge_ppi.analyze_saltbridge(
-            SimpleNamespace(resnames=["LYS"]), SimpleNamespace(resnames=["ARG"])
+            SimpleNamespace(resnames=['LYS']), SimpleNamespace(resnames=['ARG'])
         )
         both_negative = saltbridge_ppi.analyze_saltbridge(
-            SimpleNamespace(resnames=["ASP"]), SimpleNamespace(resnames=["GLU"])
+            SimpleNamespace(resnames=['ASP']), SimpleNamespace(resnames=['GLU'])
         )
 
         assert both_positive == 0.0
@@ -677,8 +677,8 @@ class TestPPInteractionsAnalyzeSaltbridgeWithTrajectory:
 
     def test_saltbridge_valid_pair_with_trajectory(self, traj_ppi):
         """Real Lys-Asp saltbridge occupancy over the drifting trajectory."""
-        lys = traj_ppi.u.select_atoms("chainID A and resname LYS")
-        asp = traj_ppi.u.select_atoms("chainID B and resname ASP")
+        lys = traj_ppi.u.select_atoms('chainID A and resname LYS')
+        asp = traj_ppi.u.select_atoms('chainID B and resname ASP')
 
         result = traj_ppi.analyze_saltbridge(lys, asp)
 
@@ -698,14 +698,14 @@ class TestPPInteractionsRunWithPlot:
         monkeypatch.chdir(tmp_path)
 
         ppi = PPInteractions(
-            top=str(two_chain_trajectory["top"]),
-            traj=str(two_chain_trajectory["traj"]),
-            out=tmp_path / "results.json",
+            top=str(two_chain_trajectory['top']),
+            traj=str(two_chain_trajectory['traj']),
+            out=tmp_path / 'results.json',
             plot=True,
         )
         ppi.run()
 
-        assert (tmp_path / "results.json").exists()
+        assert (tmp_path / 'results.json').exists()
 
 
 class TestPPInteractionsSave:
@@ -714,8 +714,8 @@ class TestPPInteractionsSave:
     def test_save_creates_json_file(self, saltbridge_ppi):
         """save writes the results dict as JSON round-trippable on disk."""
         results = {
-            "positive": {"A_ALA1-B_GLY10": {"hydrophobic": 0.5}},
-            "negative": {},
+            'positive': {'A_ALA1-B_GLY10': {'hydrophobic': 0.5}},
+            'negative': {},
         }
         saltbridge_ppi.save(results)
 
@@ -724,5 +724,5 @@ class TestPPInteractionsSave:
         assert loaded == results
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

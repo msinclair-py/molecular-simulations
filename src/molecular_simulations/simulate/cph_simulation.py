@@ -49,7 +49,13 @@ def run_cph_sim(
     """
     from openmm import LangevinIntegrator
     from openmm.app import PME, CutoffNonPeriodic, HBonds
-    from openmm.unit import amu, kelvin, kilojoules_per_mole, nanometers, picosecond  # ty: ignore[unresolved-import]
+    from openmm.unit import (  # ty: ignore[unresolved-import]
+        amu,
+        kelvin,
+        kilojoules_per_mole,
+        nanometers,
+        picosecond,
+    )
 
     variants = params['residueVariants']
 

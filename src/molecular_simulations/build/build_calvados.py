@@ -67,10 +67,10 @@ class CGBuilder:
 
     Example:
         >>> builder = CGBuilder(
-        ...     path="./simulation",
-        ...     input_pdb="protein.pdb",
-        ...     residues_file="residues.csv",
-        ...     domains_file="domains.yaml",
+        ...     path='./simulation',
+        ...     input_pdb='protein.pdb',
+        ...     residues_file='residues.csv',
+        ...     domains_file='domains.yaml',
         ...     box_dim=[50.0, 50.0, 50.0],
         ... )
         >>> builder.build()
@@ -143,7 +143,7 @@ class CGBuilder:
 
         Example:
             >>> import tomllib
-            >>> with open("config.toml", "rb") as f:
+            >>> with open('config.toml', 'rb') as f:
             ...     params = tomllib.load(f)
             >>> builder = CGBuilder.from_dict(params)
         """

@@ -17,6 +17,7 @@ from scipy.spatial.distance import cdist
 PathLike = Path | str
 OptPath = Path | str | None
 
+
 class ipSAE:
     """Compute interaction prediction Score from Aligned Errors.
 
@@ -41,7 +42,7 @@ class ipSAE:
             from remaining tokens and dropped before scoring.
 
     Example:
-        >>> scorer = ipSAE("model.pdb", "plddt.npz", "pae.npz")
+        >>> scorer = ipSAE('model.pdb', 'plddt.npz', 'pae.npz')
         >>> scorer.run()
         >>> print(scorer.scores)
     """
@@ -519,7 +520,7 @@ class ModelParser:
             aren't recoverable from the structure file alone).
 
     Example:
-        >>> parser = ModelParser("model.pdb")
+        >>> parser = ModelParser('model.pdb')
         >>> parser.parse_structure_file()
         >>> parser.classify_chains()
     """
@@ -683,13 +684,38 @@ class ModelParser:
 
     NUCLEIC_ACIDS = frozenset(['DA', 'DC', 'DT', 'DG', 'A', 'C', 'U', 'G'])
 
-    STANDARD_RESIDUES = frozenset([
-        'ALA', 'ARG', 'ASN', 'ASP', 'CYS',
-        'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
-        'LEU', 'LYS', 'MET', 'PHE', 'PRO',
-        'SER', 'THR', 'TRP', 'TYR', 'VAL',
-        'DA', 'DC', 'DT', 'DG', 'A', 'C', 'U', 'G',
-    ])
+    STANDARD_RESIDUES = frozenset(
+        [
+            'ALA',
+            'ARG',
+            'ASN',
+            'ASP',
+            'CYS',
+            'GLN',
+            'GLU',
+            'GLY',
+            'HIS',
+            'ILE',
+            'LEU',
+            'LYS',
+            'MET',
+            'PHE',
+            'PRO',
+            'SER',
+            'THR',
+            'TRP',
+            'TYR',
+            'VAL',
+            'DA',
+            'DC',
+            'DT',
+            'DG',
+            'A',
+            'C',
+            'U',
+            'G',
+        ]
+    )
 
     @staticmethod
     def parse_pdb_line(line: str, *args, **kwargs) -> dict[str, Any]:

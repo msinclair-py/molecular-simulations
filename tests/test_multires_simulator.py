@@ -43,19 +43,19 @@ def mock_difficult_dependencies():
     with patch.dict(
         sys.modules,
         {
-            "calvados": mock_calvados,
-            "calvados.cfg": mock_calvados_cfg,
-            "calvados.sim": mock_calvados.sim,
-            "cg2all": mock_cg2all,
-            "cg2all.script": mock_cg2all_script,
-            "cg2all.script.convert_cg2all": mock_cg2all_convert,
-            "parmed": mock_parmed,
+            'calvados': mock_calvados,
+            'calvados.cfg': mock_calvados_cfg,
+            'calvados.sim': mock_calvados.sim,
+            'cg2all': mock_cg2all,
+            'cg2all.script': mock_cg2all_script,
+            'cg2all.script.convert_cg2all': mock_cg2all_convert,
+            'parmed': mock_parmed,
         },
     ):
         yield {
-            "calvados": mock_calvados,
-            "cg2all": mock_cg2all,
-            "parmed": mock_parmed,
+            'calvados': mock_calvados,
+            'cg2all': mock_cg2all,
+            'parmed': mock_parmed,
         }
 
 
@@ -88,13 +88,13 @@ class TestSanderMinDefaults:
 
         defaults = SanderMinDefaults()
 
-        assert "Minimization input" in defaults.mdin_contents
-        assert "imin=1" in defaults.mdin_contents
-        assert "maxcyc=5000" in defaults.mdin_contents
-        assert "ncyc=2500" in defaults.mdin_contents
-        assert "ntb=0" in defaults.mdin_contents
-        assert "cut=10.0" in defaults.mdin_contents
-        assert "&cntrl" in defaults.mdin_contents
+        assert 'Minimization input' in defaults.mdin_contents
+        assert 'imin=1' in defaults.mdin_contents
+        assert 'maxcyc=5000' in defaults.mdin_contents
+        assert 'ncyc=2500' in defaults.mdin_contents
+        assert 'ntb=0' in defaults.mdin_contents
+        assert 'cut=10.0' in defaults.mdin_contents
+        assert '&cntrl' in defaults.mdin_contents
 
 
 class TestSanderMinimize:
@@ -105,7 +105,7 @@ class TestSanderMinimize:
         from molecular_simulations.simulate.multires_simulator import sander_minimize
 
         with patch(
-            "molecular_simulations.simulate.multires_simulator.subprocess"
+            'molecular_simulations.simulate.multires_simulator.subprocess'
         ) as mock_subprocess:
             mock_subprocess.run.return_value = MagicMock(returncode=0)
 
@@ -113,14 +113,14 @@ class TestSanderMinimize:
                 tmpdir = Path(tmpdir)
 
                 # Create dummy files
-                (tmpdir / "system.inpcrd").write_text("coords")
-                (tmpdir / "system.prmtop").write_text("topology")
+                (tmpdir / 'system.inpcrd').write_text('coords')
+                (tmpdir / 'system.prmtop').write_text('topology')
 
                 sander_minimize(
                     path=tmpdir,
-                    inpcrd_file="system.inpcrd",
-                    prmtop_file="system.prmtop",
-                    sander_cmd="sander",
+                    inpcrd_file='system.inpcrd',
+                    prmtop_file='system.prmtop',
+                    sander_cmd='sander',
                 )
 
                 # Should have called subprocess.run
@@ -131,24 +131,24 @@ class TestSanderMinimize:
         from molecular_simulations.simulate.multires_simulator import sander_minimize
 
         with patch(
-            "molecular_simulations.simulate.multires_simulator.subprocess"
+            'molecular_simulations.simulate.multires_simulator.subprocess'
         ) as mock_subprocess:
             mock_subprocess.run.return_value = MagicMock(
-                returncode=1, stderr="Error message", stdout="Output"
+                returncode=1, stderr='Error message', stdout='Output'
             )
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmpdir = Path(tmpdir)
 
-                (tmpdir / "system.inpcrd").write_text("coords")
-                (tmpdir / "system.prmtop").write_text("topology")
+                (tmpdir / 'system.inpcrd').write_text('coords')
+                (tmpdir / 'system.prmtop').write_text('topology')
 
-                with pytest.raises(RuntimeError, match="sander error"):
+                with pytest.raises(RuntimeError, match='sander error'):
                     sander_minimize(
                         path=tmpdir,
-                        inpcrd_file="system.inpcrd",
-                        prmtop_file="system.prmtop",
-                        sander_cmd="sander",
+                        inpcrd_file='system.inpcrd',
+                        prmtop_file='system.prmtop',
+                        sander_cmd='sander',
                     )
 
 
@@ -163,40 +163,40 @@ class TestMultiResolutionSimulator:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            pdb_path = tmpdir / "protein.pdb"
+            pdb_path = tmpdir / 'protein.pdb'
             pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
-            cg_params = {"config": {}, "components": {}}
+            cg_params = {'config': {}, 'components': {}}
             aa_params = {
-                "solvation_scheme": "implicit",
-                "protein": True,
-                "rna": False,
-                "dna": False,
-                "phos_protein": False,
-                "use_amber": True,
-                "out": "system.pdb",
-                "equilibration_steps": 1000,
-                "production_steps": 10000,
-                "device_ids": [0],
+                'solvation_scheme': 'implicit',
+                'protein': True,
+                'rna': False,
+                'dna': False,
+                'phos_protein': False,
+                'use_amber': True,
+                'out': 'system.pdb',
+                'equilibration_steps': 1000,
+                'production_steps': 10000,
+                'device_ids': [0],
             }
 
             sim = MultiResolutionSimulator(
                 path=tmpdir,
-                input_pdb="protein.pdb",
+                input_pdb='protein.pdb',
                 n_rounds=3,
                 cg_params=cg_params,
                 aa_params=aa_params,
-                cg2all_bin="convert_cg2all",
+                cg2all_bin='convert_cg2all',
                 cg2all_ckpt=None,
-                amberhome="/fake/amber",
+                amberhome='/fake/amber',
             )
 
             assert sim.path == tmpdir
-            assert sim.input_pdb == "protein.pdb"
+            assert sim.input_pdb == 'protein.pdb'
             assert sim.n_rounds == 3
-            assert sim.amberhome == Path("/fake/amber")
+            assert sim.amberhome == Path('/fake/amber')
 
     def test_multires_init_no_amberhome(self, mock_difficult_dependencies):
         """Test MultiResolutionSimulator initialization without amberhome"""
@@ -206,14 +206,14 @@ class TestMultiResolutionSimulator:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            pdb_path = tmpdir / "protein.pdb"
+            pdb_path = tmpdir / 'protein.pdb'
             pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
             sim = MultiResolutionSimulator(
                 path=tmpdir,
-                input_pdb="protein.pdb",
+                input_pdb='protein.pdb',
                 n_rounds=1,
                 cg_params={},
                 aa_params={},
@@ -247,14 +247,14 @@ test = "value"
 [aa_params]
 solvation_scheme = "explicit"
 """
-            config_path = tmpdir / "config.toml"
+            config_path = tmpdir / 'config.toml'
             config_path.write_text(toml_content)
 
             sim = MultiResolutionSimulator.from_toml(config_path)
 
             assert sim.n_rounds == 2
-            assert sim.cg2all_bin == "convert_cg2all"
-            assert sim.cg2all_ckpt == "/path/to/ckpt"
+            assert sim.cg2all_bin == 'convert_cg2all'
+            assert sim.cg2all_ckpt == '/path/to/ckpt'
 
     def test_multires_from_toml_minimal(self, mock_difficult_dependencies):
         """Test MultiResolutionSimulator.from_toml with minimal config"""
@@ -278,13 +278,13 @@ test = "value"
 [aa_params]
 solvation_scheme = "implicit"
 """
-            config_path = tmpdir / "config.toml"
+            config_path = tmpdir / 'config.toml'
             config_path.write_text(toml_content)
 
             sim = MultiResolutionSimulator.from_toml(config_path)
 
             assert sim.n_rounds == 1
-            assert sim.cg2all_bin == "convert_cg2all"  # Default
+            assert sim.cg2all_bin == 'convert_cg2all'  # Default
             assert sim.cg2all_ckpt is None  # Default
             assert sim.amberhome is None  # Default
 
@@ -295,7 +295,7 @@ solvation_scheme = "implicit"
         )
 
         # Get the parmed mock from our fixture
-        mock_parmed = mock_difficult_dependencies["parmed"]
+        mock_parmed = mock_difficult_dependencies['parmed']
         mock_struc = MagicMock()
         mock_parmed.openmm.load_topology.return_value = mock_struc
 
@@ -307,7 +307,7 @@ solvation_scheme = "implicit"
         ]
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / "protein.pdb"
+            output_path = Path(tmpdir) / 'protein.pdb'
 
             MultiResolutionSimulator.strip_solvent(
                 mock_simulation, output_pdb=str(output_path)
@@ -329,35 +329,35 @@ class TestMultiResolutionSimulatorRunRounds:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            pdb_path = tmpdir / "protein.pdb"
+            pdb_path = tmpdir / 'protein.pdb'
             pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
-            cg_params = {"config": {}, "components": {}}
+            cg_params = {'config': {}, 'components': {}}
             aa_params = {
-                "solvation_scheme": "invalid_scheme",  # Invalid scheme
-                "protein": True,
-                "rna": False,
-                "dna": False,
-                "phos_protein": False,
-                "use_amber": True,
-                "out": "system.pdb",
-                "equilibration_steps": 1000,
-                "production_steps": 10000,
-                "device_ids": [0],
+                'solvation_scheme': 'invalid_scheme',  # Invalid scheme
+                'protein': True,
+                'rna': False,
+                'dna': False,
+                'phos_protein': False,
+                'use_amber': True,
+                'out': 'system.pdb',
+                'equilibration_steps': 1000,
+                'production_steps': 10000,
+                'device_ids': [0],
             }
 
             sim = MultiResolutionSimulator(
                 path=tmpdir,
-                input_pdb="protein.pdb",
+                input_pdb='protein.pdb',
                 n_rounds=1,
                 cg_params=cg_params,
                 aa_params=aa_params,
                 amberhome=None,
             )
 
-            with pytest.raises(AttributeError, match="solvation_scheme must be"):
+            with pytest.raises(AttributeError, match='solvation_scheme must be'):
                 sim.run_rounds()
 
     def test_run_rounds_implicit_solvation(self, mock_difficult_dependencies):
@@ -368,28 +368,28 @@ class TestMultiResolutionSimulatorRunRounds:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            pdb_path = tmpdir / "protein.pdb"
+            pdb_path = tmpdir / 'protein.pdb'
             pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
-            cg_params = {"config": {"path": str(tmpdir)}, "components": {}}
+            cg_params = {'config': {'path': str(tmpdir)}, 'components': {}}
             aa_params = {
-                "solvation_scheme": "implicit",
-                "protein": True,
-                "rna": False,
-                "dna": False,
-                "phos_protein": False,
-                "use_amber": True,
-                "out": "system.pdb",
-                "equilibration_steps": 1000,
-                "production_steps": 10000,
-                "device_ids": [0],
+                'solvation_scheme': 'implicit',
+                'protein': True,
+                'rna': False,
+                'dna': False,
+                'phos_protein': False,
+                'use_amber': True,
+                'out': 'system.pdb',
+                'equilibration_steps': 1000,
+                'production_steps': 10000,
+                'device_ids': [0],
             }
 
             sim = MultiResolutionSimulator(
                 path=tmpdir,
-                input_pdb="protein.pdb",
+                input_pdb='protein.pdb',
                 n_rounds=1,
                 cg_params=cg_params,
                 aa_params=aa_params,
@@ -399,24 +399,24 @@ class TestMultiResolutionSimulatorRunRounds:
             # Mock the builders and simulators
             with (
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSolvent"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSolvent'
                 ) as mock_builder,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSimulator"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSimulator'
                 ) as mock_simulator,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sander_minimize"
-                ) as mock_sander,
+                    'molecular_simulations.simulate.multires_simulator.sander_minimize'
+                ),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.CGBuilder"
+                    'molecular_simulations.simulate.multires_simulator.CGBuilder'
                 ) as mock_cg_builder,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sim"
+                    'molecular_simulations.simulate.multires_simulator.sim'
                 ) as mock_calvados_sim,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.subprocess"
+                    'molecular_simulations.simulate.multires_simulator.subprocess'
                 ) as mock_subprocess,
-                patch.object(MultiResolutionSimulator, "strip_solvent"),
+                patch.object(MultiResolutionSimulator, 'strip_solvent'),
             ):
                 mock_builder_inst = MagicMock()
                 mock_builder.return_value = mock_builder_inst
@@ -428,15 +428,15 @@ class TestMultiResolutionSimulatorRunRounds:
                 mock_cg_builder.from_dict.return_value = mock_cg_builder_inst
 
                 # Mock cg2all subprocess success
-                mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="")
+                mock_subprocess.run.return_value = MagicMock(returncode=0, stdout='')
 
                 # Directories are created by run_rounds, mock needed file reads
                 def create_cg_files(*args, **kwargs):
                     # After CG build runs, create the files it would create
-                    cg_path = tmpdir / "cg_round0"
+                    cg_path = tmpdir / 'cg_round0'
                     if cg_path.exists():
-                        (cg_path / "last_frame.pdb").write_text("mock pdb")
-                        (cg_path / "top.pdb").write_text("mock top")
+                        (cg_path / 'last_frame.pdb').write_text('mock pdb')
+                        (cg_path / 'top.pdb').write_text('mock top')
 
                 mock_calvados_sim.run.side_effect = create_cg_files
 
@@ -456,28 +456,28 @@ class TestMultiResolutionSimulatorRunRounds:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            pdb_path = tmpdir / "protein.pdb"
+            pdb_path = tmpdir / 'protein.pdb'
             pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
-            cg_params = {"config": {"path": str(tmpdir)}, "components": {}}
+            cg_params = {'config': {'path': str(tmpdir)}, 'components': {}}
             aa_params = {
-                "solvation_scheme": "explicit",
-                "protein": True,
-                "rna": False,
-                "dna": False,
-                "phos_protein": False,
-                "use_amber": True,
-                "out": "system.pdb",
-                "equilibration_steps": 1000,
-                "production_steps": 10000,
-                "device_ids": [0],
+                'solvation_scheme': 'explicit',
+                'protein': True,
+                'rna': False,
+                'dna': False,
+                'phos_protein': False,
+                'use_amber': True,
+                'out': 'system.pdb',
+                'equilibration_steps': 1000,
+                'production_steps': 10000,
+                'device_ids': [0],
             }
 
             sim = MultiResolutionSimulator(
                 path=tmpdir,
-                input_pdb="protein.pdb",
+                input_pdb='protein.pdb',
                 n_rounds=1,
                 cg_params=cg_params,
                 aa_params=aa_params,
@@ -486,24 +486,24 @@ class TestMultiResolutionSimulatorRunRounds:
 
             with (
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ExplicitSolvent"
+                    'molecular_simulations.simulate.multires_simulator.ExplicitSolvent'
                 ) as mock_builder,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.Simulator"
+                    'molecular_simulations.simulate.multires_simulator.Simulator'
                 ) as mock_simulator,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sander_minimize"
-                ) as mock_sander,
+                    'molecular_simulations.simulate.multires_simulator.sander_minimize'
+                ),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.CGBuilder"
+                    'molecular_simulations.simulate.multires_simulator.CGBuilder'
                 ) as mock_cg_builder,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sim"
+                    'molecular_simulations.simulate.multires_simulator.sim'
                 ) as mock_calvados_sim,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.subprocess"
+                    'molecular_simulations.simulate.multires_simulator.subprocess'
                 ) as mock_subprocess,
-                patch.object(MultiResolutionSimulator, "strip_solvent"),
+                patch.object(MultiResolutionSimulator, 'strip_solvent'),
             ):
                 mock_builder_inst = MagicMock()
                 mock_builder.return_value = mock_builder_inst
@@ -514,14 +514,14 @@ class TestMultiResolutionSimulatorRunRounds:
                 mock_cg_builder_inst = MagicMock()
                 mock_cg_builder.from_dict.return_value = mock_cg_builder_inst
 
-                mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="")
+                mock_subprocess.run.return_value = MagicMock(returncode=0, stdout='')
 
                 # Directories are created by run_rounds, mock needed file reads
                 def create_cg_files(*args, **kwargs):
-                    cg_path = tmpdir / "cg_round0"
+                    cg_path = tmpdir / 'cg_round0'
                     if cg_path.exists():
-                        (cg_path / "last_frame.pdb").write_text("mock pdb")
-                        (cg_path / "top.pdb").write_text("mock top")
+                        (cg_path / 'last_frame.pdb').write_text('mock pdb')
+                        (cg_path / 'top.pdb').write_text('mock top')
 
                 mock_calvados_sim.run.side_effect = create_cg_files
 
@@ -539,28 +539,28 @@ class TestMultiResolutionSimulatorRunRounds:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            pdb_path = tmpdir / "protein.pdb"
+            pdb_path = tmpdir / 'protein.pdb'
             pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
-            cg_params = {"config": {"path": str(tmpdir)}, "components": {}}
+            cg_params = {'config': {'path': str(tmpdir)}, 'components': {}}
             aa_params = {
-                "solvation_scheme": "implicit",
-                "protein": True,
-                "rna": False,
-                "dna": False,
-                "phos_protein": False,
-                "use_amber": True,
-                "out": "system.pdb",
-                "equilibration_steps": 1000,
-                "production_steps": 10000,
-                "device_ids": [0],
+                'solvation_scheme': 'implicit',
+                'protein': True,
+                'rna': False,
+                'dna': False,
+                'phos_protein': False,
+                'use_amber': True,
+                'out': 'system.pdb',
+                'equilibration_steps': 1000,
+                'production_steps': 10000,
+                'device_ids': [0],
             }
 
             sim = MultiResolutionSimulator(
                 path=tmpdir,
-                input_pdb="protein.pdb",
+                input_pdb='protein.pdb',
                 n_rounds=1,
                 cg_params=cg_params,
                 aa_params=aa_params,
@@ -569,24 +569,22 @@ class TestMultiResolutionSimulatorRunRounds:
 
             with (
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSolvent"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSolvent'
                 ) as mock_builder,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSimulator"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSimulator'
                 ) as mock_simulator,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sander_minimize"
-                ) as mock_sander,
+                    'molecular_simulations.simulate.multires_simulator.sander_minimize'
+                ),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.CGBuilder"
+                    'molecular_simulations.simulate.multires_simulator.CGBuilder'
                 ) as mock_cg_builder,
+                patch('molecular_simulations.simulate.multires_simulator.sim'),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sim"
-                ) as mock_calvados_sim,
-                patch(
-                    "molecular_simulations.simulate.multires_simulator.subprocess"
+                    'molecular_simulations.simulate.multires_simulator.subprocess'
                 ) as mock_subprocess,
-                patch.object(MultiResolutionSimulator, "strip_solvent"),
+                patch.object(MultiResolutionSimulator, 'strip_solvent'),
             ):
                 mock_builder_inst = MagicMock()
                 mock_builder.return_value = mock_builder_inst
@@ -599,16 +597,16 @@ class TestMultiResolutionSimulatorRunRounds:
 
                 # Mock cg2all subprocess failure
                 def create_files_then_fail(*args, **kwargs):
-                    cg_path = tmpdir / "cg_round0"
+                    cg_path = tmpdir / 'cg_round0'
                     if cg_path.exists():
-                        (cg_path / "top.pdb").write_text("mock top")
+                        (cg_path / 'top.pdb').write_text('mock top')
                     return MagicMock(
-                        returncode=1, stderr="cg2all error message", stdout=""
+                        returncode=1, stderr='cg2all error message', stdout=''
                     )
 
                 mock_subprocess.run.side_effect = create_files_then_fail
 
-                with pytest.raises(RuntimeError, match="cg2all error"):
+                with pytest.raises(RuntimeError, match='cg2all error'):
                     sim.run_rounds()
 
     def test_run_rounds_pdb4amber_error(self, mock_difficult_dependencies):
@@ -619,28 +617,28 @@ class TestMultiResolutionSimulatorRunRounds:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            pdb_path = tmpdir / "protein.pdb"
+            pdb_path = tmpdir / 'protein.pdb'
             pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
-            cg_params = {"config": {"path": str(tmpdir)}, "components": {}}
+            cg_params = {'config': {'path': str(tmpdir)}, 'components': {}}
             aa_params = {
-                "solvation_scheme": "implicit",
-                "protein": True,
-                "rna": False,
-                "dna": False,
-                "phos_protein": False,
-                "use_amber": True,
-                "out": "system.pdb",
-                "equilibration_steps": 1000,
-                "production_steps": 10000,
-                "device_ids": [0],
+                'solvation_scheme': 'implicit',
+                'protein': True,
+                'rna': False,
+                'dna': False,
+                'phos_protein': False,
+                'use_amber': True,
+                'out': 'system.pdb',
+                'equilibration_steps': 1000,
+                'production_steps': 10000,
+                'device_ids': [0],
             }
 
             sim = MultiResolutionSimulator(
                 path=tmpdir,
-                input_pdb="protein.pdb",
+                input_pdb='protein.pdb',
                 n_rounds=1,
                 cg_params=cg_params,
                 aa_params=aa_params,
@@ -649,24 +647,22 @@ class TestMultiResolutionSimulatorRunRounds:
 
             with (
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSolvent"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSolvent'
                 ) as mock_builder,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSimulator"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSimulator'
                 ) as mock_simulator,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sander_minimize"
-                ) as mock_sander,
+                    'molecular_simulations.simulate.multires_simulator.sander_minimize'
+                ),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.CGBuilder"
+                    'molecular_simulations.simulate.multires_simulator.CGBuilder'
                 ) as mock_cg_builder,
+                patch('molecular_simulations.simulate.multires_simulator.sim'),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sim"
-                ) as mock_calvados_sim,
-                patch(
-                    "molecular_simulations.simulate.multires_simulator.subprocess"
+                    'molecular_simulations.simulate.multires_simulator.subprocess'
                 ) as mock_subprocess,
-                patch.object(MultiResolutionSimulator, "strip_solvent"),
+                patch.object(MultiResolutionSimulator, 'strip_solvent'),
             ):
                 mock_builder_inst = MagicMock()
                 mock_builder.return_value = mock_builder_inst
@@ -681,21 +677,21 @@ class TestMultiResolutionSimulatorRunRounds:
                 call_count = [0]
 
                 def subprocess_side_effect(*args, **kwargs):
-                    cg_path = tmpdir / "cg_round0"
+                    cg_path = tmpdir / 'cg_round0'
                     if cg_path.exists():
-                        (cg_path / "top.pdb").write_text("mock top")
-                        (cg_path / "last_frame.pdb").write_text("mock pdb")
+                        (cg_path / 'top.pdb').write_text('mock top')
+                        (cg_path / 'last_frame.pdb').write_text('mock pdb')
                     call_count[0] += 1
                     if call_count[0] == 1:
-                        return MagicMock(returncode=0, stdout="", stderr="")
+                        return MagicMock(returncode=0, stdout='', stderr='')
                     else:
                         return MagicMock(
-                            returncode=1, stdout="", stderr="pdb4amber error"
+                            returncode=1, stdout='', stderr='pdb4amber error'
                         )
 
                 mock_subprocess.run.side_effect = subprocess_side_effect
 
-                with pytest.raises(RuntimeError, match="pdb4amber error"):
+                with pytest.raises(RuntimeError, match='pdb4amber error'):
                     sim.run_rounds()
 
     def test_run_rounds_multiple_rounds(self, mock_difficult_dependencies):
@@ -706,28 +702,28 @@ class TestMultiResolutionSimulatorRunRounds:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            pdb_path = tmpdir / "protein.pdb"
+            pdb_path = tmpdir / 'protein.pdb'
             pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
-            cg_params = {"config": {"path": str(tmpdir)}, "components": {}}
+            cg_params = {'config': {'path': str(tmpdir)}, 'components': {}}
             aa_params = {
-                "solvation_scheme": "implicit",
-                "protein": True,
-                "rna": False,
-                "dna": False,
-                "phos_protein": False,
-                "use_amber": True,
-                "out": "system.pdb",
-                "equilibration_steps": 1000,
-                "production_steps": 10000,
-                "device_ids": [0],
+                'solvation_scheme': 'implicit',
+                'protein': True,
+                'rna': False,
+                'dna': False,
+                'phos_protein': False,
+                'use_amber': True,
+                'out': 'system.pdb',
+                'equilibration_steps': 1000,
+                'production_steps': 10000,
+                'device_ids': [0],
             }
 
             sim = MultiResolutionSimulator(
                 path=tmpdir,
-                input_pdb="protein.pdb",
+                input_pdb='protein.pdb',
                 n_rounds=3,
                 cg_params=cg_params,
                 aa_params=aa_params,
@@ -736,24 +732,22 @@ class TestMultiResolutionSimulatorRunRounds:
 
             with (
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSolvent"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSolvent'
                 ) as mock_builder,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSimulator"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSimulator'
                 ) as mock_simulator,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sander_minimize"
-                ) as mock_sander,
+                    'molecular_simulations.simulate.multires_simulator.sander_minimize'
+                ),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.CGBuilder"
+                    'molecular_simulations.simulate.multires_simulator.CGBuilder'
                 ) as mock_cg_builder,
+                patch('molecular_simulations.simulate.multires_simulator.sim'),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sim"
-                ) as mock_calvados_sim,
-                patch(
-                    "molecular_simulations.simulate.multires_simulator.subprocess"
+                    'molecular_simulations.simulate.multires_simulator.subprocess'
                 ) as mock_subprocess,
-                patch.object(MultiResolutionSimulator, "strip_solvent"),
+                patch.object(MultiResolutionSimulator, 'strip_solvent'),
             ):
                 mock_builder_inst = MagicMock()
                 mock_builder.return_value = mock_builder_inst
@@ -769,13 +763,13 @@ class TestMultiResolutionSimulatorRunRounds:
 
                 def create_cg_files_multi(*args, **kwargs):
                     r = round_counter[0]
-                    cg_path = tmpdir / f"cg_round{r}"
+                    cg_path = tmpdir / f'cg_round{r}'
                     if cg_path.exists():
-                        (cg_path / "top.pdb").write_text("mock top")
-                        (cg_path / "last_frame.pdb").write_text("mock pdb")
-                        (cg_path / "last_frame.amber.pdb").write_text("mock amber pdb")
+                        (cg_path / 'top.pdb').write_text('mock top')
+                        (cg_path / 'last_frame.pdb').write_text('mock pdb')
+                        (cg_path / 'last_frame.amber.pdb').write_text('mock amber pdb')
                     round_counter[0] += 1
-                    return MagicMock(returncode=0, stdout="mock output")
+                    return MagicMock(returncode=0, stdout='mock output')
 
                 mock_subprocess.run.side_effect = create_cg_files_multi
 
@@ -796,54 +790,52 @@ class TestMultiResolutionSimulatorRunRounds:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            pdb_path = tmpdir / "protein.pdb"
+            pdb_path = tmpdir / 'protein.pdb'
             pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
-            cg_params = {"config": {"path": str(tmpdir)}, "components": {}}
+            cg_params = {'config': {'path': str(tmpdir)}, 'components': {}}
             aa_params = {
-                "solvation_scheme": "implicit",
-                "protein": True,
-                "rna": False,
-                "dna": False,
-                "phos_protein": False,
-                "use_amber": True,
-                "out": "system.pdb",
-                "equilibration_steps": 1000,
-                "production_steps": 10000,
-                "device_ids": [0],
+                'solvation_scheme': 'implicit',
+                'protein': True,
+                'rna': False,
+                'dna': False,
+                'phos_protein': False,
+                'use_amber': True,
+                'out': 'system.pdb',
+                'equilibration_steps': 1000,
+                'production_steps': 10000,
+                'device_ids': [0],
             }
 
             sim = MultiResolutionSimulator(
                 path=tmpdir,
-                input_pdb="protein.pdb",
+                input_pdb='protein.pdb',
                 n_rounds=1,
                 cg_params=cg_params,
                 aa_params=aa_params,
-                amberhome="/custom/amber",
+                amberhome='/custom/amber',
             )
 
             with (
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSolvent"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSolvent'
                 ) as mock_builder,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSimulator"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSimulator'
                 ) as mock_simulator,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sander_minimize"
+                    'molecular_simulations.simulate.multires_simulator.sander_minimize'
                 ) as mock_sander,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.CGBuilder"
+                    'molecular_simulations.simulate.multires_simulator.CGBuilder'
                 ) as mock_cg_builder,
+                patch('molecular_simulations.simulate.multires_simulator.sim'),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sim"
-                ) as mock_calvados_sim,
-                patch(
-                    "molecular_simulations.simulate.multires_simulator.subprocess"
+                    'molecular_simulations.simulate.multires_simulator.subprocess'
                 ) as mock_subprocess,
-                patch.object(MultiResolutionSimulator, "strip_solvent"),
+                patch.object(MultiResolutionSimulator, 'strip_solvent'),
             ):
                 mock_builder_inst = MagicMock()
                 mock_builder.return_value = mock_builder_inst
@@ -855,11 +847,11 @@ class TestMultiResolutionSimulatorRunRounds:
                 mock_cg_builder.from_dict.return_value = mock_cg_builder_inst
 
                 def create_cg_files(*args, **kwargs):
-                    cg_path = tmpdir / "cg_round0"
+                    cg_path = tmpdir / 'cg_round0'
                     if cg_path.exists():
-                        (cg_path / "top.pdb").write_text("mock top")
-                        (cg_path / "last_frame.pdb").write_text("mock pdb")
-                    return MagicMock(returncode=0, stdout="mock output")
+                        (cg_path / 'top.pdb').write_text('mock top')
+                        (cg_path / 'last_frame.pdb').write_text('mock pdb')
+                    return MagicMock(returncode=0, stdout='mock output')
 
                 mock_subprocess.run.side_effect = create_cg_files
 
@@ -868,7 +860,7 @@ class TestMultiResolutionSimulatorRunRounds:
                 # sander should be called with amberhome path
                 mock_sander.assert_called_once()
                 call_args = mock_sander.call_args
-                assert "/custom/amber/bin/sander" in call_args[0][3]
+                assert '/custom/amber/bin/sander' in call_args[0][3]
 
     def test_run_rounds_with_cg2all_checkpoint(self, mock_difficult_dependencies):
         """Test run_rounds includes cg2all checkpoint when provided."""
@@ -878,55 +870,53 @@ class TestMultiResolutionSimulatorRunRounds:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            pdb_path = tmpdir / "protein.pdb"
+            pdb_path = tmpdir / 'protein.pdb'
             pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
-            cg_params = {"config": {"path": str(tmpdir)}, "components": {}}
+            cg_params = {'config': {'path': str(tmpdir)}, 'components': {}}
             aa_params = {
-                "solvation_scheme": "implicit",
-                "protein": True,
-                "rna": False,
-                "dna": False,
-                "phos_protein": False,
-                "use_amber": True,
-                "out": "system.pdb",
-                "equilibration_steps": 1000,
-                "production_steps": 10000,
-                "device_ids": [0],
+                'solvation_scheme': 'implicit',
+                'protein': True,
+                'rna': False,
+                'dna': False,
+                'phos_protein': False,
+                'use_amber': True,
+                'out': 'system.pdb',
+                'equilibration_steps': 1000,
+                'production_steps': 10000,
+                'device_ids': [0],
             }
 
             sim = MultiResolutionSimulator(
                 path=tmpdir,
-                input_pdb="protein.pdb",
+                input_pdb='protein.pdb',
                 n_rounds=1,
                 cg_params=cg_params,
                 aa_params=aa_params,
-                cg2all_ckpt="/path/to/checkpoint.ckpt",
+                cg2all_ckpt='/path/to/checkpoint.ckpt',
                 amberhome=None,
             )
 
             with (
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSolvent"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSolvent'
                 ) as mock_builder,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSimulator"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSimulator'
                 ) as mock_simulator,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sander_minimize"
-                ) as mock_sander,
+                    'molecular_simulations.simulate.multires_simulator.sander_minimize'
+                ),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.CGBuilder"
+                    'molecular_simulations.simulate.multires_simulator.CGBuilder'
                 ) as mock_cg_builder,
+                patch('molecular_simulations.simulate.multires_simulator.sim'),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sim"
-                ) as mock_calvados_sim,
-                patch(
-                    "molecular_simulations.simulate.multires_simulator.subprocess"
+                    'molecular_simulations.simulate.multires_simulator.subprocess'
                 ) as mock_subprocess,
-                patch.object(MultiResolutionSimulator, "strip_solvent"),
+                patch.object(MultiResolutionSimulator, 'strip_solvent'),
             ):
                 mock_builder_inst = MagicMock()
                 mock_builder.return_value = mock_builder_inst
@@ -938,11 +928,11 @@ class TestMultiResolutionSimulatorRunRounds:
                 mock_cg_builder.from_dict.return_value = mock_cg_builder_inst
 
                 def create_cg_files(*args, **kwargs):
-                    cg_path = tmpdir / "cg_round0"
+                    cg_path = tmpdir / 'cg_round0'
                     if cg_path.exists():
-                        (cg_path / "top.pdb").write_text("mock top")
-                        (cg_path / "last_frame.pdb").write_text("mock pdb")
-                    return MagicMock(returncode=0, stdout="mock output")
+                        (cg_path / 'top.pdb').write_text('mock top')
+                        (cg_path / 'last_frame.pdb').write_text('mock pdb')
+                    return MagicMock(returncode=0, stdout='mock output')
 
                 mock_subprocess.run.side_effect = create_cg_files
 
@@ -951,8 +941,8 @@ class TestMultiResolutionSimulatorRunRounds:
                 # cg2all subprocess should include --ckpt argument
                 cg2all_call = mock_subprocess.run.call_args_list[0]
                 command = cg2all_call[0][0]
-                assert "--ckpt" in command
-                assert "/path/to/checkpoint.ckpt" in command
+                assert '--ckpt' in command
+                assert '/path/to/checkpoint.ckpt' in command
 
     def test_run_rounds_uses_previous_round_pdb(self, mock_difficult_dependencies):
         """Test run_rounds uses CG output from previous round as input."""
@@ -962,28 +952,28 @@ class TestMultiResolutionSimulatorRunRounds:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
-            pdb_path = tmpdir / "protein.pdb"
+            pdb_path = tmpdir / 'protein.pdb'
             pdb_path.write_text(
-                "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
-            cg_params = {"config": {"path": str(tmpdir)}, "components": {}}
+            cg_params = {'config': {'path': str(tmpdir)}, 'components': {}}
             aa_params = {
-                "solvation_scheme": "implicit",
-                "protein": True,
-                "rna": False,
-                "dna": False,
-                "phos_protein": False,
-                "use_amber": True,
-                "out": "system.pdb",
-                "equilibration_steps": 1000,
-                "production_steps": 10000,
-                "device_ids": [0],
+                'solvation_scheme': 'implicit',
+                'protein': True,
+                'rna': False,
+                'dna': False,
+                'phos_protein': False,
+                'use_amber': True,
+                'out': 'system.pdb',
+                'equilibration_steps': 1000,
+                'production_steps': 10000,
+                'device_ids': [0],
             }
 
             sim = MultiResolutionSimulator(
                 path=tmpdir,
-                input_pdb="protein.pdb",
+                input_pdb='protein.pdb',
                 n_rounds=2,
                 cg_params=cg_params,
                 aa_params=aa_params,
@@ -992,24 +982,22 @@ class TestMultiResolutionSimulatorRunRounds:
 
             with (
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSolvent"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSolvent'
                 ) as mock_builder,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.ImplicitSimulator"
+                    'molecular_simulations.simulate.multires_simulator.ImplicitSimulator'
                 ) as mock_simulator,
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sander_minimize"
-                ) as mock_sander,
+                    'molecular_simulations.simulate.multires_simulator.sander_minimize'
+                ),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.CGBuilder"
+                    'molecular_simulations.simulate.multires_simulator.CGBuilder'
                 ) as mock_cg_builder,
+                patch('molecular_simulations.simulate.multires_simulator.sim'),
                 patch(
-                    "molecular_simulations.simulate.multires_simulator.sim"
-                ) as mock_calvados_sim,
-                patch(
-                    "molecular_simulations.simulate.multires_simulator.subprocess"
+                    'molecular_simulations.simulate.multires_simulator.subprocess'
                 ) as mock_subprocess,
-                patch.object(MultiResolutionSimulator, "strip_solvent"),
+                patch.object(MultiResolutionSimulator, 'strip_solvent'),
             ):
                 mock_builder_inst = MagicMock()
                 mock_builder.return_value = mock_builder_inst
@@ -1024,13 +1012,13 @@ class TestMultiResolutionSimulatorRunRounds:
 
                 def create_cg_files_multi(*args, **kwargs):
                     r = round_counter[0]
-                    cg_path = tmpdir / f"cg_round{r}"
+                    cg_path = tmpdir / f'cg_round{r}'
                     if cg_path.exists():
-                        (cg_path / "top.pdb").write_text("mock top")
-                        (cg_path / "last_frame.pdb").write_text("mock pdb")
-                        (cg_path / "last_frame.amber.pdb").write_text("mock amber pdb")
+                        (cg_path / 'top.pdb').write_text('mock top')
+                        (cg_path / 'last_frame.pdb').write_text('mock pdb')
+                        (cg_path / 'last_frame.amber.pdb').write_text('mock amber pdb')
                     round_counter[0] += 1
-                    return MagicMock(returncode=0, stdout="mock output")
+                    return MagicMock(returncode=0, stdout='mock output')
 
                 mock_subprocess.run.side_effect = create_cg_files_multi
 
@@ -1039,7 +1027,7 @@ class TestMultiResolutionSimulatorRunRounds:
                 # Check input PDB for second round came from cg_round0
                 second_call = mock_builder.call_args_list[1]
                 input_pdb = second_call[0][1]  # Second positional arg is input_pdb
-                assert "cg_round0" in input_pdb
+                assert 'cg_round0' in input_pdb
 
 
 class TestSanderMinDefaultsCustom:
@@ -1064,9 +1052,9 @@ class TestSanderMinDefaultsCustom:
         assert defaults.maxcyc == 10000
         assert defaults.ncyc == 5000
         assert defaults.cut == 12.0
-        assert "maxcyc=10000" in defaults.mdin_contents
-        assert "ncyc=5000" in defaults.mdin_contents
-        assert "cut=12.0" in defaults.mdin_contents
+        assert 'maxcyc=10000' in defaults.mdin_contents
+        assert 'ncyc=5000' in defaults.mdin_contents
+        assert 'cut=12.0' in defaults.mdin_contents
 
 
 class TestStripSolventMask:
@@ -1078,7 +1066,7 @@ class TestStripSolventMask:
             MultiResolutionSimulator,
         )
 
-        mock_parmed = mock_difficult_dependencies["parmed"]
+        mock_parmed = mock_difficult_dependencies['parmed']
         mock_struc = MagicMock()
         mock_parmed.openmm.load_topology.return_value = mock_struc
 
@@ -1090,7 +1078,7 @@ class TestStripSolventMask:
         ]
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            output_path = Path(tmpdir) / "protein.pdb"
+            output_path = Path(tmpdir) / 'protein.pdb'
 
             MultiResolutionSimulator.strip_solvent(
                 mock_simulation, output_pdb=str(output_path)
@@ -1100,10 +1088,10 @@ class TestStripSolventMask:
             strip_call = mock_struc.strip.call_args
             mask = strip_call[0][0]
             # Mask should contain common solvent names
-            assert "WAT" in mask
-            assert "HOH" in mask
-            assert "NA" in mask or "Na+" in mask
+            assert 'WAT' in mask
+            assert 'HOH' in mask
+            assert 'NA' in mask or 'Na+' in mask
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

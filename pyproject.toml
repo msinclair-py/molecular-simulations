@@ -58,7 +58,8 @@ dev = [
     'pytest>=7.0',
     'coverage[toml]>=7.0',
     'numpy>=1.22',
-    'ruff>=0.11',
+    'ruff>=0.15',
+    'pre-commit>=3.5',
     'gemmi',
 ]
 
@@ -111,12 +112,15 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # re-exports in __init__ are intentional
+# Nested `with patch(...)` blocks are idiomatic and readable in tests.
+"tests/**" = ["SIM117"]
 
 [tool.ruff.lint.isort]
 known-first-party = ['molecular_simulations']
 
 [tool.ruff.format]
 docstring-code-format = true
+quote-style = 'single'  # preserve the project's existing single-quote style
 
 [tool.coverage.run]
 source = ['src/molecular_simulations']

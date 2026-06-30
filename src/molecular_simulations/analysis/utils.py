@@ -12,6 +12,7 @@ import numpy as np
 
 OptPath = Path | str | None
 
+
 class EmbedData:
     """Embed data into the beta-factor column of a PDB file.
 

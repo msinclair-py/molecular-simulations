@@ -41,7 +41,7 @@ class TestAssignChainIds:
 
         # hasattr returns False to trigger adding chainIDs
         with patch(
-            "molecular_simulations.utils.amber_utils.hasattr", return_value=False
+            'molecular_simulations.utils.amber_utils.hasattr', return_value=False
         ):
             result = assign_chainids(mock_u)
 
@@ -59,7 +59,7 @@ class TestAssignChainIds:
 
         # hasattr returns True (chainIDs already exists)
         with patch(
-            "molecular_simulations.utils.amber_utils.hasattr", return_value=True
+            'molecular_simulations.utils.amber_utils.hasattr', return_value=True
         ):
             result = assign_chainids(mock_u)
 
@@ -90,19 +90,19 @@ class TestAssignChainIds:
         mock_u.select_atoms.return_value = mock_terminus
 
         with patch(
-            "molecular_simulations.utils.amber_utils.hasattr", return_value=False
+            'molecular_simulations.utils.amber_utils.hasattr', return_value=False
         ):
             result = assign_chainids(mock_u)
 
         assert result == mock_u
         # First 3 residues should be chain A
-        assert residues[0].atoms.chainIDs == "A"
-        assert residues[1].atoms.chainIDs == "A"
-        assert residues[2].atoms.chainIDs == "A"
+        assert residues[0].atoms.chainIDs == 'A'
+        assert residues[1].atoms.chainIDs == 'A'
+        assert residues[2].atoms.chainIDs == 'A'
         # Next 3 residues should be chain B
-        assert residues[3].atoms.chainIDs == "B"
-        assert residues[4].atoms.chainIDs == "B"
-        assert residues[5].atoms.chainIDs == "B"
+        assert residues[3].atoms.chainIDs == 'B'
+        assert residues[4].atoms.chainIDs == 'B'
+        assert residues[5].atoms.chainIDs == 'B'
 
     def test_assign_chainids_more_than_26_chains(self):
         """Test chain labeling for more than 26 chains (requires double letters)"""
@@ -126,19 +126,19 @@ class TestAssignChainIds:
         mock_u.select_atoms.return_value = mock_terminus
 
         with patch(
-            "molecular_simulations.utils.amber_utils.hasattr", return_value=False
+            'molecular_simulations.utils.amber_utils.hasattr', return_value=False
         ):
-            result = assign_chainids(mock_u)
+            assign_chainids(mock_u)
 
         # First 26 residues should have single letter IDs (A-Z)
         for i in range(26):
             assert residues[i].atoms.chainIDs == string.ascii_uppercase[i]
 
         # Residues 26-29 should have double letter IDs (AA, AB, AC, AD)
-        assert residues[26].atoms.chainIDs == "AA"
-        assert residues[27].atoms.chainIDs == "AB"
-        assert residues[28].atoms.chainIDs == "AC"
-        assert residues[29].atoms.chainIDs == "AD"
+        assert residues[26].atoms.chainIDs == 'AA'
+        assert residues[27].atoms.chainIDs == 'AB'
+        assert residues[28].atoms.chainIDs == 'AC'
+        assert residues[29].atoms.chainIDs == 'AD'
 
     def test_assign_chainids_custom_terminus_selection(self):
         """Test with custom terminus selection string"""
@@ -151,15 +151,13 @@ class TestAssignChainIds:
         mock_u.select_atoms.return_value = mock_terminus
 
         with patch(
-            "molecular_simulations.utils.amber_utils.hasattr", return_value=False
+            'molecular_simulations.utils.amber_utils.hasattr', return_value=False
         ):
-            result = assign_chainids(
-                mock_u, terminus_selection="name C and resname NME"
-            )
+            assign_chainids(mock_u, terminus_selection='name C and resname NME')
 
         # Should call select_atoms with custom selection
-        mock_u.select_atoms.assert_called_with("name C and resname NME")
+        mock_u.select_atoms.assert_called_with('name C and resname NME')
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

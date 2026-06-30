@@ -40,7 +40,7 @@ END
 class TestBuildToSimulate:
     """Test that builders create valid inputs for simulators"""
 
-    @patch.dict("os.environ", {"AMBERHOME": "/mock/amber/path"})
+    @patch.dict('os.environ', {'AMBERHOME': '/mock/amber/path'})
     @pytest.mark.requires_amber
     def test_implicit_solvent_builder_creates_simulator_inputs(self, tmp_path):
         """Test ImplicitSolvent builder creates files that Minimizer can use"""
@@ -48,34 +48,34 @@ class TestBuildToSimulate:
         from molecular_simulations.simulate import Minimizer
 
         # Create sample PDB
-        sample_pdb = create_sample_pdb(tmp_path / "input.pdb")
+        sample_pdb = create_sample_pdb(tmp_path / 'input.pdb')
 
         # Build system
         builder = ImplicitSolvent(
-            path=tmp_path, pdb=sample_pdb, protein=True, out="system.pdb"
+            path=tmp_path, pdb=sample_pdb, protein=True, out='system.pdb'
         )
 
         # Mock tleap execution
-        with patch.object(builder, "temp_tleap") as mock_tleap:
+        with patch.object(builder, 'temp_tleap'):
             # Create dummy output files
-            (tmp_path / "system.pdb").write_text(sample_pdb.read_text())
-            (tmp_path / "system.prmtop").write_text("%FLAG POINTERS\n")
-            (tmp_path / "system.inpcrd").write_text("coords\n")
+            (tmp_path / 'system.pdb').write_text(sample_pdb.read_text())
+            (tmp_path / 'system.prmtop').write_text('%FLAG POINTERS\n')
+            (tmp_path / 'system.inpcrd').write_text('coords\n')
 
             builder.build()
 
         # Verify files exist
-        assert (tmp_path / "system.pdb").exists()
-        assert (tmp_path / "system.prmtop").exists()
-        assert (tmp_path / "system.inpcrd").exists()
+        assert (tmp_path / 'system.pdb').exists()
+        assert (tmp_path / 'system.prmtop').exists()
+        assert (tmp_path / 'system.inpcrd').exists()
 
         # These files should be usable by Minimizer
         # (We can't actually run minimization without OpenMM, but check init)
         minimizer = Minimizer(
-            topology=tmp_path / "system.prmtop",
-            coordinates=tmp_path / "system.inpcrd",
-            out="min.pdb",
-            platform="CPU",
+            topology=tmp_path / 'system.prmtop',
+            coordinates=tmp_path / 'system.inpcrd',
+            out='min.pdb',
+            platform='CPU',
         )
         assert minimizer.topology.exists()
         assert minimizer.coordinates.exists()
@@ -87,10 +87,10 @@ class TestBuildToSimulate:
         from molecular_simulations.analysis import SASA
 
         # Create sample PDB
-        sample_pdb = create_sample_pdb(tmp_path / "input.pdb")
+        sample_pdb = create_sample_pdb(tmp_path / 'input.pdb')
 
         # Use the sample PDB as if it were builder output
-        output_pdb = tmp_path / "built_system.pdb"
+        output_pdb = tmp_path / 'built_system.pdb'
         shutil.copy(sample_pdb, output_pdb)
 
         # Should be loadable by MDAnalysis
@@ -98,7 +98,7 @@ class TestBuildToSimulate:
         assert u.atoms.n_atoms > 0
 
         # Should be usable for analysis (though we mock the analysis)
-        with patch("molecular_simulations.analysis.sasa.KDTree"):
+        with patch('molecular_simulations.analysis.sasa.KDTree'):
             sasa = SASA(u.atoms[:5])  # Just use first 5 atoms
             assert sasa.ag.n_atoms == 5
 
@@ -111,7 +111,7 @@ class TestSimulateToAnalyze:
         import MDAnalysis as mda
 
         # Create a minimal PDB for topology
-        topology = create_sample_pdb(tmp_path / "topology.pdb")
+        topology = create_sample_pdb(tmp_path / 'topology.pdb')
 
         # Create mock universe (in real test, would load actual DCD)
         u = mda.Universe(str(topology))
@@ -119,28 +119,28 @@ class TestSimulateToAnalyze:
         # Analysis tools should be able to work with this
         from molecular_simulations.analysis import SASA
 
-        with patch("molecular_simulations.analysis.sasa.KDTree"):
+        with patch('molecular_simulations.analysis.sasa.KDTree'):
             sasa = SASA(u.atoms)
             sasa._prepare()
-            assert hasattr(sasa.results, "sasa")
+            assert hasattr(sasa.results, 'sasa')
 
     def test_energy_log_parseable(self, tmp_path):
         """Test that simulation logs can be parsed for analysis"""
         # Simulate what a log file might look like
-        log_content = "Step\tPotential Energy (kJ/mole)\tTemperature (K)\n"
+        log_content = 'Step\tPotential Energy (kJ/mole)\tTemperature (K)\n'
         for i in range(10):
-            log_content += f"{i * 1000}\t{-5000 + np.random.rand() * 100}\t{300 + np.random.rand() * 5}\n"
+            log_content += f'{i * 1000}\t{-5000 + np.random.rand() * 100}\t{300 + np.random.rand() * 5}\n'
 
-        log_file = tmp_path / "simulation.log"
+        log_file = tmp_path / 'simulation.log'
         log_file.write_text(log_content)
 
         # Should be parseable
         import pandas as pd
 
-        df = pd.read_csv(log_file, sep="\t")
+        df = pd.read_csv(log_file, sep='\t')
 
-        assert "Step" in df.columns
-        assert "Potential Energy (kJ/mole)" in df.columns
+        assert 'Step' in df.columns
+        assert 'Potential Energy (kJ/mole)' in df.columns
         assert len(df) == 10
 
 
@@ -153,7 +153,7 @@ class TestFullPipeline:
         import numpy as np
 
         # Create sample PDB
-        sample_pdb = create_sample_pdb(tmp_path / "structure.pdb")
+        sample_pdb = create_sample_pdb(tmp_path / 'structure.pdb')
 
         # Load structure (as if from builder)
         u = mda.Universe(str(sample_pdb))
@@ -163,7 +163,7 @@ class TestFullPipeline:
         assert com.shape == (3,)
 
         # Save result
-        result_file = tmp_path / "analysis_result.npy"
+        result_file = tmp_path / 'analysis_result.npy'
         np.save(result_file, com)
 
         # Verify saved result
@@ -183,15 +183,15 @@ class TestFullPipeline:
 
         for i in range(3):
             data = np.random.rand(n_frames, n_features)
-            np.save(tmp_path / f"traj_{i}.npy", data)
+            np.save(tmp_path / f'traj_{i}.npy', data)
 
         # Run clustering analysis
         with patch(
-            "molecular_simulations.analysis.autocluster.silhouette_score"
+            'molecular_simulations.analysis.autocluster.silhouette_score'
         ) as mock_score:
             mock_score.return_value = 0.5
 
-            auto_km = AutoKMeans(tmp_path, pattern="traj_", max_clusters=5, stride=1)
+            auto_km = AutoKMeans(tmp_path, pattern='traj_', max_clusters=5, stride=1)
 
             # Run clustering
             auto_km.reduce_dimensionality()
@@ -201,8 +201,8 @@ class TestFullPipeline:
             auto_km.save_labels()
 
         # Verify outputs exist
-        assert (tmp_path / "cluster_centers.json").exists()
-        assert (tmp_path / "cluster_assignments.parquet").exists()
+        assert (tmp_path / 'cluster_centers.json').exists()
+        assert (tmp_path / 'cluster_assignments.parquet').exists()
 
     @pytest.mark.slow
     def test_fingerprint_calculation_workflow(self, tmp_path):
@@ -210,16 +210,16 @@ class TestFullPipeline:
         from molecular_simulations.analysis.fingerprinter import Fingerprinter
 
         # Create sample PDB
-        sample_pdb = create_sample_pdb(tmp_path / "structure.pdb")
+        sample_pdb = create_sample_pdb(tmp_path / 'structure.pdb')
 
         # This test would normally require OpenMM and proper topology
         # Here we just verify the workflow structure
 
         # Mock the OpenMM parts
         with (
-            patch("molecular_simulations.analysis.fingerprinter.AmberPrmtopFile"),
+            patch('molecular_simulations.analysis.fingerprinter.AmberPrmtopFile'),
             patch(
-                "molecular_simulations.analysis.fingerprinter.mda.Universe"
+                'molecular_simulations.analysis.fingerprinter.mda.Universe'
             ) as mock_u,
         ):
             # Setup mocks
@@ -234,7 +234,7 @@ class TestFullPipeline:
             mock_u.return_value = mock_universe
 
             fp = Fingerprinter(
-                topology=sample_pdb, target_selection="segid A", out_path=tmp_path
+                topology=sample_pdb, target_selection='segid A', out_path=tmp_path
             )
 
             # Verify workflow can be set up
@@ -250,14 +250,14 @@ class TestDataFlow:
         import MDAnalysis as mda
 
         # Create sample PDB
-        sample_pdb = create_sample_pdb(tmp_path / "structure.pdb")
+        sample_pdb = create_sample_pdb(tmp_path / 'structure.pdb')
 
         # Load coordinates
         u = mda.Universe(str(sample_pdb))
         original_coords = u.atoms.positions.copy()
 
         # Perform some analysis (that shouldn't modify coords)
-        com = u.atoms.center_of_mass()
+        u.atoms.center_of_mass()
 
         # Verify coordinates unchanged
         assert np.allclose(u.atoms.positions, original_coords)
@@ -267,7 +267,7 @@ class TestDataFlow:
         import MDAnalysis as mda
 
         # Create sample PDB
-        sample_pdb = create_sample_pdb(tmp_path / "structure.pdb")
+        sample_pdb = create_sample_pdb(tmp_path / 'structure.pdb')
 
         u = mda.Universe(str(sample_pdb))
 
@@ -283,13 +283,13 @@ class TestDataFlow:
         import MDAnalysis as mda
 
         # Create sample PDB
-        sample_pdb = create_sample_pdb(tmp_path / "structure.pdb")
+        sample_pdb = create_sample_pdb(tmp_path / 'structure.pdb')
 
         u = mda.Universe(str(sample_pdb))
 
         # Different selection methods should give same result
-        sel1 = u.select_atoms("protein")
-        sel2 = u.select_atoms("all") & u.select_atoms("protein")
+        sel1 = u.select_atoms('protein')
+        sel2 = u.select_atoms('all') & u.select_atoms('protein')
 
         assert sel1.n_atoms == sel2.n_atoms
         assert np.array_equal(sel1.indices, sel2.indices)
@@ -305,8 +305,8 @@ class TestErrorHandling:
         # Try to create with non-existent file
         with pytest.raises((FileNotFoundError, Exception)):
             fp = Fingerprinter(
-                topology=tmp_path / "nonexistent.prmtop",
-                trajectory=tmp_path / "nonexistent.dcd",
+                topology=tmp_path / 'nonexistent.prmtop',
+                trajectory=tmp_path / 'nonexistent.dcd',
             )
             # Some initialization might not fail until we try to use it
             fp.load_pdb()
@@ -322,12 +322,12 @@ class TestErrorHandling:
         import MDAnalysis as mda
 
         # Create sample PDB
-        sample_pdb = create_sample_pdb(tmp_path / "structure.pdb")
+        sample_pdb = create_sample_pdb(tmp_path / 'structure.pdb')
 
         u = mda.Universe(str(sample_pdb))
 
         # Empty selection
-        empty_sel = u.select_atoms("resname NOTEXIST")
+        empty_sel = u.select_atoms('resname NOTEXIST')
         assert empty_sel.n_atoms == 0
 
         # Analysis on empty selection should handle gracefully
@@ -344,18 +344,18 @@ def integration_test_system(tmp_path):
     Fixture that creates a complete test system with all necessary files
     for integration testing
     """
-    system_dir = tmp_path / "test_system"
+    system_dir = tmp_path / 'test_system'
     system_dir.mkdir()
 
     # Create sample structure
-    sample_pdb = create_sample_pdb(system_dir / "input.pdb")
+    create_sample_pdb(system_dir / 'input.pdb')
 
     # Create dummy topology files
-    (system_dir / "system.prmtop").write_text("%FLAG POINTERS\n")
-    (system_dir / "system.inpcrd").write_text("coordinates\n")
+    (system_dir / 'system.prmtop').write_text('%FLAG POINTERS\n')
+    (system_dir / 'system.inpcrd').write_text('coordinates\n')
 
     # Create dummy trajectory data
     traj_data = np.random.rand(10, 10, 3)
-    np.save(system_dir / "trajectory.npy", traj_data)
+    np.save(system_dir / 'trajectory.npy', traj_data)
 
     return system_dir

@@ -20,12 +20,12 @@ class TestBaseSettings:
         settings = LocalSettings(
             available_accelerators=2,
             retries=3,
-            label="test_htex",
+            label='test_htex',
             worker_port_range=(10000, 15000),
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            yaml_path = Path(tmpdir) / "settings.yaml"
+            yaml_path = Path(tmpdir) / 'settings.yaml'
             settings.dump_yaml(yaml_path)
 
             assert yaml_path.exists()
@@ -34,32 +34,32 @@ class TestBaseSettings:
             with open(yaml_path) as f:
                 loaded = yaml.safe_load(f)
 
-            assert loaded["available_accelerators"] == 2
-            assert loaded["retries"] == 3
-            assert loaded["label"] == "test_htex"
+            assert loaded['available_accelerators'] == 2
+            assert loaded['retries'] == 3
+            assert loaded['label'] == 'test_htex'
 
     def test_base_settings_from_yaml(self):
         """Test loading settings from YAML file"""
         from molecular_simulations.utils.parsl_settings import LocalSettings
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            yaml_path = Path(tmpdir) / "settings.yaml"
+            yaml_path = Path(tmpdir) / 'settings.yaml'
 
             yaml_content = {
-                "available_accelerators": 4,
-                "retries": 2,
-                "label": "loaded_htex",
-                "worker_port_range": [11000, 12000],
+                'available_accelerators': 4,
+                'retries': 2,
+                'label': 'loaded_htex',
+                'worker_port_range': [11000, 12000],
             }
 
-            with open(yaml_path, "w") as f:
+            with open(yaml_path, 'w') as f:
                 yaml.dump(yaml_content, f)
 
             settings = LocalSettings.from_yaml(yaml_path)
 
             assert settings.available_accelerators == 4
             assert settings.retries == 2
-            assert settings.label == "loaded_htex"
+            assert settings.label == 'loaded_htex'
 
 
 class TestLocalSettings:
@@ -73,7 +73,7 @@ class TestLocalSettings:
 
         assert settings.available_accelerators == 4
         assert settings.retries == 1
-        assert settings.label == "gpu"
+        assert settings.label == 'gpu'
         assert settings.worker_port_range == (10000, 20000)
 
     def test_local_settings_custom_values(self):
@@ -81,20 +81,20 @@ class TestLocalSettings:
         from molecular_simulations.utils.parsl_settings import LocalSettings
 
         settings = LocalSettings(
-            available_accelerators=["0", "1"],
+            available_accelerators=['0', '1'],
             retries=5,
-            label="custom",
+            label='custom',
             worker_port_range=(15000, 16000),
         )
 
-        assert settings.available_accelerators == ["0", "1"]
+        assert settings.available_accelerators == ['0', '1']
         assert settings.retries == 5
-        assert settings.label == "custom"
+        assert settings.label == 'custom'
         assert settings.worker_port_range == (15000, 16000)
 
-    @patch("molecular_simulations.utils.parsl_settings.Config")
-    @patch("molecular_simulations.utils.parsl_settings.HighThroughputExecutor")
-    @patch("molecular_simulations.utils.parsl_settings.LocalProvider")
+    @patch('molecular_simulations.utils.parsl_settings.Config')
+    @patch('molecular_simulations.utils.parsl_settings.HighThroughputExecutor')
+    @patch('molecular_simulations.utils.parsl_settings.LocalProvider')
     def test_local_settings_config_factory(
         self, mock_provider, mock_executor, mock_config
     ):
@@ -102,7 +102,7 @@ class TestLocalSettings:
         from molecular_simulations.utils.parsl_settings import LocalSettings
 
         settings = LocalSettings()
-        config = settings.config_factory(Path("."))
+        settings.config_factory(Path('.'))
 
 
 class TestPolarisSettings:
@@ -113,12 +113,12 @@ class TestPolarisSettings:
         from molecular_simulations.utils.parsl_settings import PolarisSettings
 
         settings = PolarisSettings(
-            account="test_account", queue="debug", walltime="01:00:00"
+            account='test_account', queue='debug', walltime='01:00:00'
         )
 
-        assert settings.account == "test_account"
-        assert settings.queue == "debug"
-        assert settings.walltime == "01:00:00"
+        assert settings.account == 'test_account'
+        assert settings.queue == 'debug'
+        assert settings.walltime == '01:00:00'
         assert settings.num_nodes == 1
         assert settings.cpus_per_node == 64
         assert settings.available_accelerators == 4
@@ -128,43 +128,43 @@ class TestPolarisSettings:
         from molecular_simulations.utils.parsl_settings import PolarisSettings
 
         settings = PolarisSettings(
-            label="custom_htex",
+            label='custom_htex',
             num_nodes=4,
-            worker_init="module load conda",
-            scheduler_options="#PBS -l select=4",
-            account="production",
-            queue="compute",
-            walltime="24:00:00",
+            worker_init='module load conda',
+            scheduler_options='#PBS -l select=4',
+            account='production',
+            queue='compute',
+            walltime='24:00:00',
             cpus_per_node=32,
-            strategy="htex_auto_scale",
-            available_accelerators=["0", "1", "2", "3"],
+            strategy='htex_auto_scale',
+            available_accelerators=['0', '1', '2', '3'],
         )
 
-        assert settings.label == "custom_htex"
+        assert settings.label == 'custom_htex'
         assert settings.num_nodes == 4
-        assert settings.worker_init == "module load conda"
+        assert settings.worker_init == 'module load conda'
         assert settings.cpus_per_node == 32
-        assert settings.strategy == "htex_auto_scale"
+        assert settings.strategy == 'htex_auto_scale'
 
-    @patch("molecular_simulations.utils.parsl_settings.Config")
-    @patch("molecular_simulations.utils.parsl_settings.HighThroughputExecutor")
-    @patch("molecular_simulations.utils.parsl_settings.PBSProProvider")
-    @patch("molecular_simulations.utils.parsl_settings.MpiExecLauncher")
-    @patch("molecular_simulations.utils.parsl_settings.address_by_hostname")
+    @patch('molecular_simulations.utils.parsl_settings.Config')
+    @patch('molecular_simulations.utils.parsl_settings.HighThroughputExecutor')
+    @patch('molecular_simulations.utils.parsl_settings.PBSProProvider')
+    @patch('molecular_simulations.utils.parsl_settings.MpiExecLauncher')
+    @patch('molecular_simulations.utils.parsl_settings.address_by_hostname')
     def test_polaris_settings_config_factory(
         self, mock_addr, mock_launcher, mock_provider, mock_executor, mock_config
     ):
         """Test PolarisSettings config_factory method"""
         from molecular_simulations.utils.parsl_settings import PolarisSettings
 
-        mock_addr.return_value = "192.168.1.1"
+        mock_addr.return_value = '192.168.1.1'
 
         settings = PolarisSettings(
-            account="test_account", queue="debug", walltime="01:00:00"
+            account='test_account', queue='debug', walltime='01:00:00'
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = settings.config_factory(run_dir=tmpdir)
+            settings.config_factory(run_dir=tmpdir)
 
         # Should have created config with executor
         mock_config.assert_called_once()
@@ -179,12 +179,12 @@ class TestAuroraSettings:
         from molecular_simulations.utils.parsl_settings import AuroraSettings
 
         settings = AuroraSettings(
-            account="aurora_account", queue="workq", walltime="02:00:00"
+            account='aurora_account', queue='workq', walltime='02:00:00'
         )
 
-        assert settings.account == "aurora_account"
-        assert settings.queue == "workq"
-        assert settings.walltime == "02:00:00"
+        assert settings.account == 'aurora_account'
+        assert settings.queue == 'workq'
+        assert settings.walltime == '02:00:00'
         assert settings.num_nodes == 1
         assert settings.cpus_per_node == 48
         assert len(settings.available_accelerators) == 12
@@ -193,15 +193,15 @@ class TestAuroraSettings:
         """Test AuroraSettings default accelerators"""
         from molecular_simulations.utils.parsl_settings import AuroraSettings
 
-        settings = AuroraSettings(account="test", queue="debug", walltime="00:30:00")
+        settings = AuroraSettings(account='test', queue='debug', walltime='00:30:00')
 
         # Should have 12 accelerators (0-11)
         assert settings.available_accelerators == [str(i) for i in range(12)]
 
-    @patch("molecular_simulations.utils.parsl_settings.Config")
-    @patch("molecular_simulations.utils.parsl_settings.HighThroughputExecutor")
-    @patch("molecular_simulations.utils.parsl_settings.PBSProProvider")
-    @patch("molecular_simulations.utils.parsl_settings.MpiExecLauncher")
+    @patch('molecular_simulations.utils.parsl_settings.Config')
+    @patch('molecular_simulations.utils.parsl_settings.HighThroughputExecutor')
+    @patch('molecular_simulations.utils.parsl_settings.PBSProProvider')
+    @patch('molecular_simulations.utils.parsl_settings.MpiExecLauncher')
     def test_aurora_settings_config_factory(
         self, mock_launcher, mock_provider, mock_executor, mock_config
     ):
@@ -209,11 +209,11 @@ class TestAuroraSettings:
         from molecular_simulations.utils.parsl_settings import AuroraSettings
 
         settings = AuroraSettings(
-            account="test_account", queue="debug", walltime="01:00:00"
+            account='test_account', queue='debug', walltime='01:00:00'
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = settings.config_factory(run_dir=tmpdir)
+            settings.config_factory(run_dir=tmpdir)
 
         # Should have created config
         mock_config.assert_called_once()
@@ -227,11 +227,11 @@ class TestSettingsRoundTrip:
         from molecular_simulations.utils.parsl_settings import LocalSettings
 
         original = LocalSettings(
-            available_accelerators=8, retries=3, label="roundtrip_test"
+            available_accelerators=8, retries=3, label='roundtrip_test'
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            yaml_path = Path(tmpdir) / "settings.yaml"
+            yaml_path = Path(tmpdir) / 'settings.yaml'
 
             original.dump_yaml(yaml_path)
             loaded = LocalSettings.from_yaml(yaml_path)
@@ -245,11 +245,11 @@ class TestSettingsRoundTrip:
         from molecular_simulations.utils.parsl_settings import PolarisSettings
 
         original = PolarisSettings(
-            account="round_trip", queue="test_queue", walltime="10:00:00", num_nodes=8
+            account='round_trip', queue='test_queue', walltime='10:00:00', num_nodes=8
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            yaml_path = Path(tmpdir) / "polaris.yaml"
+            yaml_path = Path(tmpdir) / 'polaris.yaml'
 
             original.dump_yaml(yaml_path)
             loaded = PolarisSettings.from_yaml(yaml_path)
@@ -260,5 +260,5 @@ class TestSettingsRoundTrip:
             assert loaded.num_nodes == original.num_nodes
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

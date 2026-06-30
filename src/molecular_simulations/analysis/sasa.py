@@ -123,29 +123,33 @@ class SASA(AnalysisBase):
         Returns:
             Array of per-atom SASA values.
         """
+        # Radii for THIS AtomGroup, which may be a per-residue sub-selection
+        # (e.g. RelativeSASA's tripeptide). self.radii is sized to the full
+        # analysis AtomGroup, so indexing it against `ag` mismatches.
+        radii = np.vectorize(self.radii_dict.get)(ag.elements) + self.probe_radius
+        max_radii = 2 * np.max(radii)
+
         kdt = KDTree(ag.positions, 10)
 
         points = np.zeros(ag.n_atoms)
         for i in range(ag.n_atoms):
-            sphere = self.sphere.copy() * self.radii[i]
+            sphere = self.sphere.copy() * radii[i]
             sphere += ag.positions[i]
             available = self.points_available.copy()
             kdt_sphere = KDTree(sphere, 10)
 
-            for j in kdt.query_ball_point(ag.positions[i], self.max_radii, workers=-1):
+            for j in kdt.query_ball_point(ag.positions[i], max_radii, workers=-1):
                 if j == i:
                     continue
-                if self.radii[j] < (self.radii[i] + self.radii[j]):
+                if radii[j] < (radii[i] + radii[j]):
                     available -= {
                         n
-                        for n in kdt_sphere.query_ball_point(
-                            self.ag.positions[j], self.radii[j]
-                        )
+                        for n in kdt_sphere.query_ball_point(ag.positions[j], radii[j])
                     }
 
             points[i] = len(available)
 
-        return 4 * np.pi * self.radii**2 * points / self.n_points
+        return 4 * np.pi * radii**2 * points / self.n_points
 
     def _prepare(self):
         """Prepare for analysis by initializing results array.

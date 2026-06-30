@@ -186,37 +186,32 @@ class TestAutoKMeans:
             assert auto_km.dataloader is not None
             assert auto_km.decomposition is not None
 
-    @patch('molecular_simulations.analysis.autocluster.silhouette_score')
-    @patch('molecular_simulations.analysis.autocluster.KMeans')
-    def test_sweep_n_clusters(self, mock_kmeans, mock_silhouette):
-        """Test n_clusters parameter sweep"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create dummy data
-            test_data = np.random.rand(20, 5)
-            file = Path(tmpdir) / 'data.npy'
-            np.save(file, test_data)
+    def test_sweep_n_clusters(self):
+        """sweep_n_clusters runs real KMeans/silhouette and is reproducible."""
+        # Two well-separated 2D blobs: silhouette is maximized at k=2.
+        rng = np.random.default_rng(0)
+        blobs = np.vstack(
+            [rng.normal(0.0, 0.1, (10, 2)), rng.normal(5.0, 0.1, (10, 2))]
+        )
 
-            # Setup mocks
-            mock_kmeans_instance = MagicMock()
-            mock_kmeans_instance.fit_predict.return_value = np.array([0, 1] * 10)
-            mock_kmeans_instance.cluster_centers_ = np.array([[0, 0], [1, 1]])
-            mock_kmeans.return_value = mock_kmeans_instance
+        def run_sweep():
+            with tempfile.TemporaryDirectory() as tmpdir:
+                np.save(Path(tmpdir) / 'data.npy', np.random.rand(20, 5))
+                auto_km = AutoKMeans(tmpdir, max_clusters=5, stride=1, random_state=42)
+                auto_km.reduced = blobs.copy()
+                auto_km.sweep_n_clusters([2, 3, 4])
+                return auto_km
 
-            # Return increasing silhouette scores so we can test best selection
-            mock_silhouette.side_effect = [0.3, 0.5, 0.4]
+        auto_km = run_sweep()
 
-            # Initialize AutoKMeans
-            auto_km = AutoKMeans(tmpdir, max_clusters=5, stride=1)
-            auto_km.reduced = np.random.rand(20, 2)
+        assert auto_km.centers is not None
+        assert auto_km.labels is not None
+        # The two clean blobs are best described by 2 clusters
+        assert len(np.unique(auto_km.labels)) == 2
 
-            # Run sweep
-            auto_km.sweep_n_clusters([2, 3, 4])
-
-            # Check that best score (0.5) was selected
-            assert mock_silhouette.call_count == 3
-            assert mock_kmeans.call_count == 3
-            assert auto_km.centers is not None
-            assert auto_km.labels is not None
+        # Fixed random_state -> identical labels across runs (issue #13)
+        repeat = run_sweep()
+        np.testing.assert_array_equal(auto_km.labels, repeat.labels)
 
     def test_map_centers_to_frames(self):
         """Test mapping cluster centers to frames"""

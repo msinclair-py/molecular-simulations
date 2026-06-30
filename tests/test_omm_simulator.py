@@ -915,55 +915,29 @@ class TestSimulatorProduction:
 class TestMinimizerMethods:
     """Additional tests for Minimizer class."""
 
-    @patch('molecular_simulations.simulate.omm_simulator.Platform')
-    @patch('molecular_simulations.simulate.omm_simulator.AmberInpcrdFile')
-    @patch('molecular_simulations.simulate.omm_simulator.AmberPrmtopFile')
-    @patch('molecular_simulations.simulate.omm_simulator.LangevinMiddleIntegrator')
-    @patch('molecular_simulations.simulate.omm_simulator.Simulation')
-    @patch('molecular_simulations.simulate.omm_simulator.PDBFile')
-    def test_minimizer_minimize(
-        self,
-        mock_pdb,
-        mock_sim_class,
-        mock_integrator,
-        mock_prmtop,
-        mock_inpcrd,
-        mock_platform,
-    ):
-        """Test Minimizer minimize method."""
+    def test_minimizer_minimize(self, real_amber_system_files):
+        """Minimizer.minimize runs a real CPU minimization and writes a PDB."""
+        import MDAnalysis as mda
+
         from molecular_simulations.simulate.omm_simulator import Minimizer
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_inpcrd_instance = MagicMock(boxVectors=None)
-        mock_inpcrd_instance.positions = [[0, 0, 0]]
-        mock_inpcrd.return_value = mock_inpcrd_instance
-        mock_topology = MagicMock()
-        mock_topology.createSystem.return_value = MagicMock()
-        mock_topology.topology = MagicMock()
-        mock_prmtop.return_value = mock_topology
+        files = real_amber_system_files
+        minimizer = Minimizer(
+            topology=str(files['prmtop']),
+            coordinates=str(files['inpcrd']),
+            out='minimized.pdb',
+            platform='CPU',
+            device_ids=None,
+        )
+        # CPU platform must not carry a Precision property (issue #19)
+        assert minimizer.properties == {}
 
-        mock_simulation = MagicMock()
-        mock_state = MagicMock()
-        mock_state.getPositions.return_value = [[0, 0, 0]]
-        mock_simulation.context.getState.return_value = mock_state
-        mock_sim_class.return_value = mock_simulation
-        mock_integrator.return_value = MagicMock()
+        minimizer.minimize()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.prmtop'
-            top_file.write_text('mock topology')
-            coor_file = path / 'system.inpcrd'
-            coor_file.write_text('mock coordinates')
-
-            minimizer = Minimizer(
-                topology=str(top_file), coordinates=str(coor_file), out='minimized.pdb'
-            )
-
-            minimizer.minimize()
-
-            mock_simulation.minimizeEnergy.assert_called_once()
-            mock_pdb.writeFile.assert_called_once()
+        out = files['path'] / 'minimized.pdb'
+        assert out.exists()
+        # The minimized structure is a valid 22-atom PDB
+        assert mda.Universe(str(out)).atoms.n_atoms == 22
 
 
 class TestImplicitSimulator:

@@ -954,12 +954,15 @@ class Minimizer:
         self.path = Path(topology).parent
         self.out = self.path / out
         self.platform = Platform.getPlatformByName(platform)
-        self.properties = {'Precision': 'mixed'}
 
-        if device_ids is not None:
-            self.properties.update(
-                {'DeviceIndex': ','.join([str(x) for x in device_ids])}
-            )
+        # The CPU/Reference platforms do not accept a 'Precision' property; only
+        # the GPU platforms do.
+        if platform in ('CPU', 'Reference'):
+            self.properties = {}
+        else:
+            self.properties = {'Precision': 'mixed'}
+            if device_ids is not None:
+                self.properties['DeviceIndex'] = ','.join(str(x) for x in device_ids)
 
     def minimize(self) -> None:
         """Perform energy minimization and save structure.

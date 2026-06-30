@@ -25,7 +25,7 @@ def _has_opencl() -> bool:
     try:
         from openmm import Platform
 
-        Platform.getPlatformByName("OpenCL")
+        Platform.getPlatformByName('OpenCL')
         return True
     except Exception:
         return False
@@ -43,14 +43,14 @@ class TestEVBInit:
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "logs"
+            log_path = Path(tmpdir) / 'logs'
 
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=[-0.3, 0.3, 0.1],
                 parsl_config=None,
                 log_path=log_path,
@@ -70,14 +70,14 @@ class TestEVBInit:
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "logs"
+            log_path = Path(tmpdir) / 'logs'
 
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=[-0.3, 0.3, 0.1],
                 parsl_config=None,
                 log_path=log_path,
@@ -88,7 +88,7 @@ class TestEVBInit:
                 D_e=400.0,
                 alpha=15.0,
                 r0=0.11,
-                platform="CPU",
+                platform='CPU',
             )
 
             assert evb.steps == 1000000
@@ -98,28 +98,28 @@ class TestEVBInit:
             assert evb.D_e == 400.0
             assert evb.alpha == 15.0
             assert evb.r0 == 0.11
-            assert evb.platform == "CPU"
+            assert evb.platform == 'CPU'
 
     def test_evb_init_default_parameters(self, alanine_dipeptide_pdb) -> None:
         """Test EVB initialization with default parameter values."""
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "logs"
+            log_path = Path(tmpdir) / 'logs'
 
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=[-0.3, 0.3, 0.1],
                 parsl_config=None,
                 log_path=log_path,
             )
 
             # Check default values
-            assert evb.log_prefix == "reactant"
+            assert evb.log_prefix == 'reactant'
             assert evb.rc_freq == 5
             assert evb.steps == 500000
             assert evb.dt == 0.002
@@ -128,7 +128,7 @@ class TestEVBInit:
             assert evb.D_e == 392.46
             assert evb.alpha == 13.275
             assert evb.r0 == 0.109
-            assert evb.platform == "CUDA"
+            assert evb.platform == 'CUDA'
             assert evb.restraint_sel is None
 
 
@@ -144,14 +144,14 @@ class TestEVBConstructRC:
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "logs"
+            log_path = Path(tmpdir) / 'logs'
 
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=[-0.2, 0.2, 0.1],
                 parsl_config=None,
                 log_path=log_path,
@@ -162,21 +162,19 @@ class TestEVBConstructRC:
                 evb.reaction_coordinate, expected, decimal=5
             )
 
-    def test_construct_rc_single_step(
-        self, alanine_dipeptide_pdb
-    ) -> None:
+    def test_construct_rc_single_step(self, alanine_dipeptide_pdb) -> None:
         """Test reaction coordinate with large increment resulting in few windows."""
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "logs"
+            log_path = Path(tmpdir) / 'logs'
 
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=[0.0, 0.5, 0.5],
                 parsl_config=None,
                 log_path=log_path,
@@ -187,21 +185,19 @@ class TestEVBConstructRC:
                 evb.reaction_coordinate, expected, decimal=5
             )
 
-    def test_construct_rc_negative_range(
-        self, alanine_dipeptide_pdb
-    ) -> None:
+    def test_construct_rc_negative_range(self, alanine_dipeptide_pdb) -> None:
         """Test reaction coordinate spanning negative to positive values."""
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "logs"
+            log_path = Path(tmpdir) / 'logs'
 
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=[-0.3, 0.3, 0.05],
                 parsl_config=None,
                 log_path=log_path,
@@ -210,21 +206,19 @@ class TestEVBConstructRC:
             # Should have 13 windows
             assert evb.reaction_coordinate.shape[0] == 13
 
-    def test_construct_rc_direct_method(
-        self, alanine_dipeptide_pdb
-    ) -> None:
+    def test_construct_rc_direct_method(self, alanine_dipeptide_pdb) -> None:
         """Test construct_rc method directly."""
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "logs"
+            log_path = Path(tmpdir) / 'logs'
 
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=[-0.2, 0.2, 0.1],
                 parsl_config=None,
                 log_path=log_path,
@@ -251,14 +245,14 @@ class TestEVBProperties:
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "logs"
+            log_path = Path(tmpdir) / 'logs'
 
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 10",
-                acceptor_atom="index 15",
-                reactive_atom="index 20",
+                donor_atom='index 10',
+                acceptor_atom='index 15',
+                reactive_atom='index 20',
                 reaction_coordinate=[-0.2, 0.2, 0.1],
                 parsl_config=None,
                 log_path=log_path,
@@ -268,12 +262,12 @@ class TestEVBProperties:
 
             umbrella = evb.umbrella
 
-            assert umbrella["atom_i"] == 10
-            assert umbrella["atom_j"] == 15
-            assert umbrella["atom_k"] == 20
-            assert umbrella["k"] == 180000.0
-            assert umbrella["k_path"] == 120.0
-            assert umbrella["rc0"] is None
+            assert umbrella['atom_i'] == 10
+            assert umbrella['atom_j'] == 15
+            assert umbrella['atom_k'] == 20
+            assert umbrella['k'] == 180000.0
+            assert umbrella['k_path'] == 120.0
+            assert umbrella['rc0'] is None
 
     def test_morse_bond_property(self, alanine_dipeptide_pdb) -> None:
         """Test morse_bond property returns correct dictionary structure.
@@ -287,14 +281,14 @@ class TestEVBProperties:
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "logs"
+            log_path = Path(tmpdir) / 'logs'
 
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 10",
-                acceptor_atom="index 15",
-                reactive_atom="index 20",
+                donor_atom='index 10',
+                acceptor_atom='index 15',
+                reactive_atom='index 20',
                 reaction_coordinate=[-0.2, 0.2, 0.1],
                 parsl_config=None,
                 log_path=log_path,
@@ -305,19 +299,17 @@ class TestEVBProperties:
 
             morse = evb.morse_bond
 
-            assert morse["atom_i"] == 10
-            assert morse["atom_j"] == 20
-            assert morse["D_e"] == 400.0
-            assert morse["alpha"] == 14.0
-            assert morse["r0"] == 0.11
+            assert morse['atom_i'] == 10
+            assert morse['atom_j'] == 20
+            assert morse['D_e'] == 400.0
+            assert morse['alpha'] == 14.0
+            assert morse['r0'] == 0.11
 
 
 class TestEVBParslManagement:
     """Test suite for EVB Parsl initialization and shutdown."""
 
-    def test_initialize_loads_parsl(
-        self, alanine_dipeptide_pdb
-    ) -> None:
+    def test_initialize_loads_parsl(self, alanine_dipeptide_pdb) -> None:
         """Test that initialize() loads the Parsl configuration."""
         import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
@@ -329,27 +321,25 @@ class TestEVBParslManagement:
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=[-0.2, 0.2, 0.1],
                 parsl_config=mock_config,
-                log_path=Path(tmpdir) / "logs",
+                log_path=Path(tmpdir) / 'logs',
             )
 
             assert evb.dfk is None
 
             # Patch parsl.load on the module
             with patch.object(
-                fe_module.parsl, "load", return_value=mock_dfk
+                fe_module.parsl, 'load', return_value=mock_dfk
             ) as mock_load:
                 evb.initialize()
                 mock_load.assert_called_once_with(mock_config)
                 assert evb.dfk is mock_dfk
 
-    def test_shutdown_cleans_up_parsl(
-        self, alanine_dipeptide_pdb
-    ) -> None:
+    def test_shutdown_cleans_up_parsl(self, alanine_dipeptide_pdb) -> None:
         """Test that shutdown() properly cleans up Parsl resources."""
         import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
@@ -361,26 +351,24 @@ class TestEVBParslManagement:
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=[-0.2, 0.2, 0.1],
                 parsl_config=mock_config,
-                log_path=Path(tmpdir) / "logs",
+                log_path=Path(tmpdir) / 'logs',
             )
 
-            with patch.object(fe_module.parsl, "load", return_value=mock_dfk):
+            with patch.object(fe_module.parsl, 'load', return_value=mock_dfk):
                 evb.initialize()
 
-            with patch.object(fe_module.parsl, "clear") as mock_clear:
+            with patch.object(fe_module.parsl, 'clear') as mock_clear:
                 evb.shutdown()
                 mock_dfk.cleanup.assert_called_once()
                 mock_clear.assert_called()
                 assert evb.dfk is None
 
-    def test_shutdown_when_not_initialized(
-        self, alanine_dipeptide_pdb
-    ) -> None:
+    def test_shutdown_when_not_initialized(self, alanine_dipeptide_pdb) -> None:
         """Test that shutdown() handles case when dfk is None."""
         import molecular_simulations.simulate.free_energy as fe_module
         from molecular_simulations.simulate.free_energy import EVB
@@ -391,17 +379,17 @@ class TestEVBParslManagement:
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=[-0.2, 0.2, 0.1],
                 parsl_config=mock_config,
-                log_path=Path(tmpdir) / "logs",
+                log_path=Path(tmpdir) / 'logs',
             )
 
             # Should not raise even when dfk is None
             # parsl.clear() should NOT be called since dfk is None
-            with patch.object(fe_module.parsl, "clear") as mock_clear:
+            with patch.object(fe_module.parsl, 'clear') as mock_clear:
                 evb.shutdown()
                 mock_clear.assert_not_called()
                 assert evb.dfk is None
@@ -417,25 +405,25 @@ class TestEVBCalculationInit:
             Simulator,
         )
 
-        topology = real_amber_system_files["prmtop"]
-        coord_file = real_amber_system_files["inpcrd"]
-        out_path = real_amber_system_files["path"] / "output"
-        rc_file = real_amber_system_files["path"] / "rc.log"
+        topology = real_amber_system_files['prmtop']
+        coord_file = real_amber_system_files['inpcrd']
+        out_path = real_amber_system_files['path'] / 'output'
+        rc_file = real_amber_system_files['path'] / 'rc.log'
 
         umbrella = {
-            "atom_i": 0,
-            "atom_j": 1,
-            "atom_k": 2,
-            "k": 160000.0,
-            "k_path": 100.0,
-            "rc0": 0.1,
+            'atom_i': 0,
+            'atom_j': 1,
+            'atom_k': 2,
+            'k': 160000.0,
+            'k_path': 100.0,
+            'rc0': 0.1,
         }
         morse_bond = {
-            "atom_i": 0,
-            "atom_j": 2,
-            "D_e": 392.46,
-            "alpha": 13.275,
-            "r0": 0.1,
+            'atom_i': 0,
+            'atom_j': 2,
+            'D_e': 392.46,
+            'alpha': 13.275,
+            'r0': 0.1,
         }
 
         evb_calc = EVBCalculation(
@@ -445,7 +433,7 @@ class TestEVBCalculationInit:
             rc_file=rc_file,
             umbrella=umbrella,
             morse_bond=morse_bond,
-            platform="CPU",
+            platform='CPU',
         )
 
         assert isinstance(evb_calc.sim_engine, Simulator)
@@ -460,32 +448,32 @@ class TestEVBCalculationInit:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            topology = path / "system.prmtop"
-            topology.write_text("mock topology")
-            coord_file = path / "system.inpcrd"
-            coord_file.write_text("mock coordinates")
-            out_path = path / "output"
-            rc_file = path / "rc.log"
+            topology = path / 'system.prmtop'
+            topology.write_text('mock topology')
+            coord_file = path / 'system.inpcrd'
+            coord_file.write_text('mock coordinates')
+            out_path = path / 'output'
+            rc_file = path / 'rc.log'
 
             umbrella = {
-                "atom_i": 0,
-                "atom_j": 1,
-                "atom_k": 2,
-                "k": 160000.0,
-                "k_path": 100.0,
-                "rc0": 0.1,
+                'atom_i': 0,
+                'atom_j': 1,
+                'atom_k': 2,
+                'k': 160000.0,
+                'k_path': 100.0,
+                'rc0': 0.1,
             }
             morse_bond = {
-                "atom_i": 0,
-                "atom_j": 2,
-                "D_e": 392.46,
-                "alpha": 13.275,
-                "r0": 0.1,
+                'atom_i': 0,
+                'atom_j': 2,
+                'D_e': 392.46,
+                'alpha': 13.275,
+                'r0': 0.1,
             }
 
             mock_simulator = MagicMock()
-            mock_simulator.properties = {"Precision": "mixed"}
-            with patch.object(fe_module, "Simulator", return_value=mock_simulator):
+            mock_simulator.properties = {'Precision': 'mixed'}
+            with patch.object(fe_module, 'Simulator', return_value=mock_simulator):
                 evb_calc = EVBCalculation(
                     topology=topology,
                     coord_file=coord_file,
@@ -493,35 +481,35 @@ class TestEVBCalculationInit:
                     rc_file=rc_file,
                     umbrella=umbrella,
                     morse_bond=morse_bond,
-                    platform="CUDA",
+                    platform='CUDA',
                 )
 
                 # Should set mixed precision
-                assert evb_calc.sim_engine.properties == {"Precision": "mixed"}
+                assert evb_calc.sim_engine.properties == {'Precision': 'mixed'}
 
     def test_evb_calculation_cpu_no_precision(self, real_amber_system_files) -> None:
         """Test EVBCalculation does not set precision for CPU platform."""
         from molecular_simulations.simulate.free_energy import EVBCalculation
 
-        topology = real_amber_system_files["prmtop"]
-        coord_file = real_amber_system_files["inpcrd"]
-        out_path = real_amber_system_files["path"] / "output"
-        rc_file = real_amber_system_files["path"] / "rc.log"
+        topology = real_amber_system_files['prmtop']
+        coord_file = real_amber_system_files['inpcrd']
+        out_path = real_amber_system_files['path'] / 'output'
+        rc_file = real_amber_system_files['path'] / 'rc.log'
 
         umbrella = {
-            "atom_i": 0,
-            "atom_j": 1,
-            "atom_k": 2,
-            "k": 160000.0,
-            "k_path": 100.0,
-            "rc0": 0.1,
+            'atom_i': 0,
+            'atom_j': 1,
+            'atom_k': 2,
+            'k': 160000.0,
+            'k_path': 100.0,
+            'rc0': 0.1,
         }
         morse_bond = {
-            "atom_i": 0,
-            "atom_j": 2,
-            "D_e": 392.46,
-            "alpha": 13.275,
-            "r0": 0.1,
+            'atom_i': 0,
+            'atom_j': 2,
+            'D_e': 392.46,
+            'alpha': 13.275,
+            'r0': 0.1,
         }
 
         evb_calc = EVBCalculation(
@@ -531,38 +519,38 @@ class TestEVBCalculationInit:
             rc_file=rc_file,
             umbrella=umbrella,
             morse_bond=morse_bond,
-            platform="CPU",
+            platform='CPU',
         )
 
         # CPU platform sets no precision properties
         assert evb_calc.sim_engine.properties == {}
 
     @pytest.mark.skipif(
-        not _has_opencl(), reason="OpenCL platform not available in this OpenMM build"
+        not _has_opencl(), reason='OpenCL platform not available in this OpenMM build'
     )
     def test_evb_calculation_opencl_precision(self, real_amber_system_files) -> None:
         """Test EVBCalculation sets mixed precision for OpenCL platform."""
         from molecular_simulations.simulate.free_energy import EVBCalculation
 
-        topology = real_amber_system_files["prmtop"]
-        coord_file = real_amber_system_files["inpcrd"]
-        out_path = real_amber_system_files["path"] / "output"
-        rc_file = real_amber_system_files["path"] / "rc.log"
+        topology = real_amber_system_files['prmtop']
+        coord_file = real_amber_system_files['inpcrd']
+        out_path = real_amber_system_files['path'] / 'output'
+        rc_file = real_amber_system_files['path'] / 'rc.log'
 
         umbrella = {
-            "atom_i": 0,
-            "atom_j": 1,
-            "atom_k": 2,
-            "k": 160000.0,
-            "k_path": 100.0,
-            "rc0": 0.1,
+            'atom_i': 0,
+            'atom_j': 1,
+            'atom_k': 2,
+            'k': 160000.0,
+            'k_path': 100.0,
+            'rc0': 0.1,
         }
         morse_bond = {
-            "atom_i": 0,
-            "atom_j": 2,
-            "D_e": 392.46,
-            "alpha": 13.275,
-            "r0": 0.1,
+            'atom_i': 0,
+            'atom_j': 2,
+            'D_e': 392.46,
+            'alpha': 13.275,
+            'r0': 0.1,
         }
 
         evb_calc = EVBCalculation(
@@ -572,11 +560,11 @@ class TestEVBCalculationInit:
             rc_file=rc_file,
             umbrella=umbrella,
             morse_bond=morse_bond,
-            platform="OpenCL",
+            platform='OpenCL',
         )
 
         # OpenCL (like CUDA) uses mixed precision
-        assert evb_calc.sim_engine.properties == {"Precision": "mixed"}
+        assert evb_calc.sim_engine.properties == {'Precision': 'mixed'}
 
 
 class TestEVBCalculationStaticMethods:
@@ -622,7 +610,7 @@ class TestEVBCalculationStaticMethods:
             k=160000.0,
             rc0=0.1,
             k_path=100.0,  # Extra kwarg that should be ignored
-            extra_param="ignored",
+            extra_param='ignored',
         )
 
         from openmm import CustomCompoundBondForce
@@ -674,9 +662,7 @@ class TestEVBCalculationStaticMethods:
 class TestEVBCalculationRemoveHarmonicBond:
     """Test suite for remove_harmonic_bond static method."""
 
-    def test_remove_harmonic_bond_zeros_force_constant(
-        self
-    ) -> None:
+    def test_remove_harmonic_bond_zeros_force_constant(self) -> None:
         """Test that remove_harmonic_bond zeros out the bond force constant.
 
         When replacing a harmonic bond with a Morse potential, we need to
@@ -698,13 +684,11 @@ class TestEVBCalculationRemoveHarmonicBond:
         EVBCalculation.remove_harmonic_bond(system, 0, 1)
 
         # Check force constant is now zero (OpenMM returns Quantity with units)
-        p1, p2, length, k = bond_force.getBondParameters(0)
+        _p1, _p2, length, k = bond_force.getBondParameters(0)
         assert k.value_in_unit(kilojoules_per_mole / nanometers**2) == 0.0
         assert length.value_in_unit(nanometers) == pytest.approx(0.1)
 
-    def test_remove_harmonic_bond_removes_constraint(
-        self
-    ) -> None:
+    def test_remove_harmonic_bond_removes_constraint(self) -> None:
         """Test that remove_harmonic_bond removes SHAKE constraints."""
         from openmm import System
 
@@ -721,9 +705,7 @@ class TestEVBCalculationRemoveHarmonicBond:
 
         assert system.getNumConstraints() == 0
 
-    def test_remove_harmonic_bond_handles_missing_bond(
-        self
-    ) -> None:
+    def test_remove_harmonic_bond_handles_missing_bond(self) -> None:
         """Test remove_harmonic_bond handles case where bond does not exist."""
         from openmm import HarmonicBondForce, System
         from openmm.unit import kilojoules_per_mole, nanometers
@@ -744,7 +726,7 @@ class TestEVBCalculationRemoveHarmonicBond:
         EVBCalculation.remove_harmonic_bond(system, 1, 2)
 
         # Original bond should be unchanged
-        p1, p2, length, k = bond_force.getBondParameters(0)
+        _p1, _p2, _length, k = bond_force.getBondParameters(0)
         assert k.value_in_unit(kilojoules_per_mole / nanometers**2) == 1000.0
 
     def test_remove_harmonic_bond_reversed_indices(self) -> None:
@@ -766,12 +748,12 @@ class TestEVBCalculationRemoveHarmonicBond:
         EVBCalculation.remove_harmonic_bond(system, 1, 0)
 
         # Check force constant is now zero
-        p1, p2, length, k = bond_force.getBondParameters(0)
+        _p1, _p2, _length, k = bond_force.getBondParameters(0)
         assert k.value_in_unit(kilojoules_per_mole / nanometers**2) == 0.0
 
 
 @pytest.mark.parametrize(
-    "rc_input,expected_length",
+    'rc_input,expected_length',
     [
         ([-0.3, 0.3, 0.1], 7),
         ([-0.2, 0.2, 0.05], 9),
@@ -792,14 +774,14 @@ class TestEVBConstructRCParametrized:
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "logs"
+            log_path = Path(tmpdir) / 'logs'
 
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=rc_input,
                 parsl_config=None,
                 log_path=log_path,
@@ -816,23 +798,23 @@ class TestEVBPath:
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            log_path = Path(tmpdir) / "logs"
+            log_path = Path(tmpdir) / 'logs'
 
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
-                donor_atom="index 0",
-                acceptor_atom="index 1",
-                reactive_atom="index 2",
+                donor_atom='index 0',
+                acceptor_atom='index 1',
+                reactive_atom='index 2',
                 reaction_coordinate=[-0.2, 0.2, 0.1],
                 parsl_config=None,
                 log_path=log_path,
             )
 
             # EVB path should be parent of topology / 'evb'
-            expected_path = alanine_dipeptide_pdb.parent / "evb"
+            expected_path = alanine_dipeptide_pdb.parent / 'evb'
             assert evb.path == expected_path
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

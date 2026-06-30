@@ -12,11 +12,11 @@ import pytest
 
 # Disable numba JIT compilation to avoid path resolution issues during testing.
 # This must be set before numba is imported.
-os.environ["NUMBA_DISABLE_JIT"] = "1"
+os.environ['NUMBA_DISABLE_JIT'] = '1'
 
 # Force a non-interactive matplotlib backend so plotting code can run headless
 # (CI, no display) and write real figure files. Must precede any pyplot import.
-os.environ.setdefault("MPLBACKEND", "Agg")
+os.environ.setdefault('MPLBACKEND', 'Agg')
 
 
 # ---------------------------------------------------------------------------
@@ -26,7 +26,7 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 def get_test_data_dir() -> Path:
     """Return the path to the test data directory."""
-    return Path(__file__).parent / "data"
+    return Path(__file__).parent / 'data'
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ def get_test_data_dir() -> Path:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope='session')
 def real_openmm_available() -> bool:
     """
     Session-scoped check for OpenMM availability.
@@ -50,7 +50,7 @@ def real_openmm_available() -> bool:
             # ... test code ...
     """
     try:
-        import openmm
+        import openmm  # noqa: F401
         from openmm import Platform
 
         # Verify we can access at least one platform
@@ -62,7 +62,7 @@ def real_openmm_available() -> bool:
         return False
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope='session')
 def real_amber_available() -> bool:
     """
     Session-scoped check for AmberTools availability.
@@ -72,16 +72,16 @@ def real_amber_available() -> bool:
     """
     import shutil
 
-    amberhome = os.environ.get("AMBERHOME")
+    amberhome = os.environ.get('AMBERHOME')
     if amberhome:
-        tleap_path = Path(amberhome) / "bin" / "tleap"
+        tleap_path = Path(amberhome) / 'bin' / 'tleap'
         if tleap_path.exists():
             return True
     # Also check if tleap is in PATH
-    return shutil.which("tleap") is not None
+    return shutil.which('tleap') is not None
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope='session')
 def real_rdkit_available() -> bool:
     """
     Session-scoped check for RDKit availability.
@@ -93,7 +93,7 @@ def real_rdkit_available() -> bool:
         from rdkit import Chem
 
         # Verify basic functionality
-        mol = Chem.MolFromSmiles("C")
+        mol = Chem.MolFromSmiles('C')
         return mol is not None
     except ImportError:
         return False
@@ -130,7 +130,7 @@ ATOM      9  O   GLY A   2       6.089   1.563   0.000  1.00  0.00           O
 TER
 END
 """
-    pdb_file = tmp_path / "test_structure.pdb"
+    pdb_file = tmp_path / 'test_structure.pdb'
     pdb_file.write_text(pdb_content)
     return pdb_file
 
@@ -146,7 +146,7 @@ def alanine_dipeptide_pdb() -> Path:
     Returns:
         Path to the static alanine dipeptide PDB file.
     """
-    return get_test_data_dir() / "pdb" / "alanine_dipeptide.pdb"
+    return get_test_data_dir() / 'pdb' / 'alanine_dipeptide.pdb'
 
 
 @pytest.fixture
@@ -165,7 +165,7 @@ def two_chain_pdb() -> Path:
     Returns:
         Path to the static two-chain PDB file.
     """
-    return get_test_data_dir() / "pdb" / "two_chain_saltbridge.pdb"
+    return get_test_data_dir() / 'pdb' / 'two_chain_saltbridge.pdb'
 
 
 @pytest.fixture
@@ -180,10 +180,10 @@ def two_chain_trajectory() -> dict:
     Returns:
         Dictionary with ``top`` (the two-chain PDB) and ``traj`` (the DCD).
     """
-    pdb_dir = get_test_data_dir() / "pdb"
+    pdb_dir = get_test_data_dir() / 'pdb'
     return {
-        "top": pdb_dir / "two_chain_saltbridge.pdb",
-        "traj": pdb_dir / "two_chain_saltbridge.dcd",
+        'top': pdb_dir / 'two_chain_saltbridge.pdb',
+        'traj': pdb_dir / 'two_chain_saltbridge.dcd',
     }
 
 
@@ -323,16 +323,16 @@ Test system coordinates
    6.0890000   1.5630000   0.0000000
 """
 
-    prmtop_file = tmp_path / "system.prmtop"
-    inpcrd_file = tmp_path / "system.inpcrd"
+    prmtop_file = tmp_path / 'system.prmtop'
+    inpcrd_file = tmp_path / 'system.inpcrd'
 
     prmtop_file.write_text(prmtop_content)
     inpcrd_file.write_text(inpcrd_content)
 
     return {
-        "prmtop": prmtop_file,
-        "inpcrd": inpcrd_file,
-        "path": tmp_path,
+        'prmtop': prmtop_file,
+        'inpcrd': inpcrd_file,
+        'path': tmp_path,
     }
 
 
@@ -354,19 +354,19 @@ def real_amber_system_files(tmp_path: Path) -> dict:
     """
     import shutil
 
-    src = get_test_data_dir() / "amber"
+    src = get_test_data_dir() / 'amber'
     files = {}
     for key, name in (
-        ("prmtop", "ala_dipeptide.prmtop"),
-        ("inpcrd", "ala_dipeptide.inpcrd"),
-        ("pdb", "ala_dipeptide.pdb"),
-        ("dcd", "ala_dipeptide.dcd"),
+        ('prmtop', 'ala_dipeptide.prmtop'),
+        ('inpcrd', 'ala_dipeptide.inpcrd'),
+        ('pdb', 'ala_dipeptide.pdb'),
+        ('dcd', 'ala_dipeptide.dcd'),
     ):
         dest = tmp_path / name
         shutil.copy(src / name, dest)
         files[key] = dest
 
-    files["path"] = tmp_path
+    files['path'] = tmp_path
     return files
 
 
@@ -386,17 +386,17 @@ def real_amber_explicit_files(tmp_path: Path) -> dict:
     """
     import shutil
 
-    src = get_test_data_dir() / "amber"
+    src = get_test_data_dir() / 'amber'
     files = {}
     for key, name in (
-        ("prmtop", "ala_dipeptide_solv.prmtop"),
-        ("inpcrd", "ala_dipeptide_solv.inpcrd"),
+        ('prmtop', 'ala_dipeptide_solv.prmtop'),
+        ('inpcrd', 'ala_dipeptide_solv.inpcrd'),
     ):
         dest = tmp_path / name
         shutil.copy(src / name, dest)
         files[key] = dest
 
-    files["path"] = tmp_path
+    files['path'] = tmp_path
     return files
 
 
@@ -433,7 +433,7 @@ methane
 M  END
 $$$$
 """
-    sdf_file = tmp_path / "ligand.sdf"
+    sdf_file = tmp_path / 'ligand.sdf'
     sdf_file.write_text(sdf_content)
     return sdf_file
 
@@ -448,7 +448,7 @@ def benzene_sdf() -> Path:
     Returns:
         Path to the static benzene SDF file.
     """
-    return get_test_data_dir() / "sdf" / "benzene.sdf"
+    return get_test_data_dir() / 'sdf' / 'benzene.sdf'
 
 
 # ---------------------------------------------------------------------------
@@ -460,18 +460,18 @@ def benzene_sdf() -> Path:
 def skip_without_openmm(real_openmm_available):
     """Skip test if OpenMM is not available."""
     if not real_openmm_available:
-        pytest.skip("OpenMM not available")
+        pytest.skip('OpenMM not available')
 
 
 @pytest.fixture
 def skip_without_amber(real_amber_available):
     """Skip test if AmberTools is not available."""
     if not real_amber_available:
-        pytest.skip("AmberTools not available")
+        pytest.skip('AmberTools not available')
 
 
 @pytest.fixture
 def skip_without_rdkit(real_rdkit_available):
     """Skip test if RDKit is not available."""
     if not real_rdkit_available:
-        pytest.skip("RDKit not available")
+        pytest.skip('RDKit not available')

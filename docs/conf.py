@@ -5,7 +5,8 @@
 
 import os
 import sys
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 # -- Path setup --------------------------------------------------------------
 sys.path.insert(0, os.path.abspath('../src'))
@@ -26,12 +27,12 @@ extensions = [
     'sphinx.ext.autosummary',
     'sphinx.ext.napoleon',
     'sphinx.ext.intersphinx',
-    'sphinx.ext.viewcode',      # Add source code links
-    'sphinx.ext.todo',          # Support TODO notes
+    'sphinx.ext.viewcode',  # Add source code links
+    'sphinx.ext.todo',  # Support TODO notes
     'sphinx_autodoc_typehints',
-    'sphinx_copybutton',        # Copy button for code blocks (add to deps)
+    'sphinx_copybutton',  # Copy button for code blocks (add to deps)
     'sphinx_wagtail_theme',
-    'myst_parser',              # Markdown support (renders the root CHANGELOG.md)
+    'myst_parser',  # Markdown support (renders the root CHANGELOG.md)
 ]
 
 # Autosummary settings

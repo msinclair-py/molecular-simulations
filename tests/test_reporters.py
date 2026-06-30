@@ -29,7 +29,7 @@ class TestRCReporterInit:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -45,7 +45,7 @@ class TestRCReporterInit:
             reporter.file.close()
 
             content = rc_file.read_text()
-            assert "rc0,rc,dist_ik, dist_jk" in content
+            assert 'rc0,rc,dist_ik, dist_jk' in content
 
     def test_rc_reporter_stores_parameters(self) -> None:
         """Test RCReporter stores initialization parameters correctly."""
@@ -53,7 +53,7 @@ class TestRCReporterInit:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -74,7 +74,7 @@ class TestRCReporterInit:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -102,7 +102,7 @@ class TestRCReporterDescribeNextReport:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -139,7 +139,7 @@ class TestRCReporterDescribeNextReport:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -160,7 +160,7 @@ class TestRCReporterDescribeNextReport:
             reporter.file.close()
 
     @pytest.mark.parametrize(
-        "current_step,interval,expected",
+        'current_step,interval,expected',
         [
             (0, 10, 10),
             (5, 10, 5),
@@ -179,7 +179,7 @@ class TestRCReporterDescribeNextReport:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -210,7 +210,7 @@ class TestRCReporterReport:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -238,14 +238,14 @@ class TestRCReporterReport:
             reporter.file.close()
 
             content = rc_file.read_text()
-            lines = content.strip().split("\n")
+            lines = content.strip().split('\n')
 
             # Should have header + 1 data line
             assert len(lines) == 2
 
             # Parse data line
             data_line = lines[1]
-            values = data_line.split(",")
+            values = data_line.split(',')
 
             assert len(values) == 4
 
@@ -270,7 +270,7 @@ class TestRCReporterReport:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -299,7 +299,7 @@ class TestRCReporterReport:
             reporter.file.close()
 
             content = rc_file.read_text()
-            lines = content.strip().split("\n")
+            lines = content.strip().split('\n')
 
             # Should have header + 3 data lines
             assert len(lines) == 4
@@ -310,7 +310,7 @@ class TestRCReporterReport:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -354,7 +354,7 @@ class TestRCReporterDistanceCalculations:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             # Atoms: i=0, j=1, k=2
             reporter = RCReporter(
@@ -385,8 +385,8 @@ class TestRCReporterDistanceCalculations:
             reporter.file.close()
 
             content = rc_file.read_text()
-            lines = content.strip().split("\n")
-            values = lines[1].split(",")
+            lines = content.strip().split('\n')
+            values = lines[1].split(',')
 
             rc = float(values[1])
             dist_ik = float(values[2])
@@ -402,7 +402,7 @@ class TestRCReporterDistanceCalculations:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -430,8 +430,8 @@ class TestRCReporterDistanceCalculations:
             reporter.file.close()
 
             content = rc_file.read_text()
-            lines = content.strip().split("\n")
-            values = lines[1].split(",")
+            lines = content.strip().split('\n')
+            values = lines[1].split(',')
 
             dist_ik = float(values[2])
             dist_jk = float(values[3])
@@ -451,7 +451,7 @@ class TestRCReporterDistanceCalculations:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -481,8 +481,8 @@ class TestRCReporterDistanceCalculations:
             reporter.file.close()
 
             content = rc_file.read_text()
-            lines = content.strip().split("\n")
-            values = lines[1].split(",")
+            lines = content.strip().split('\n')
+            values = lines[1].split(',')
 
             rc = float(values[1])
             assert rc == pytest.approx(0.6, rel=1e-5)
@@ -493,7 +493,7 @@ class TestRCReporterDistanceCalculations:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -523,8 +523,8 @@ class TestRCReporterDistanceCalculations:
             reporter.file.close()
 
             content = rc_file.read_text()
-            lines = content.strip().split("\n")
-            values = lines[1].split(",")
+            lines = content.strip().split('\n')
+            values = lines[1].split(',')
 
             rc = float(values[1])
             assert rc == pytest.approx(-0.6, rel=1e-5)
@@ -539,7 +539,7 @@ class TestRCReporterCleanup:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -567,7 +567,7 @@ class TestRCReporterEdgeCases:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -595,8 +595,8 @@ class TestRCReporterEdgeCases:
             reporter.file.close()
 
             content = rc_file.read_text()
-            lines = content.strip().split("\n")
-            values = lines[1].split(",")
+            lines = content.strip().split('\n')
+            values = lines[1].split(',')
 
             # All distances should be 0
             assert float(values[1]) == 0.0  # rc
@@ -609,7 +609,7 @@ class TestRCReporterEdgeCases:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -636,8 +636,8 @@ class TestRCReporterEdgeCases:
             reporter.file.close()
 
             content = rc_file.read_text()
-            lines = content.strip().split("\n")
-            values = lines[1].split(",")
+            lines = content.strip().split('\n')
+            values = lines[1].split(',')
 
             # Distances should be correct despite large absolute positions
             assert float(values[2]) == pytest.approx(0.5, rel=1e-5)  # dist_ik
@@ -650,7 +650,7 @@ class TestRCReporterEdgeCases:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -671,7 +671,7 @@ class TestRCReporterEdgeCases:
 
 
 @pytest.mark.parametrize(
-    "atom_i,atom_j,atom_k,positions,expected_rc",
+    'atom_i,atom_j,atom_k,positions,expected_rc',
     [
         # Linear arrangement, k at midpoint
         (0, 1, 2, [[0, 0, 0], [1, 0, 0], [0.5, 0, 0]], 0.0),
@@ -701,7 +701,7 @@ class TestRCReporterParametrized:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_test.log"
+            rc_file = path / 'rc_test.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -719,8 +719,8 @@ class TestRCReporterParametrized:
             reporter.file.close()
 
             content = rc_file.read_text()
-            lines = content.strip().split("\n")
-            values = lines[1].split(",")
+            lines = content.strip().split('\n')
+            values = lines[1].split(',')
 
             rc = float(values[1])
             assert rc == pytest.approx(expected_rc, rel=1e-5)
@@ -739,7 +739,7 @@ class TestRCReporterIntegration:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            rc_file = path / "rc_workflow.log"
+            rc_file = path / 'rc_workflow.log'
 
             reporter = RCReporter(
                 file=rc_file,
@@ -772,14 +772,14 @@ class TestRCReporterIntegration:
 
             # Verify output
             content = rc_file.read_text()
-            lines = content.strip().split("\n")
+            lines = content.strip().split('\n')
 
             assert len(lines) == n_frames + 1  # header + data
 
             # Check that RC values progress correctly
             rc_values = []
             for line in lines[1:]:
-                values = line.split(",")
+                values = line.split(',')
                 rc_values.append(float(values[1]))
 
             # RC should go from negative to positive as k moves from i to j
@@ -788,9 +788,9 @@ class TestRCReporterIntegration:
 
             # All rc0 values should be the target
             for line in lines[1:]:
-                values = line.split(",")
+                values = line.split(',')
                 assert float(values[0]) == -0.2
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

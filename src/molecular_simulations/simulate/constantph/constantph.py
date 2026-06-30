@@ -325,10 +325,16 @@ class ConstantPH:
         for residue in parm.residues:
             # Check if residue is water or ion
             is_water_ion = residue.name in self.WATER_ION_NAMES
-            if not is_water_ion: # noqa: SIM102
+            if not is_water_ion:  # noqa: SIM102
                 # Also check for single-atom ions by element
-                if (len(residue.atoms) == 1 and
-                    residue.atoms[0].element in [11, 17, 19, 35, 37, 55]): # Na, Cl, K, Br, Rb, Cs
+                if len(residue.atoms) == 1 and residue.atoms[0].element in [
+                    11,
+                    17,
+                    19,
+                    35,
+                    37,
+                    55,
+                ]:  # Na, Cl, K, Br, Rb, Cs
                     is_water_ion = True
 
             if not is_water_ion:
@@ -717,7 +723,7 @@ class ConstantPH:
                         originalParams = protonatedExceptionParams[key]
                         stateExceptionParams[key] = (
                             0.0 * elementary_charge**2,
-                            *originalParams[1:]
+                            *originalParams[1:],
                         )
                 state.exceptionParameters[implicitNBForceIdx] = stateExceptionParams
 
@@ -1022,7 +1028,10 @@ class ConstantPH:
                     if key not in stateExceptionParams:
                         # Zero out the charge product for this exception
                         originalParams = protonatedExceptionParams[key]
-                        stateExceptionParams[key] = (0.0 * elementary_charge**2, *originalParams[1:])
+                        stateExceptionParams[key] = (
+                            0.0 * elementary_charge**2,
+                            *originalParams[1:],
+                        )
 
                 # Update the state's parameters
                 state.particleParameters[explicitNBForceIdx] = stateParams
@@ -1036,7 +1045,9 @@ class ConstantPH:
         for force in system.getForces():
             if isinstance(force, NonbondedForce):
                 for i in range(force.getNumExceptions()):
-                    p1, p2, _chargeProd, _sigma, _epsilon = force.getExceptionParameters(i)
+                    p1, p2, _chargeProd, _sigma, _epsilon = (
+                        force.getExceptionParameters(i)
+                    )
                     atom1 = atoms[p1]
                     atom2 = atoms[p2]
                     if atom1.residue == atom2.residue:
@@ -1053,7 +1064,9 @@ class ConstantPH:
         for force in system.getForces():
             if isinstance(force, NonbondedForce):
                 for i in range(force.getNumExceptions()):
-                    p1, p2, chargeProd, _sigma, _epsilon = force.getExceptionParameters(i)
+                    p1, p2, chargeProd, _sigma, _epsilon = force.getExceptionParameters(
+                        i
+                    )
                     atom1 = atoms[p1]
                     atom2 = atoms[p2]
                     if (
@@ -1273,7 +1286,7 @@ class ConstantPH:
                         f'dE={dE:.2f} kJ/mol, '
                         f'dRef={dRef:.2f} kJ/mol, '
                         f'w={float(w):.3f}, '
-                        f"accept={'yes' if w <= 0 else f'prob={np.exp(-float(w)):.4f}'}"
+                        f'accept={"yes" if w <= 0 else f"prob={np.exp(-float(w)):.4f}"}'
                     )
 
             if w > 0.0 and np.exp(-w) < np.random.random():
@@ -1457,9 +1470,14 @@ class ConstantPH:
 
                 for i in titration1.explicitHydrogenIndices:
                     for j in titration2.explicitHydrogenIndices:
-                        if (i < len(explicitPositions) and
-                            j < len(explicitPositions) and
-                            periodicDistance(explicitPositions[i], explicitPositions[j]) < 0.2):
+                        if (
+                            i < len(explicitPositions)
+                            and j < len(explicitPositions)
+                            and periodicDistance(
+                                explicitPositions[i], explicitPositions[j]
+                            )
+                            < 0.2
+                        ):
                             isNeighbor = True
 
                 if isNeighbor:

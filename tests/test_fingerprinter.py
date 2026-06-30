@@ -5,7 +5,7 @@ Unit tests for fingerprinter.py module
 import os
 
 # Disable numba JIT compilation to avoid path resolution issues during testing
-os.environ["NUMBA_DISABLE_JIT"] = "1"
+os.environ['NUMBA_DISABLE_JIT'] = '1'
 
 import tempfile
 from pathlib import Path
@@ -257,14 +257,14 @@ class TestFingerprinterClass:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock topology")
+            top_file = path / 'system.prmtop'
+            top_file.write_text('mock topology')
 
-            fp = Fingerprinter(topology=str(top_file), target_selection="segid A")
+            fp = Fingerprinter(topology=str(top_file), target_selection='segid A')
 
             assert fp.topology == top_file
-            assert fp.target_selection == "segid A"
-            assert fp.binder_selection == "not segid A"
+            assert fp.target_selection == 'segid A'
+            assert fp.binder_selection == 'not segid A'
 
     def test_fingerprinter_init_with_binder_selection(self):
         """Test Fingerprinter with explicit binder selection"""
@@ -272,16 +272,16 @@ class TestFingerprinterClass:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock topology")
+            top_file = path / 'system.prmtop'
+            top_file.write_text('mock topology')
 
             fp = Fingerprinter(
                 topology=str(top_file),
-                target_selection="segid A",
-                binder_selection="segid B",
+                target_selection='segid A',
+                binder_selection='segid B',
             )
 
-            assert fp.binder_selection == "segid B"
+            assert fp.binder_selection == 'segid B'
 
     def test_fingerprinter_output_path(self):
         """Test Fingerprinter output path configuration"""
@@ -289,20 +289,20 @@ class TestFingerprinterClass:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock topology")
+            top_file = path / 'system.prmtop'
+            top_file.write_text('mock topology')
 
-            out_path = path / "output"
+            out_path = path / 'output'
             out_path.mkdir()
 
             fp = Fingerprinter(
-                topology=str(top_file), out_path=str(out_path), out_name="custom.npz"
+                topology=str(top_file), out_path=str(out_path), out_name='custom.npz'
             )
 
-            assert fp.out == out_path / "custom.npz"
+            assert fp.out == out_path / 'custom.npz'
 
-    @patch("molecular_simulations.analysis.fingerprinter.AmberPrmtopFile")
-    @patch("molecular_simulations.analysis.fingerprinter.openmm")
+    @patch('molecular_simulations.analysis.fingerprinter.AmberPrmtopFile')
+    @patch('molecular_simulations.analysis.fingerprinter.openmm')
     def test_assign_nonbonded_params(self, mock_openmm, mock_prmtop):
         """Test assign_nonbonded_params method"""
         from molecular_simulations.analysis.fingerprinter import Fingerprinter
@@ -327,8 +327,8 @@ class TestFingerprinterClass:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock topology")
+            top_file = path / 'system.prmtop'
+            top_file.write_text('mock topology')
 
             fp = Fingerprinter(topology=str(top_file))
             fp.assign_nonbonded_params()
@@ -337,7 +337,7 @@ class TestFingerprinterClass:
             assert len(fp.sigmas) == 10
             assert len(fp.epsilons) == 10
 
-    @patch("molecular_simulations.analysis.fingerprinter.mda")
+    @patch('molecular_simulations.analysis.fingerprinter.mda')
     def test_load_pdb_with_pdb_file(self, mock_mda):
         """Test load_pdb with PDB file"""
         from molecular_simulations.analysis.fingerprinter import Fingerprinter
@@ -346,9 +346,9 @@ class TestFingerprinterClass:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.pdb"
+            top_file = path / 'system.pdb'
             top_file.write_text(
-                "ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
+                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
             )
 
             fp = Fingerprinter(topology=str(top_file))
@@ -356,7 +356,7 @@ class TestFingerprinterClass:
 
             mock_mda.Universe.assert_called_once_with(top_file)
 
-    @patch("molecular_simulations.analysis.fingerprinter.mda")
+    @patch('molecular_simulations.analysis.fingerprinter.mda')
     def test_load_pdb_with_prmtop_and_trajectory(self, mock_mda):
         """Test load_pdb with prmtop and trajectory"""
         from molecular_simulations.analysis.fingerprinter import Fingerprinter
@@ -365,17 +365,17 @@ class TestFingerprinterClass:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock topology")
-            traj_file = path / "traj.dcd"
-            traj_file.write_text("mock trajectory")
+            top_file = path / 'system.prmtop'
+            top_file.write_text('mock topology')
+            traj_file = path / 'traj.dcd'
+            traj_file.write_text('mock trajectory')
 
             fp = Fingerprinter(topology=str(top_file), trajectory=str(traj_file))
             fp.load_pdb()
 
             mock_mda.Universe.assert_called_once_with(top_file, traj_file)
 
-    @patch("molecular_simulations.analysis.fingerprinter.mda")
+    @patch('molecular_simulations.analysis.fingerprinter.mda')
     def test_assign_residue_mapping(self, mock_mda):
         """Test assign_residue_mapping method"""
         from molecular_simulations.analysis.fingerprinter import Fingerprinter
@@ -401,8 +401,8 @@ class TestFingerprinterClass:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.pdb"
-            top_file.write_text("mock")
+            top_file = path / 'system.pdb'
+            top_file.write_text('mock')
 
             fp = Fingerprinter(topology=str(top_file))
             fp.u = mock_universe
@@ -417,8 +417,8 @@ class TestFingerprinterClass:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock topology")
+            top_file = path / 'system.prmtop'
+            top_file.write_text('mock topology')
 
             fp = Fingerprinter(topology=str(top_file))
             fp.target_fingerprint = np.random.rand(10, 5, 2)
@@ -430,14 +430,14 @@ class TestFingerprinterClass:
 
             # Load and verify
             data = np.load(fp.out)
-            assert "target" in data
-            assert "binder" in data
+            assert 'target' in data
+            assert 'binder' in data
 
 
 class TestFingerprinterLoadPdb:
     """Test suite for Fingerprinter.load_pdb method."""
 
-    @patch("molecular_simulations.analysis.fingerprinter.mda")
+    @patch('molecular_simulations.analysis.fingerprinter.mda')
     def test_load_pdb_with_pdb_file(self, mock_mda):
         """Test load_pdb creates Universe from PDB file."""
         mock_universe = MagicMock()
@@ -447,8 +447,8 @@ class TestFingerprinterLoadPdb:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.pdb"
-            top_file.write_text("mock pdb")
+            top_file = path / 'system.pdb'
+            top_file.write_text('mock pdb')
 
             fp = Fingerprinter(topology=str(top_file))
             fp.load_pdb()
@@ -456,7 +456,7 @@ class TestFingerprinterLoadPdb:
             mock_mda.Universe.assert_called_once_with(top_file)
             assert fp.u is mock_universe
 
-    @patch("molecular_simulations.analysis.fingerprinter.mda")
+    @patch('molecular_simulations.analysis.fingerprinter.mda')
     def test_load_pdb_with_prmtop_and_trajectory(self, mock_mda):
         """Test load_pdb creates Universe from prmtop + trajectory."""
         mock_universe = MagicMock()
@@ -466,17 +466,17 @@ class TestFingerprinterLoadPdb:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock prmtop")
-            traj_file = path / "traj.dcd"
-            traj_file.write_text("mock traj")
+            top_file = path / 'system.prmtop'
+            top_file.write_text('mock prmtop')
+            traj_file = path / 'traj.dcd'
+            traj_file.write_text('mock traj')
 
             fp = Fingerprinter(topology=str(top_file), trajectory=str(traj_file))
             fp.load_pdb()
 
             mock_mda.Universe.assert_called_once_with(top_file, Path(str(traj_file)))
 
-    @patch("molecular_simulations.analysis.fingerprinter.mda")
+    @patch('molecular_simulations.analysis.fingerprinter.mda')
     def test_load_pdb_with_prmtop_finds_inpcrd(self, mock_mda):
         """Test load_pdb finds .inpcrd when no trajectory specified."""
         mock_universe = MagicMock()
@@ -486,10 +486,10 @@ class TestFingerprinterLoadPdb:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock prmtop")
-            inpcrd_file = path / "system.inpcrd"
-            inpcrd_file.write_text("mock inpcrd")
+            top_file = path / 'system.prmtop'
+            top_file.write_text('mock prmtop')
+            inpcrd_file = path / 'system.inpcrd'
+            inpcrd_file.write_text('mock inpcrd')
 
             fp = Fingerprinter(topology=str(top_file))
             fp.load_pdb()
@@ -506,8 +506,8 @@ class TestFingerprinterIterateFrames:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock")
+            top_file = path / 'system.prmtop'
+            top_file.write_text('mock')
 
             fp = Fingerprinter(topology=str(top_file))
 
@@ -517,7 +517,7 @@ class TestFingerprinterIterateFrames:
             fp.target_resmap = [np.array([0, 1]), np.array([2, 3])]
             fp.binder_resmap = [np.array([4, 5, 6])]
 
-            with patch.object(fp, "calculate_fingerprints"):
+            with patch.object(fp, 'calculate_fingerprints'):
                 fp.iterate_frames()
 
             assert fp.target_fingerprint.shape == (2, 2, 2)
@@ -533,16 +533,16 @@ class TestFingerprinterRun:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock")
+            top_file = path / 'system.prmtop'
+            top_file.write_text('mock')
 
             fp = Fingerprinter(topology=str(top_file))
 
             with (
-                patch.object(fp, "assign_nonbonded_params") as mock_params,
-                patch.object(fp, "load_pdb") as mock_load,
-                patch.object(fp, "assign_residue_mapping") as mock_map,
-                patch.object(fp, "iterate_frames") as mock_iter,
+                patch.object(fp, 'assign_nonbonded_params') as mock_params,
+                patch.object(fp, 'load_pdb') as mock_load,
+                patch.object(fp, 'assign_residue_mapping') as mock_map,
+                patch.object(fp, 'iterate_frames') as mock_iter,
             ):
                 fp.run()
 
@@ -552,5 +552,5 @@ class TestFingerprinterRun:
             mock_iter.assert_called_once()
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

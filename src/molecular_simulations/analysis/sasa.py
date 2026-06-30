@@ -46,8 +46,8 @@ class SASA(AnalysisBase):
         ValueError: If the Universe has no 'elements' property.
 
     Example:
-        >>> u = mda.Universe("system.prmtop", "traj.dcd")
-        >>> sasa = SASA(u.select_atoms("protein"))
+        >>> u = mda.Universe('system.prmtop', 'traj.dcd')
+        >>> sasa = SASA(u.select_atoms('protein'))
         >>> sasa.run()
         >>> print(sasa.results.sasa)
     """
@@ -198,8 +198,8 @@ class RelativeSASA(SASA):
         ValueError: If the Universe has no 'bonds' property.
 
     Example:
-        >>> u = mda.Universe("system.prmtop", "traj.dcd")
-        >>> rsasa = RelativeSASA(u.select_atoms("protein"))
+        >>> u = mda.Universe('system.prmtop', 'traj.dcd')
+        >>> rsasa = RelativeSASA(u.select_atoms('protein'))
         >>> rsasa.run()
         >>> print(rsasa.results.relative_area)
     """

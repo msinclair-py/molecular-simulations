@@ -57,6 +57,7 @@ from openmm.unit import (
 PathLike = Path | str
 OptPath = Path | str | None
 
+
 class Simulator:
     """Class for performing OpenMM simulations on AMBER FF inputs.
 
@@ -283,7 +284,9 @@ class Simulator:
 
         return system
 
-    def setup_sim(self, system: System, dt: float) -> tuple[Simulation, LangevinMiddleIntegrator]:
+    def setup_sim(
+        self, system: System, dt: float
+    ) -> tuple[Simulation, LangevinMiddleIntegrator]:
         """Build OpenMM Simulation and Integrator objects.
 
         Creates a LangevinMiddleIntegrator with the specified timestep and
@@ -297,7 +300,9 @@ class Simulator:
             Tuple containing (Simulation, LangevinMiddleIntegrator) objects.
         """
         integrator = LangevinMiddleIntegrator(
-            self.temperature * kelvin, 1 / picosecond, dt * picoseconds  # ty: ignore[unsupported-operator]
+            self.temperature * kelvin,
+            1 / picosecond,
+            dt * picoseconds,  # ty: ignore[unsupported-operator]
         )
         simulation = Simulation(
             self.topology.topology,
@@ -964,7 +969,9 @@ class Minimizer:
         """
         system = self.load_files()
         integrator = LangevinMiddleIntegrator(
-            300 * kelvin, 1 / picosecond, 0.001 * picoseconds  # ty: ignore[unsupported-operator]
+            300 * kelvin,
+            1 / picosecond,
+            0.001 * picoseconds,  # ty: ignore[unsupported-operator]
         )
         simulation = Simulation(
             self.topology, system, integrator, self.platform, self.properties

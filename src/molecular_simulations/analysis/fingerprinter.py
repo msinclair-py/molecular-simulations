@@ -16,6 +16,7 @@ from openmm.app import AmberPrmtopFile
 OptPath = Path | str | None
 PathLike = Path | str
 
+
 @njit
 def unravel_index(n1: int, n2: int) -> tuple[np.ndarray, np.ndarray]:
     """Create unraveled indices for vectorized distance calculations.
@@ -284,7 +285,7 @@ class Fingerprinter:
         out_name: Output filename. If None, uses 'fingerprint.npz'.
 
     Example:
-        >>> fp = Fingerprinter("complex.prmtop", "traj.dcd")
+        >>> fp = Fingerprinter('complex.prmtop', 'traj.dcd')
         >>> fp.run()
         >>> fp.save()
     """
@@ -328,9 +329,9 @@ class Fingerprinter:
         """
         system = AmberPrmtopFile(self.topology).createSystem()
 
-        nonbonded = next(iter(
-            f for f in system.getForces() if isinstance(f, openmm.NonbondedForce)
-        ))
+        nonbonded = next(
+            iter(f for f in system.getForces() if isinstance(f, openmm.NonbondedForce))
+        )
 
         self.epsilons = np.zeros(system.getNumParticles())
         self.sigmas = np.zeros(system.getNumParticles())

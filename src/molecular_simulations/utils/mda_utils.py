@@ -1,7 +1,9 @@
+from pathlib import Path
+
 import MDAnalysis as mda
 import numpy as np
-from pathlib import Path
 from rust_simulation_tools import kabsch_align  # ty: ignore[unresolved-import]
+
 
 def trim_trajectory(
     u: mda.Universe,

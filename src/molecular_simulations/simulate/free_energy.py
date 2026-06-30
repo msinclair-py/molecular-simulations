@@ -148,16 +148,16 @@ class EVBAnalyzer:
     Example:
         >>> # Analyze existing EVB run
         >>> analyzer = EVBAnalyzer(
-        ...     log_path=Path("/scratch/evb_run/logs"),
-        ...     log_prefix="reactant",
+        ...     log_path=Path('/scratch/evb_run/logs'),
+        ...     log_prefix='reactant',
         ...     k_umbrella=160000.0,  # Must match what was used in simulation
         ...     rc0_values=np.linspace(-0.2, 0.2, 50),  # Window centers
         ... )
         >>> result = analyzer.run_full_analysis(temperature=300.0)
-        >>> print(f"Barrier: {result.pmf.pmf.max():.2f} kJ/mol")
+        >>> print(f'Barrier: {result.pmf.pmf.max():.2f} kJ/mol')
 
         >>> # Or load from a metadata file saved during simulation
-        >>> analyzer = EVBAnalyzer.from_metadata("/scratch/evb_run/evb_metadata.toml")
+        >>> analyzer = EVBAnalyzer.from_metadata('/scratch/evb_run/evb_metadata.toml')
         >>> result = analyzer.run_full_analysis()
     """
 
@@ -658,15 +658,17 @@ class EVBAnalyzer:
         # Equilibration
         equilibration = self.detect_equilibration(rc_data_raw)
         if discard_equilibration:
-            rc_data = [rc[eq.t0 :] for rc, eq in zip(rc_data_raw, equilibration, strict=True)]
-            n_discarded = sum(eq.t0 for eq in equilibration)
-            n_total = sum(len(rc) for rc in rc_data_raw)
+            rc_data = [
+                rc[eq.t0 :] for rc, eq in zip(rc_data_raw, equilibration, strict=True)
+            ]
+            sum(eq.t0 for eq in equilibration)
+            sum(len(rc) for rc in rc_data_raw)
         else:
             rc_data = rc_data_raw
 
         # Convergence
         convergence = self.check_convergence(rc_data, block_size, sem_threshold)
-        n_converged = sum(1 for c in convergence if c.is_converged)
+        sum(1 for c in convergence if c.is_converged)
 
         # Overlap
         overlap = self.analyze_overlap(rc_data, n_bins, overlap_threshold)
@@ -675,7 +677,7 @@ class EVBAnalyzer:
         pmf = self.compute_pmf(rc_data, temperature, n_bins)
         valid_pmf = pmf.pmf[~np.isnan(pmf.pmf)]
         if len(valid_pmf) > 0:
-            barrier = valid_pmf.max()
+            valid_pmf.max()
 
         return EVBAnalysisResult(
             pmf=pmf,
@@ -904,7 +906,9 @@ class EVB:
             p1 = a1.positions
             p2 = a2.positions
 
-            rc_min = float((np.linalg.norm(p0 - p2) - np.linalg.norm(p1 - p2)) * 0.1)  # to nm
+            rc_min = float(
+                (np.linalg.norm(p0 - p2) - np.linalg.norm(p1 - p2)) * 0.1
+            )  # to nm
             rc_interval = float(np.abs(rc_min * 2) / self.n_windows)
             rc = [rc_min, rc_min * -1 + rc_interval, rc_interval]
 
@@ -1456,7 +1460,7 @@ class EVB:
         max_iter = 1000
         tolerance = 1e-7
 
-        for iteration in range(max_iter):
+        for _iteration in range(max_iter):
             f_k_old = f_k.copy()
 
             # Compute denominator for each bin
@@ -1543,7 +1547,7 @@ class EVB:
             >>> evb = EVB(topology, coordinates, ...)
             >>> evb.run_evb()  # Run umbrella sampling
             >>> result = evb.run_full_analysis(temperature=300.0)
-            >>> print(f"Barrier height: {result.pmf.pmf.max():.2f} kJ/mol")
+            >>> print(f'Barrier height: {result.pmf.pmf.max():.2f} kJ/mol')
         """
         # Load RC data
         rc_data_raw = self.load_rc_data()
@@ -1553,15 +1557,17 @@ class EVB:
 
         # Remove equilibration frames if requested
         if discard_equilibration:
-            rc_data = [rc[eq.t0 :] for rc, eq in zip(rc_data_raw, equilibration, strict=True)]
-            n_discarded = sum(eq.t0 for eq in equilibration)
-            n_total = sum(len(rc) for rc in rc_data_raw)
+            rc_data = [
+                rc[eq.t0 :] for rc, eq in zip(rc_data_raw, equilibration, strict=True)
+            ]
+            sum(eq.t0 for eq in equilibration)
+            sum(len(rc) for rc in rc_data_raw)
         else:
             rc_data = rc_data_raw
 
         # Check convergence
         convergence = self.check_convergence(rc_data, block_size, sem_threshold)
-        n_converged = sum(1 for c in convergence if c.is_converged)
+        sum(1 for c in convergence if c.is_converged)
 
         # Analyze overlap
         overlap = self.analyze_overlap(rc_data, n_bins, overlap_threshold)
@@ -1572,7 +1578,7 @@ class EVB:
         # Report key results
         valid_pmf = pmf.pmf[~np.isnan(pmf.pmf)]
         if len(valid_pmf) > 0:
-            barrier = valid_pmf.max()
+            valid_pmf.max()
 
         return EVBAnalysisResult(
             pmf=pmf,
@@ -1681,7 +1687,7 @@ class EVB:
             >>> evb.run_evb()  # May get interrupted by walltime
             >>>
             >>> # Later, in a new job:
-            >>> analyzer = EVBAnalyzer.from_metadata("path/to/evb_metadata.toml")
+            >>> analyzer = EVBAnalyzer.from_metadata('path/to/evb_metadata.toml')
             >>> result = analyzer.run_full_analysis()
         """
         output_path = (

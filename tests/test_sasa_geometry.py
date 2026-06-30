@@ -15,7 +15,7 @@ def test_get_sphere_points_on_unit_sphere():
 
     mock_ag = MagicMock(spec=mda.AtomGroup)
     mock_ag.universe = mock_universe
-    mock_ag.elements = np.array(["C", "H"])  # Need at least some elements
+    mock_ag.elements = np.array(['C', 'H'])  # Need at least some elements
 
     # Create SASA instance
     sasa = SASA(mock_ag, n_points=256)

@@ -46,7 +46,7 @@ class GenericDataloader:
         data_files: List of paths to input data files (.npy format).
 
     Example:
-        >>> loader = GenericDataloader(["data1.npy", "data2.npy"])
+        >>> loader = GenericDataloader(['data1.npy', 'data2.npy'])
         >>> print(loader.data.shape)
     """
 
@@ -121,7 +121,7 @@ class PeriodicDataloader(GenericDataloader):
             periodic data (e.g., dihedral angles).
 
     Example:
-        >>> loader = PeriodicDataloader(["dihedrals.npy"])
+        >>> loader = PeriodicDataloader(['dihedrals.npy'])
         >>> # Original 10 features become 20 features
     """
 
@@ -205,7 +205,7 @@ class AutoKMeans:
             Defaults to {'n_components': 2}.
 
     Example:
-        >>> clusterer = AutoKMeans("data/", max_clusters=15)
+        >>> clusterer = AutoKMeans('data/', max_clusters=15)
         >>> clusterer.run()
         >>> print(clusterer.cluster_centers)
     """
@@ -218,7 +218,7 @@ class AutoKMeans:
         max_clusters: int = 10,
         stride: int = 1,
         reduction_algorithm: str = 'PCA',
-        reduction_kws: dict[str, Any] = {'n_components': 2}, # noqa: B006
+        reduction_kws: dict[str, Any] = {'n_components': 2},  # noqa: B006
     ):
         """Initialize the automatic clustering workflow.
 
@@ -370,7 +370,7 @@ class Decomposition:
             decomposer constructor.
 
     Example:
-        >>> decomp = Decomposition("PCA", n_components=3)
+        >>> decomp = Decomposition('PCA', n_components=3)
         >>> reduced_data = decomp.fit_transform(data)
     """
 

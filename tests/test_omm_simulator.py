@@ -100,6 +100,21 @@ def _check_openmm_available():
         return False
 
 
+def _has_opencl():
+    """Check whether an OpenCL OpenMM platform is registered.
+
+    CI's pip-installed OpenMM ships only Reference and CPU, so real-OpenCL tests
+    must skip there rather than fail.
+    """
+    try:
+        from openmm import Platform
+
+        Platform.getPlatformByName("OpenCL")
+        return True
+    except Exception:
+        return False
+
+
 # Custom marker for tests requiring OpenMM
 requires_openmm = pytest.mark.skipif(
     not _check_openmm_available(), reason="OpenMM not available or no working platform"
@@ -1137,6 +1152,9 @@ class TestSimulatorPlatformInit:
 
             assert sim.properties["DeviceIndex"] == "0,1"
 
+    @pytest.mark.skipif(
+        not _has_opencl(), reason="OpenCL platform not available in this OpenMM build"
+    )
     def test_opencl_platform_with_env_variable(self, tmp_path):
         """Test OpenCL platform uses ZE_AFFINITY_MASK env variable."""
         from molecular_simulations.simulate.omm_simulator import Simulator

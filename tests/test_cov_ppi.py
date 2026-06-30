@@ -7,10 +7,8 @@ without MDAnalysis installed.
 """
 
 import json
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import polars as pl
@@ -427,52 +425,18 @@ class TestPPInteractions:
 
 
 class TestEvaluateHBond:
-    """Test the evaluate_hbond method"""
+    """Test the evaluate_hbond method on real donor/acceptor groups."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_evaluate_hbond_found(self, mock_mda):
-        """Test evaluate_hbond when HBond is found"""
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
+    def test_evaluate_hbond_found(self, traj_ppi):
+        """evaluate_hbond scores real Lys-donor / Asp-acceptor geometry."""
+        lys = traj_ppi.u.select_atoms("chainID A and resname LYS")
+        asp = traj_ppi.u.select_atoms("chainID B and resname ASP")
 
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
+        donors, acceptors = traj_ppi.survey_donors_acceptors(lys, asp)
+        result = traj_ppi.evaluate_hbond(donors, acceptors)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
-
-            # Create mock donor and acceptor atoms
-            mock_h = MagicMock()
-            mock_h.position = np.array([0.0, 1.0, 0.0])
-            mock_h.type = "H"
-
-            mock_donor = MagicMock()
-            mock_donor.position = np.array([0.0, 0.0, 0.0])
-            mock_donor.bonded_atoms = MagicMock()
-            mock_donor.bonded_atoms.__iter__ = MagicMock(return_value=iter([mock_h]))
-
-            mock_donor_group = MagicMock()
-            mock_donor_group.atoms = [mock_donor]
-
-            mock_acceptor = MagicMock()
-            mock_acceptor.position = np.array([0.0, 2.5, 0.0])  # Close enough for HBond
-
-            mock_acceptor_group = MagicMock()
-            mock_acceptor_group.atoms = [mock_acceptor]
-
-            # Set distance cutoff to allow this to be an HBond
-            ppi.hb_d = 3.5
-            ppi.hb_a = 60.0  # Allow wide angle
-
-            result = ppi.evaluate_hbond(mock_donor_group, mock_acceptor_group)
-
-            # Should return 0 or 1
-            assert result in [0, 1]
+        # First frame has the amine donating to the carboxylate -> a hydrogen bond
+        assert result == 1
 
 
 class TestAnalyzeHydrophobic:
@@ -525,43 +489,18 @@ class TestAnalyzeSaltbridge:
 
 
 class TestComputeInteractions:
-    """Test compute_interactions method"""
+    """Test compute_interactions method on the real Lys/Asp pair."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.convert_aa_code")
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_compute_interactions(self, mock_mda, mock_convert):
-        """Test compute_interactions method"""
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
+    def test_compute_interactions(self, traj_ppi):
+        """compute_interactions scores the real Lys(2)-Asp(5) interface."""
+        result = traj_ppi.compute_interactions(2, 5)
 
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
-
-        # Mock the select_atoms return
-        mock_grp = MagicMock()
-        mock_grp.resnames = ["ALA"]
-        mock_universe.select_atoms.return_value = mock_grp
-
-        # Mock the aa code conversion
-        mock_convert.return_value = "A"
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
-
-            # Mock identify_interaction_type to return simple callable
-            ppi.identify_interaction_type = MagicMock(
-                return_value=([lambda x, y: 0.5], ["hydrophobic"])
-            )
-
-            result = ppi.compute_interactions(1, 10)
-
-            assert isinstance(result, dict)
-            # Result should have key in format 'A_X1-B_X10'
+        assert isinstance(result, dict)
+        # Key format is 'A_<aa><resid>-B_<aa><resid>'
+        assert "A_K2-B_D5" in result
+        scores = result["A_K2-B_D5"]
+        assert set(scores) == {"hydrophobic", "hbond", "saltbridge"}
+        assert all(0.0 <= v <= 1.0 for v in scores.values())
 
 
 class TestIdentifyInteractionType:
@@ -613,112 +552,45 @@ class TestMakePlot:
 
 
 class TestPlotResults:
-    """Test plot_results method"""
+    """Test plot_results method (real figures via the Agg backend)."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.Path")
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_plot_results(self, mock_mda, mock_path):
-        """Test plot_results method"""
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
+    def test_plot_results(self, saltbridge_ppi, tmp_path, monkeypatch):
+        """plot_results writes a real PNG per non-zero interaction type."""
+        # plot_results writes into a relative ./plots dir; sandbox it
+        monkeypatch.chdir(tmp_path)
 
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
+        results = {
+            "positive": {
+                "A_ALA1-B_LYS10": {
+                    "hydrophobic": 0.5,
+                    "hbond": 0.3,
+                    "saltbridge": 0.0,
+                }
+            },
+            "negative": {},
+        }
 
-        # Mock Path to avoid filesystem operations
-        mock_plot_dir = MagicMock()
-        mock_path.return_value = mock_plot_dir
+        saltbridge_ppi.plot_results(results)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
-
-            # Mock make_plot to avoid actual plotting
-            ppi.make_plot = MagicMock()
-            # Mock parse_results
-            ppi.parse_results = MagicMock(
-                return_value=pl.DataFrame(
-                    {
-                        "Residue Pair": ["A_ALA1-B_LYS10"],
-                        "Hydrophobic": [0.5],
-                        "Hydrogen Bond": [0.3],
-                        "Salt Bridge": [0.0],
-                        "Covariance": ["positive"],
-                    }
-                )
-            )
-
-            results = {
-                "positive": {
-                    "A_ALA1-B_LYS10": {
-                        "hydrophobic": 0.5,
-                        "hbond": 0.3,
-                        "saltbridge": 0.0,
-                    }
-                },
-                "negative": {},
-            }
-
-            ppi.plot_results(results)
-
-            # make_plot should have been called for non-zero interactions
-            assert ppi.make_plot.called
+        # Positive hydrophobic + hydrogen-bond columns are non-zero -> two PNGs
+        pngs = sorted(p.name for p in (tmp_path / "plots").glob("*.png"))
+        assert "Positive_Covariance_Hydrophobic.png" in pngs
+        assert "Positive_Covariance_Hydrogen_Bond.png" in pngs
 
 
 class TestSurveyDonorsAcceptors:
-    """Test survey_donors_acceptors method"""
+    """Test survey_donors_acceptors method on real residues."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.distance_array")
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_survey_donors_acceptors(self, mock_mda, mock_dist_array):
-        """Test survey_donors_acceptors method"""
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
+    def test_survey_donors_acceptors(self, traj_ppi):
+        """survey_donors_acceptors finds real donor/acceptor atoms via bonds."""
+        lys = traj_ppi.u.select_atoms("chainID A and resname LYS")
+        asp = traj_ppi.u.select_atoms("chainID B and resname ASP")
 
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_universe.select_atoms.return_value = MagicMock()
-        mock_mda.Universe.return_value = mock_universe
+        donors, acceptors = traj_ppi.survey_donors_acceptors(lys, asp)
 
-        # Mock distance array to return contacts
-        mock_dist_array.return_value = np.array([[2.5, 5.0], [3.0, 4.0]])
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
-
-            # Create mock atoms with O and N types
-            mock_h = MagicMock()
-            mock_h.types = ["H"]
-
-            mock_atom1 = MagicMock()
-            mock_atom1.type = "O"
-            mock_atom1.bonded_atoms = MagicMock()
-            mock_atom1.bonded_atoms.types = ["H", "C"]
-
-            mock_res1 = MagicMock()
-            mock_res1.atoms = [mock_atom1]
-
-            mock_atom2 = MagicMock()
-            mock_atom2.type = "N"
-            mock_atom2.bonded_atoms = MagicMock()
-            mock_atom2.bonded_atoms.types = ["H", "C"]
-
-            mock_res2 = MagicMock()
-            mock_res2.atoms = [mock_atom2]
-
-            donors, acceptors = ppi.survey_donors_acceptors(mock_res1, mock_res2)
-
-            # Should return AtomGroup-like objects
-            assert donors is not None
-            assert acceptors is not None
+        # Lys contributes amine N donors; Asp contributes carboxylate O acceptors
+        assert donors.n_atoms > 0
+        assert acceptors.n_atoms > 0
 
 
 class TestAnalyzeHbond:
@@ -741,316 +613,115 @@ class TestAnalyzeHbond:
 
 
 class TestPPInteractionsRun:
-    """Test suite for PPInteractions.run() method."""
+    """Test PPInteractions.run() end-to-end on the real trajectory."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_run_calls_workflow_steps(self, mock_mda):
-        """Test run() calls covariance, interpret, compute, save."""
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
+    def test_run_writes_results(self, traj_ppi):
+        """run() drives covariance -> interpret -> compute -> save for real."""
+        traj_ppi.run()
 
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
-
-            mock_cov = np.array([[0.5, -0.3], [-0.1, 0.2]])
-            positive = [(1, 10)]
-            negative = [(2, 11)]
-
-            with (
-                patch.object(ppi, "get_covariance", return_value=mock_cov) as mock_gc,
-                patch.object(
-                    ppi, "interpret_covariance", return_value=(positive, negative)
-                ) as mock_ic,
-                patch.object(
-                    ppi, "compute_interactions", return_value={"pair": {"hbond": 0.5}}
-                ) as mock_ci,
-                patch.object(ppi, "save") as mock_save,
-            ):
-                ppi.run()
-
-            mock_gc.assert_called_once()
-            mock_ic.assert_called_once_with(mock_cov)
-            assert mock_ci.call_count == 2  # once for positive, once for negative
-            mock_save.assert_called_once()
+        assert traj_ppi.out.exists()
+        data = json.loads(traj_ppi.out.read_text())
+        assert set(data) == {"positive", "negative"}
 
 
 class TestPPInteractionsComputeInteractions:
-    """Test suite for PPInteractions.compute_interactions()."""
+    """compute_interactions on the real Lys/Asp pair (cf. TestComputeInteractions)."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    @patch("molecular_simulations.analysis.cov_ppi.convert_aa_code")
-    def test_compute_interactions_returns_data(self, mock_convert, mock_mda):
-        """Test compute_interactions returns dict with interaction types."""
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
+    def test_compute_interactions_returns_data(self, traj_ppi):
+        """compute_interactions returns a dict keyed by the residue pair."""
+        result = traj_ppi.compute_interactions(2, 5)
 
-        mock_convert.side_effect = lambda x: x[:3]
-
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
-
-            # Mock select_atoms to return groups with resnames
-            mock_grp1 = MagicMock()
-            mock_grp1.resnames = ["ALA"]
-            mock_grp2 = MagicMock()
-            mock_grp2.resnames = ["GLY"]
-            ppi.u.select_atoms.side_effect = [mock_grp1, mock_grp2]
-
-            # Mock identify_interaction_type
-            mock_func = MagicMock(return_value=0.5)
-            ppi.identify_interaction_type = MagicMock(
-                return_value=([mock_func], ["hydrophobic"])
-            )
-
-            result = ppi.compute_interactions(1, 10)
-
-            assert isinstance(result, dict)
-            key = list(result.keys())[0]
-            assert "hydrophobic" in result[key]
+        assert isinstance(result, dict)
+        key = next(iter(result))
+        assert "hydrophobic" in result[key]
 
 
 class TestPPInteractionsAnalyzeSaltbridge:
-    """Test suite for PPInteractions.analyze_saltbridge()."""
+    """analyze_saltbridge charge-compatibility (cf. TestAnalyzeSaltbridge)."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_saltbridge_non_charged_returns_zero(self, mock_mda):
-        """Test saltbridge returns 0 for non-charged residues."""
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
+    def test_saltbridge_non_charged_returns_zero(self, saltbridge_ppi):
+        """Saltbridge returns 0 for a non-charged residue."""
+        res1 = SimpleNamespace(resnames=["ALA"])
+        res2 = SimpleNamespace(resnames=["GLU"])
 
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
+        assert saltbridge_ppi.analyze_saltbridge(res1, res2) == 0.0
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
+    def test_saltbridge_same_charge_returns_zero(self, saltbridge_ppi):
+        """Saltbridge returns 0 for two like-charged residues."""
+        both_positive = saltbridge_ppi.analyze_saltbridge(
+            SimpleNamespace(resnames=["LYS"]), SimpleNamespace(resnames=["ARG"])
+        )
+        both_negative = saltbridge_ppi.analyze_saltbridge(
+            SimpleNamespace(resnames=["ASP"]), SimpleNamespace(resnames=["GLU"])
+        )
 
-            # ALA is not in charged residues
-            mock_res1 = MagicMock()
-            mock_res1.resnames = ["ALA"]
-            mock_res2 = MagicMock()
-            mock_res2.resnames = ["GLU"]
-
-            result = ppi.analyze_saltbridge(mock_res1, mock_res2)
-            assert result == 0.0
-
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_saltbridge_same_charge_returns_zero(self, mock_mda):
-        """Test saltbridge returns 0 for same-charge residues."""
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
-
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
-
-            # Both positive
-            mock_res1 = MagicMock()
-            mock_res1.resnames = ["LYS"]
-            mock_res2 = MagicMock()
-            mock_res2.resnames = ["ARG"]
-
-            result = ppi.analyze_saltbridge(mock_res1, mock_res2)
-            assert result == 0.0
-
-            # Both negative
-            mock_res1.resnames = ["ASP"]
-            mock_res2.resnames = ["GLU"]
-
-            result = ppi.analyze_saltbridge(mock_res1, mock_res2)
-            assert result == 0.0
+        assert both_positive == 0.0
+        assert both_negative == 0.0
 
 
 class TestPPInteractionsGetCovariance:
-    """Test suite for PPInteractions.get_covariance() method."""
+    """Test PPInteractions.get_covariance() on the real trajectory."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_get_covariance_returns_matrix(self, mock_mda):
-        """Test get_covariance computes and returns a covariance matrix."""
-        # Set up mock universe with a trajectory of 2 frames and 2 CA atoms per chain
-        mock_universe = MagicMock()
+    def test_get_covariance_returns_matrix(self, traj_ppi):
+        """get_covariance returns a real chain-A x chain-B covariance matrix."""
+        C = traj_ppi.get_covariance()
 
-        # Create mock trajectory frames
-        frame1 = MagicMock()
-        frame2 = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=2)
-
-        # Need to be able to iterate multiple times
-        def make_iter():
-            return iter([frame1, frame2])
-
-        mock_universe.trajectory.__iter__ = MagicMock(side_effect=make_iter)
-
-        # Mock CA selections
-        mock_ca_A = MagicMock()
-        mock_ca_A.n_residues = 2
-        mock_ca_A.resids = np.array([1, 2])
-        mock_ca_A.positions = np.array([[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
-
-        mock_ca_B = MagicMock()
-        mock_ca_B.n_residues = 2
-        mock_ca_B.resids = np.array([10, 11])
-        mock_ca_B.positions = np.array([[5.0, 0.0, 0.0], [6.0, 0.0, 0.0]])
-
-        mock_universe.select_atoms.side_effect = [mock_ca_A, mock_ca_B]
-        mock_mda.Universe.return_value = mock_universe
-
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-            )
-
-            C = ppi.get_covariance()
-
-            assert C.shape == (2, 2)
-            assert isinstance(C, np.ndarray)
+        assert isinstance(C, np.ndarray)
+        assert C.ndim == 2
+        # One titratable CA per chain (Lys / Asp) -> 1x1
+        assert C.shape == (1, 1)
 
 
 class TestPPInteractionsAnalyzeSaltbridgeWithTrajectory:
-    """Test saltbridge with valid charged pair over trajectory."""
+    """Test saltbridge with a real charged pair over the trajectory."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_saltbridge_valid_pair_with_trajectory(self, mock_mda):
-        """Test saltbridge with LYS-ASP pair returns occupancy."""
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=2)
+    def test_saltbridge_valid_pair_with_trajectory(self, traj_ppi):
+        """Real Lys-Asp saltbridge occupancy over the drifting trajectory."""
+        lys = traj_ppi.u.select_atoms("chainID A and resname LYS")
+        asp = traj_ppi.u.select_atoms("chainID B and resname ASP")
 
-        frame1 = MagicMock()
-        frame2 = MagicMock()
-        mock_universe.trajectory.__iter__ = MagicMock(
-            return_value=iter([frame1, frame2])
-        )
+        result = traj_ppi.analyze_saltbridge(lys, asp)
 
-        # Mock empty DUMMY selection that supports +=
-        mock_empty = MagicMock()
-        mock_empty.__iadd__ = MagicMock(return_value=mock_empty)
-        mock_universe.select_atoms.return_value = mock_empty
-        mock_mda.Universe.return_value = mock_universe
-
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=False,
-                sb_cutoff=6.0,
-            )
-
-            # Create mock residue groups with charged amino acids
-            mock_res1 = MagicMock()
-            mock_res1.resnames = ["LYS"]
-            mock_atom1 = MagicMock()
-            mock_atom1.name = "NZ"
-            mock_res1.atoms = [mock_atom1]
-
-            mock_res2 = MagicMock()
-            mock_res2.resnames = ["ASP"]
-            mock_atom2 = MagicMock()
-            mock_atom2.name = "OD1"
-            mock_res2.atoms = [mock_atom2]
-
-            # Mock the grp positions for distance calculation
-            mock_empty.positions = np.array([[0.0, 0.0, 0.0]])
-
-            result = ppi.analyze_saltbridge(mock_res1, mock_res2)
-            assert isinstance(result, float)
-            assert 0.0 <= result <= 1.0
+        assert isinstance(result, float)
+        # Present in the first frame, broken as chain B drifts away
+        assert result == 0.2
 
 
 class TestPPInteractionsRunWithPlot:
-    """Test run method with plot=True triggers plot_results."""
+    """Test run() with plot=True drives the real plotting branch."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_run_with_plot_calls_plot_results(self, mock_mda):
-        """Test run() calls plot_results when plot=True."""
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
-
+    def test_run_with_plot(self, two_chain_trajectory, tmp_path, monkeypatch):
+        """run(plot=True) completes and writes results (plots go to ./plots)."""
         from molecular_simulations.analysis.cov_ppi import PPInteractions
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ppi = PPInteractions(
-                top="fake.prmtop",
-                traj="fake.dcd",
-                out=Path(tmpdir) / "results.json",
-                plot=True,
-            )
+        # plot_results writes into a relative ./plots dir; sandbox it
+        monkeypatch.chdir(tmp_path)
 
-            mock_cov = np.array([[0.5]])
-            with (
-                patch.object(ppi, "get_covariance", return_value=mock_cov),
-                patch.object(ppi, "interpret_covariance", return_value=([], [])),
-                patch.object(ppi, "save"),
-                patch.object(ppi, "plot_results") as mock_plot,
-            ):
-                ppi.run()
+        ppi = PPInteractions(
+            top=str(two_chain_trajectory["top"]),
+            traj=str(two_chain_trajectory["traj"]),
+            out=tmp_path / "results.json",
+            plot=True,
+        )
+        ppi.run()
 
-            mock_plot.assert_called_once()
+        assert (tmp_path / "results.json").exists()
 
 
 class TestPPInteractionsSave:
-    """Test suite for PPInteractions.save()."""
+    """Test PPInteractions.save() (cf. TestPPInteractions.test_save_results)."""
 
-    @patch("molecular_simulations.analysis.cov_ppi.mda")
-    def test_save_creates_json_file(self, mock_mda):
-        """Test save writes results dict as JSON."""
-        mock_universe = MagicMock()
-        mock_universe.trajectory.__len__ = MagicMock(return_value=10)
-        mock_mda.Universe.return_value = mock_universe
+    def test_save_creates_json_file(self, saltbridge_ppi):
+        """save writes the results dict as JSON round-trippable on disk."""
+        results = {
+            "positive": {"A_ALA1-B_GLY10": {"hydrophobic": 0.5}},
+            "negative": {},
+        }
+        saltbridge_ppi.save(results)
 
-        from molecular_simulations.analysis.cov_ppi import PPInteractions
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            out_path = Path(tmpdir) / "results.json"
-            ppi = PPInteractions(
-                top="fake.prmtop", traj="fake.dcd", out=out_path, plot=False
-            )
-
-            results = {
-                "positive": {"A_ALA1-B_GLY10": {"hydrophobic": 0.5}},
-                "negative": {},
-            }
-            ppi.save(results)
-
-            assert out_path.exists()
-            with open(out_path) as f:
-                loaded = json.load(f)
-            assert loaded == results
+        assert saltbridge_ppi.out.exists()
+        loaded = json.loads(saltbridge_ppi.out.read_text())
+        assert loaded == results
 
 
 if __name__ == "__main__":

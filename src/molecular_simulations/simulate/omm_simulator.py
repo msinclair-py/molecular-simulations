@@ -2,7 +2,7 @@
 """OpenMM molecular dynamics simulation module.
 
 This module provides classes for running molecular dynamics simulations using
-OpenMM with AMBER or CHARMM force fields. It supports both explicit and implicit
+OpenMM with the AMBER force field. It supports both explicit and implicit
 solvent simulations, with built-in equilibration protocols and production MD.
 
 Classes:
@@ -12,8 +12,12 @@ Classes:
     Minimizer: Simple energy minimization utility.
 """
 
+import os
 from copy import deepcopy
 from io import TextIOWrapper
+from pathlib import Path
+from typing import Any
+
 import MDAnalysis as mda
 import numpy as np
 from openmm import (
@@ -28,14 +32,10 @@ from openmm.app import (
     PME,
     AmberInpcrdFile,
     AmberPrmtopFile,
-    CharmmParameterSet,
-    CharmmPsfFile,
     CheckpointReporter,
     DCDReporter,
     ForceField,
     GBn2,
-    GromacsGroFile,
-    GromacsTopFile,
     HBonds,
     NoCutoff,
     PDBFile,
@@ -53,9 +53,6 @@ from openmm.unit import (
     picosecond,  # ty: ignore[unresolved-import]
     picoseconds,  # ty: ignore[unresolved-import]
 )
-import os
-from pathlib import Path
-from typing import Any
 
 PathLike = Path | str
 OptPath = Path | str | None
@@ -75,7 +72,7 @@ class Simulator:
             'system.inpcrd'.
         out_path: Optional output path for simulation outputs. If not
             provided, uses the same path as inputs.
-        ff: Force field to use, either 'amber' or 'charmm'.
+        ff: Force field to use. Only 'amber' is supported.
         heat_steps: Number of heating timesteps. Defaults to 100,000 (200 ps
             at 2 fs timestep).
         equil_steps: Number of equilibration timesteps. Defaults to 1,250,000
@@ -98,8 +95,6 @@ class Simulator:
         device_ids: List of GPU device IDs to use. Defaults to [0].
         force_constant: Harmonic restraint force constant in kcal/mol*Å².
             Defaults to 10.0.
-        params: Optional list of CHARMM parameter files for loading from
-            psf/pdb file using CHARMM36m forcefield.
         membrane: Whether this is a membrane system requiring anisotropic
             pressure coupling. Defaults to False.
 
@@ -139,7 +134,6 @@ class Simulator:
         platform: str = 'CUDA',
         device_ids: list[int] = [0],
         force_constant: float = 10.0,
-        params: str | list[str] | None = None,
         membrane: bool = False,
     ):
         self.path = Path(path)  # enforce path object
@@ -156,7 +150,6 @@ class Simulator:
         self.temperature = temperature
 
         self.ff = ff.lower()
-        self.params = params  # for charmm parameter sets
         self.setup_barostat(membrane)
 
         p = Path(out_path) if out_path is not None else self.path
@@ -247,25 +240,18 @@ class Simulator:
             self.barostat_args.update({'temperature': self.temperature * kelvin})  # ty: ignore[unsupported-operator]
 
     def load_system(self) -> System:
-        """Load the molecular system based on force field type.
-
-        Dispatches to the appropriate file loader based on the specified
-        force field (AMBER or CHARMM).
+        """Load the molecular system from AMBER inputs.
 
         Returns:
-            OpenMM System object configured with the appropriate force field.
+            OpenMM System object configured with the AMBER force field.
 
         Raises:
-            AttributeError: If an invalid force field type is specified.
+            AttributeError: If an unsupported force field type is specified.
         """
-        if self.ff == 'amber':
-            system = self.load_amber_files()
-        elif self.ff == 'charmm':
-            system = self.load_charmm_files()
-        else:
-            raise AttributeError(
-                'self.ff must be a valid MD forcefield [amber, charmm]!'
-            )
+        if self.ff != 'amber':
+            raise AttributeError("self.ff must be 'amber'!")
+
+        system = self.load_amber_files()
 
         if not hasattr(self, 'indices'):
             self.indices = self.get_restraint_indices()
@@ -294,41 +280,6 @@ class Simulator:
             constraints=HBonds,
             hydrogenMass=1.5 * amu,  # ty: ignore[unsupported-operator]
         )
-
-        return system
-
-    def load_charmm_files(self) -> System:
-        """Build an OpenMM system from CHARMM psf/pdb files.
-
-        Uses PME for electrostatics with a 1.2 nm non-bonded cutoff.
-
-        Returns:
-            OpenMM System configured for CHARMM force field.
-        """
-        if not hasattr(self, 'coordinate'):
-            self.coordinate = PDBFile(str(self.coor_file))
-            self.topology = CharmmPsfFile(
-                str(self.top_file),
-                periodicBoxVectors=self.coordinate.topology.getPeriodicBoxVectors(),
-            )
-        if not hasattr(self, 'parameter_set') and self.params is not None:
-            self.parameter_set = CharmmParameterSet(*self.params)
-
-        if self.params is None:
-            self.forcefield = ForceField('charmm36_2024.xml', 'charmm36/water.xml')
-            system = self.forcefield.createSystem(
-                self.coordinate.topology,  # ty: ignore[unresolved-attribute]
-                nonbondedMethod=PME,
-                nonbondedCutoff=1.2 * nanometer,
-                constraints=HBonds,
-            )
-        else:
-            system = self.topology.createSystem(
-                self.parameter_set,
-                nonbondedMethod=PME,  # ty: ignore[parameter-already-assigned]
-                nonbondedCutoff=1.2 * nanometer,
-                constraints=HBonds,
-            )
 
         return system
 
@@ -714,7 +665,7 @@ class ImplicitSimulator(Simulator):
         coor_name: Optional coordinate file name. If not provided, assumes
             'system.inpcrd'.
         out_path: Optional output path for simulation outputs.
-        ff: Force field to use, either 'amber' or 'charmm'.
+        ff: Force field to use. Only 'amber' is supported.
         equil_steps: Number of equilibration timesteps. Defaults to 1,250,000.
         prod_steps: Number of production timesteps. Defaults to 250,000,000.
         n_equil_cycles: Number of unrestrained equilibration cycles.

@@ -370,6 +370,36 @@ def real_amber_system_files(tmp_path: Path) -> dict:
     return files
 
 
+@pytest.fixture
+def real_amber_explicit_files(tmp_path: Path) -> dict:
+    """Provide a real, solvated (boxed) AMBER system for PME/NPT testing.
+
+    Unlike :func:`real_amber_system_files` (an implicit/vacuum Ace-Ala-Nme with
+    no periodic box), this is the same dipeptide solvated in a small TIP3P box
+    (913 atoms) generated with tleap (ff19SB + tip3p). It carries periodic box
+    vectors, so it loads under ``AmberPrmtopFile.createSystem(nonbondedMethod=PME)``
+    and supports a ``MonteCarloBarostat`` (NPT) -- the paths the boxless fixture
+    cannot exercise. Copied into a per-test ``tmp_path``.
+
+    Returns:
+        Dictionary with ``prmtop``, ``inpcrd`` and ``path`` (the temp directory).
+    """
+    import shutil
+
+    src = get_test_data_dir() / "amber"
+    files = {}
+    for key, name in (
+        ("prmtop", "ala_dipeptide_solv.prmtop"),
+        ("inpcrd", "ala_dipeptide_solv.inpcrd"),
+    ):
+        dest = tmp_path / name
+        shutil.copy(src / name, dest)
+        files[key] = dest
+
+    files["path"] = tmp_path
+    return files
+
+
 # ---------------------------------------------------------------------------
 # Ligand/SDF Fixtures
 # ---------------------------------------------------------------------------

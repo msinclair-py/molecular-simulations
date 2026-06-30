@@ -518,6 +518,10 @@ class PPInteractions:
         """
         df = self.parse_results(results)
 
+        # Nothing met the covariance/interaction thresholds; no plots to make.
+        if df.is_empty():
+            return
+
         plot = Path('plots')
         plot.mkdir(exist_ok=True)
         for cov_type in ['positive', 'negative']:

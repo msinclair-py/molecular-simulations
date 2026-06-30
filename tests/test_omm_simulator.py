@@ -366,10 +366,10 @@ class TestSimulatorLoadSystem:
         """Test load_system with invalid force field"""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        # An invalid ff hits the dispatch error branch before any file is parsed.
+        # A non-amber ff hits the dispatch error branch before any file is parsed.
         sim = Simulator(path=tmp_path, platform="CPU", ff="invalid")
 
-        with pytest.raises(AttributeError, match="valid MD forcefield"):
+        with pytest.raises(AttributeError, match="amber"):
             sim.load_system()
 
     @patch("molecular_simulations.simulate.omm_simulator.Platform")
@@ -396,40 +396,6 @@ class TestSimulatorLoadSystem:
             system = sim.load_amber_files()
 
             mock_topology.createSystem.assert_called_once()
-            assert system is not None
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.PDBFile")
-    @patch("molecular_simulations.simulate.omm_simulator.CharmmPsfFile")
-    @patch("molecular_simulations.simulate.omm_simulator.ForceField")
-    def test_load_charmm_files_no_params(
-        self, mock_ff, mock_psf, mock_pdb, mock_platform
-    ):
-        """Test load_charmm_files without explicit params"""
-        from molecular_simulations.simulate.omm_simulator import Simulator
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_pdb_inst = MagicMock()
-        mock_pdb_inst.topology.getPeriodicBoxVectors.return_value = [
-            [1, 0, 0],
-            [0, 1, 0],
-            [0, 0, 1],
-        ]
-        mock_pdb.return_value = mock_pdb_inst
-        mock_psf.return_value = MagicMock()
-        mock_ff_inst = MagicMock()
-        mock_ff_inst.createSystem.return_value = MagicMock()
-        mock_ff.return_value = mock_ff_inst
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path, ff="charmm")
-            system = sim.load_charmm_files()
-
-            mock_ff_inst.createSystem.assert_called_once()
             assert system is not None
 
 
@@ -1317,48 +1283,6 @@ class TestSimulatorMembraneBarostat:
         assert "xymode" in sim.barostat_args
         assert "zmode" in sim.barostat_args
         assert "defaultTemperature" in sim.barostat_args
-
-
-class TestSimulatorCharmmWithParams:
-    """Test suite for CHARMM file loading with explicit parameters."""
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.PDBFile")
-    @patch("molecular_simulations.simulate.omm_simulator.CharmmPsfFile")
-    @patch("molecular_simulations.simulate.omm_simulator.CharmmParameterSet")
-    def test_load_charmm_with_params(
-        self, mock_param_set, mock_psf, mock_pdb, mock_platform
-    ):
-        """Test load_charmm_files with explicit parameter files."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_pdb_inst = MagicMock()
-        mock_pdb_inst.topology.getPeriodicBoxVectors.return_value = [
-            [1, 0, 0],
-            [0, 1, 0],
-            [0, 0, 1],
-        ]
-        mock_pdb.return_value = mock_pdb_inst
-        mock_psf_inst = MagicMock()
-        mock_psf_inst.createSystem.return_value = MagicMock()
-        mock_psf.return_value = mock_psf_inst
-        mock_param_set.return_value = MagicMock()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            param_files = ["toppar/top.rtf", "toppar/par.prm"]
-
-            sim = Simulator(path=path, ff="charmm", params=param_files)
-            sim.load_charmm_files()
-
-            # Should have loaded parameter set
-            mock_param_set.assert_called_once_with(*param_files)
-            # Should have created system from psf with params
-            mock_psf_inst.createSystem.assert_called_once()
 
 
 class TestImplicitSimulatorProduction:

@@ -1321,5 +1321,59 @@ def test_pmf_at_various_temperatures(analyzer_class, tmp_path, temperature):
     assert (~np.isnan(result.pmf)).sum() > 0
 
 
+class TestCheckRunStatus:
+    """EVBAnalyzer.check_run_status inspects real per-window log files."""
+
+    def test_status_counts_and_frames(self, analyzer_class, tmp_path):
+        """Complete, missing and readable windows are reported correctly."""
+        # Windows 0 and 2 present (with 3 and 2 frames); window 1 missing.
+        (tmp_path / 'reactant_0.log').write_text('rc\n0.1\n0.2\n0.3\n')
+        (tmp_path / 'reactant_2.log').write_text('rc\n0.4\n0.5\n')
+
+        analyzer = analyzer_class(
+            log_path=tmp_path,
+            log_prefix='reactant',
+            k_umbrella=160000.0,
+            rc0_values=[0.0, 0.5, 1.0],
+        )
+
+        status = analyzer.check_run_status()
+
+        assert status['n_expected'] == 3
+        assert status['n_complete'] == 2
+        assert status['missing_windows'] == [1]
+        assert status['frames_per_window'][0] == 3
+        assert status['frames_per_window'][2] == 2
+        assert np.isclose(status['complete_fraction'], 2 / 3)
+        # Only integer frame counts are summed.
+        assert status['total_frames'] == 5
+
+    def test_status_captures_unreadable_window(self, analyzer_class, tmp_path):
+        """An unreadable window log is captured as a per-window error string."""
+        # Window 0 is a valid CSV; window 1 exists but is empty -> polars raises.
+        (tmp_path / 'reactant_0.log').write_text('rc\n0.1\n0.2\n')
+        (tmp_path / 'reactant_1.log').write_text('')
+
+        analyzer = analyzer_class(
+            log_path=tmp_path,
+            log_prefix='reactant',
+            k_umbrella=160000.0,
+            rc0_values=[0.0, 0.5],
+        )
+
+        status = analyzer.check_run_status()
+
+        # Both files exist, so both windows are 'complete'.
+        assert status['n_complete'] == 2
+        assert status['missing_windows'] == []
+        assert status['frames_per_window'][0] == 2
+        # The corrupt window is stored as an 'Error: ...' string, not an int.
+        err = status['frames_per_window'][1]
+        assert isinstance(err, str)
+        assert err.startswith('Error:')
+        # Error strings are excluded from the integer total.
+        assert status['total_frames'] == 2
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

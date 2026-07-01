@@ -1927,5 +1927,154 @@ class TestRunVerboseOutput:
             assert 'bootstrap' in captured.out.lower()
 
 
+class TestPrepareUnknownResname:
+    """Cover prepare's 'UNK' fallback when a residue column has no observations."""
+
+    def test_all_null_column_maps_to_unk(self):
+        """A residue column with only nulls yields resid_to_resname == 'UNK'."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Build a real TitrationCurve from a valid log ...
+            log_path = Path(tmpdir) / 'cpH.log'
+            log_path.write_text(
+                "cpH: resids 20\n"
+                "rank=0 cpH: pH 4.0: ['ASH']\n"
+                "rank=0 cpH: pH 5.0: ['ASP']\n"
+            )
+            tc = TitrationCurve(log_path, make_plots=False)
+
+            # ... then hand it a real DataFrame whose residue column is all-null,
+            # the only way prepare() reaches the 'no first_state' branch.
+            tc.df = pl.DataFrame(
+                {
+                    'rankid': [0, 1],
+                    'current_pH': [4.0, 5.0],
+                    '20': pl.Series('20', [None, None], dtype=pl.Utf8),
+                }
+            )
+            tc.resid_cols = ['20']
+
+            tc.prepare()
+
+            assert tc.resid_to_resname['20'] == 'UNK'
+
+
+class TestCurveFitFailureFallback:
+    """Cover compute_titrations_curvefit's exception fallback to NaN."""
+
+    def test_infeasible_initial_guess_yields_nan(self):
+        """pH values above the pKa bound make p0 infeasible -> curve_fit raises."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # pKa is bounded to [0, 14]; a pKa0 guess taken from pH >= 20 is
+            # outside the bounds, so curve_fit raises and the fit falls back to
+            # NaN (lines 497-499). Three points clear the < 3 early-return.
+            log_path = Path(tmpdir) / 'cpH.log'
+            log_path.write_text(
+                "cpH: resids 20\n"
+                "rank=0 cpH: pH 20.0: ['ASH']\n"
+                "rank=0 cpH: pH 21.0: ['ASP']\n"
+                "rank=0 cpH: pH 22.0: ['ASH']\n"
+            )
+            tc = TitrationCurve(log_path, make_plots=False)
+            tc.prepare()
+
+            fits = tc.compute_titrations_curvefit()
+
+            assert np.isnan(fits['pKa'][0])
+            assert np.isnan(fits['Hill_n'][0])
+            assert np.isnan(fits['pKa_err'][0])
+            assert fits['n_points'][0] == 3
+
+
+class TestInsufficientPointsOtherMethods:
+    """Cover the < 3 point fallback rows in weighted and bootstrap fitting."""
+
+    def _single_pH_log(self, tmpdir):
+        log_path = Path(tmpdir) / 'cpH.log'
+        # Only one distinct pH value -> x.size == 1 < 3 for the residue.
+        log_path.write_text(
+            "cpH: resids 20\n"
+            "rank=0 cpH: pH 4.0: ['ASH']\n"
+            "rank=0 cpH: pH 4.0: ['ASP']\n"
+        )
+        return log_path
+
+    def test_weighted_insufficient_points(self):
+        """< 3 points -> weighted fit emits a NaN row tagged 'weighted'."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tc = TitrationCurve(self._single_pH_log(tmpdir), make_plots=False)
+            tc.prepare()
+
+            fits = tc.compute_titrations_weighted(verbose=False)
+
+            assert np.isnan(fits['pKa'][0])
+            assert np.isnan(fits['Hill_n'][0])
+            assert fits['method'][0] == 'weighted'
+            assert fits['n_points'][0] == 1
+
+    def test_bootstrap_insufficient_points(self):
+        """< 3 points -> bootstrap emits a NaN row with NaN confidence bounds."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tc = TitrationCurve(self._single_pH_log(tmpdir), make_plots=False)
+            tc.prepare()
+
+            fits = tc.compute_titrations_bootstrap(n_bootstrap=5, verbose=False)
+
+            assert np.isnan(fits['pKa'][0])
+            assert np.isnan(fits['pKa_lo'][0])
+            assert np.isnan(fits['pKa_hi'][0])
+            assert fits['method'][0] == 'bootstrap'
+            assert fits['n_points'][0] == 1
+
+
+class TestCompareMethods:
+    """Cover TitrationCurve.compare_methods, including the resid filter."""
+
+    def _titratable_log(self, tmpdir):
+        log_path = Path(tmpdir) / 'cpH.log'
+        lines = ['cpH: resids 20\n']
+        for pH in [3.0, 4.0, 5.0, 6.0, 7.0]:
+            for _ in range(20):
+                p = 1 / (1 + 10 ** (pH - 4.5))
+                s = 'ASH' if np.random.random() < p else 'ASP'
+                lines.append(f"rank=0 cpH: pH {pH:.1f}: ['{s}']\n")
+        log_path.write_text(''.join(lines))
+        return log_path
+
+    def test_compare_methods_builds_diff_columns(self):
+        """compare_methods joins curvefit + weighted and adds difference columns."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tc = TitrationCurve(self._titratable_log(tmpdir), make_plots=False)
+            tc.prepare()
+
+            comparison = tc.compare_methods()
+
+            for col in ('pKa', 'pKa_weighted', 'pKa_diff', 'Hill_n_diff'):
+                assert col in comparison.columns
+            assert comparison['resid'].to_list() == ['20']
+
+    def test_compare_methods_resid_filter(self):
+        """The resids argument restricts the comparison to those residues."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tc = TitrationCurve(self._titratable_log(tmpdir), make_plots=False)
+            tc.prepare()
+
+            # '20' is present; '999' is absent -> only '20' survives the filter.
+            comparison = tc.compare_methods(resids=['999'])
+
+            assert comparison['resid'].to_list() == []
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

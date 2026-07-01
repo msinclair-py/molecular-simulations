@@ -205,6 +205,23 @@ class TestSASA:
 
         assert np.allclose(sasa.results.sasa, [10.0, 20.0, 30.0])
 
+    def test_conclude_zero_frames_no_division(self, mda_universe):
+        """_conclude with n_frames == 0 skips averaging (no ZeroDivisionError).
+
+        An empty trajectory leaves n_frames at 0; the guard must avoid the
+        divide-by-zero and pass the accumulated array through unchanged.
+        """
+        ag = mda_universe.select_atoms('all')
+        sasa = SASA(ag, n_points=64)
+        sasa._prepare()
+        sasa.results.sasa = np.array([1.0, 2.0, 3.0])
+        sasa.n_frames = 0
+
+        sasa._conclude()
+
+        # No division occurred: values are untouched and finite.
+        assert np.allclose(sasa.results.sasa, [1.0, 2.0, 3.0])
+
 
 class TestRelativeSASA:
     """Unit tests for the RelativeSASA class against real atomgroups."""
@@ -251,6 +268,61 @@ class TestRelativeSASA:
 
         assert np.allclose(rsasa.results.sasa, [10.0, 20.0, 30.0])
         assert np.allclose(rsasa.results.relative_area, [0.05, 0.06, 0.07])
+
+    def test_conclude_zero_frames_no_division(self, amber_protein):
+        """RelativeSASA._conclude with n_frames == 0 leaves both arrays intact.
+
+        With an empty trajectory (n_frames == 0) neither the absolute nor the
+        relative array is averaged, so no ZeroDivisionError is raised.
+        """
+        rsasa = RelativeSASA(amber_protein, n_points=64)
+        rsasa.results.sasa = np.array([1.0, 2.0, 3.0])
+        rsasa.results.relative_area = np.array([0.1, 0.2, 0.3])
+        rsasa.n_frames = 0
+
+        rsasa._conclude()
+
+        assert np.allclose(rsasa.results.sasa, [1.0, 2.0, 3.0])
+        assert np.allclose(rsasa.results.relative_area, [0.1, 0.2, 0.3])
+
+    def test_single_frame_empty_and_zero_exposed(self):
+        """_single_frame handles empty tripeptides and zero exposed area.
+
+        Builds a real 3-atom, 3-residue Universe where atoms 0 and 1 are bonded
+        (each other's only neighbour) and atom 2 is isolated:
+
+        * residue 2 has no bonds, so ``byres (bonded resindex 2)`` is empty and
+          the loop ``continue``s (line 256);
+        * residues 0 and 1 each see only the *other* residue in their tripeptide
+          selection, so the exposed-area sum over their own atoms is 0.0 and the
+          normalizing division is skipped (267 -> 252).
+
+        With no normalization applied, relative_area equals the accumulated raw
+        per-residue SASA.
+        """
+        u = mda.Universe.empty(
+            3, n_residues=3, atom_resindex=[0, 1, 2], trajectory=True
+        )
+        u.add_TopologyAttr('elements', ['C', 'C', 'C'])
+        u.add_TopologyAttr('resids', [1, 2, 3])
+        u.add_bonds([(0, 1)])
+        u.atoms.positions = np.array(
+            [[0.0, 0.0, 0.0], [1.5, 0.0, 0.0], [10.0, 0.0, 0.0]], dtype=np.float32
+        )
+        ag = u.atoms
+
+        rsasa = RelativeSASA(ag, n_points=64)
+        rsasa._prepare()
+        rsasa._single_frame()
+
+        rel = rsasa.results.relative_area
+        assert rel.shape == (3,)
+        assert np.all(np.isfinite(rel))
+        assert np.all(rel >= 0)
+        # No exposed-area normalization ran, so relative == raw accumulated SASA.
+        assert np.allclose(rel, rsasa.results.sasa)
+        # The isolated residue (line 256 continue) still holds positive raw area.
+        assert rel[2] > 0
 
 
 if __name__ == '__main__':

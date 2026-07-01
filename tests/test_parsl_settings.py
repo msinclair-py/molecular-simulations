@@ -226,6 +226,110 @@ class TestAuroraSettings:
         assert len(executor.available_accelerators) == 12
 
 
+class TestGetNodeCount:
+    """Test suite for get_node_count scheduler-environment inference."""
+
+    def test_get_node_count_slurm(self, monkeypatch):
+        """SLURM_JOB_NUM_NODES takes precedence and is returned as an int."""
+        from molecular_simulations.utils.parsl_settings import get_node_count
+
+        monkeypatch.delenv('PBS_NODEFILE', raising=False)
+        monkeypatch.setenv('SLURM_JOB_NUM_NODES', '4')
+
+        assert get_node_count() == 4
+
+    def test_get_node_count_pbs_nodefile(self, monkeypatch, tmp_path):
+        """With no SLURM var, the PBS nodefile line count gives the node count."""
+        from molecular_simulations.utils.parsl_settings import get_node_count
+
+        nodefile = tmp_path / 'nodes'
+        nodefile.write_text('nodeA\nnodeB\nnodeC\n')
+
+        monkeypatch.delenv('SLURM_JOB_NUM_NODES', raising=False)
+        monkeypatch.setenv('PBS_NODEFILE', str(nodefile))
+
+        # Three real lines in the nodefile -> three nodes.
+        assert get_node_count() == 3
+
+    def test_get_node_count_default(self, monkeypatch):
+        """With neither SLURM nor PBS set, the count defaults to 1."""
+        from molecular_simulations.utils.parsl_settings import get_node_count
+
+        monkeypatch.delenv('SLURM_JOB_NUM_NODES', raising=False)
+        monkeypatch.delenv('PBS_NODEFILE', raising=False)
+
+        assert get_node_count() == 1
+
+
+class TestLocalCPUSettings:
+    """Test suite for LocalCPUSettings.config_factory."""
+
+    def test_local_cpu_settings_config_factory(self):
+        """config_factory builds a real CPU-only local Parsl Config."""
+        from molecular_simulations.utils.parsl_settings import LocalCPUSettings
+
+        settings = LocalCPUSettings(
+            max_workers_per_node=3, cores_per_worker=2.0, retries=2
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = settings.config_factory(Path(tmpdir))
+
+        assert isinstance(config, Config)
+        assert config.retries == 2
+        assert len(config.executors) == 1
+        executor = config.executors[0]
+        assert isinstance(executor, HighThroughputExecutor)
+        assert executor.label == 'cpu'
+        assert isinstance(executor.provider, LocalProvider)
+        # CPU executor carries worker/core counts, not GPU accelerators.
+        assert executor.max_workers_per_node == 3
+        assert executor.cores_per_worker == 2.0
+        # No accelerators are configured for a CPU-only executor.
+        assert executor.available_accelerators == []
+        assert settings.available_accelerators == []
+
+
+class TestHeterogeneousSettings:
+    """Test suite for HeterogeneousSettings.config_factory."""
+
+    def test_heterogeneous_settings_config_factory(self):
+        """config_factory builds a real Config with separate GPU and CPU executors."""
+        from molecular_simulations.utils.parsl_settings import HeterogeneousSettings
+
+        settings = HeterogeneousSettings(
+            max_workers_per_node=2,
+            cores_per_worker=4.0,
+            available_accelerators=4,
+            retries=1,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = settings.config_factory(Path(tmpdir))
+
+        assert isinstance(config, Config)
+        # Two executors: one GPU-pinned, one CPU.
+        assert len(config.executors) == 2
+        gpu_executor, cpu_executor = config.executors
+
+        assert isinstance(gpu_executor, HighThroughputExecutor)
+        assert isinstance(cpu_executor, HighThroughputExecutor)
+        assert gpu_executor.label == 'gpu'
+        assert cpu_executor.label == 'cpu'
+        assert isinstance(gpu_executor.provider, LocalProvider)
+        assert isinstance(cpu_executor.provider, LocalProvider)
+
+        # GPU executor: the integer accelerator count expands to per-GPU ids and
+        # drives the worker count.
+        assert gpu_executor.available_accelerators == ['0', '1', '2', '3']
+        assert gpu_executor.max_workers_per_node == 4
+
+        # CPU executor: worker/core counts, no accelerators.
+        assert cpu_executor.max_workers_per_node == 2
+        assert cpu_executor.cores_per_worker == 4.0
+        assert cpu_executor.available_accelerators == []
+
+
 class TestSettingsRoundTrip:
     """Test round-trip serialization for settings classes"""
 

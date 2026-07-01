@@ -739,6 +739,64 @@ class TestMinimizer:
         with pytest.raises(FileNotFoundError, match='No viable simulation'):
             minimizer.load_files()
 
+    def test_load_files_dispatches_amber(self, real_amber_system_files):
+        """load_files routes a .prmtop topology to load_amber (match dispatch)."""
+        from openmm import System
+
+        from molecular_simulations.simulate.omm_simulator import Minimizer
+
+        minimizer = Minimizer(
+            topology=str(real_amber_system_files['prmtop']),
+            coordinates=str(real_amber_system_files['inpcrd']),
+            platform='CPU',
+        )
+
+        system = minimizer.load_files()
+        assert isinstance(system, System)
+        assert system.getNumParticles() == 22
+
+    def test_load_files_dispatches_pdb(self, real_amber_system_files):
+        """load_files routes a .pdb topology to load_pdb (match dispatch)."""
+        from openmm import System
+
+        from molecular_simulations.simulate.omm_simulator import Minimizer
+
+        pdb_file = real_amber_system_files['pdb']
+        minimizer = Minimizer(
+            topology=str(pdb_file), coordinates=str(pdb_file), platform='CPU'
+        )
+
+        system = minimizer.load_files()
+        assert isinstance(system, System)
+        assert system.getNumParticles() == 22
+
+    @pytest.mark.skipif(
+        not _has_opencl(), reason='OpenCL platform not available in this OpenMM build'
+    )
+    def test_minimizer_gpu_properties(self, tmp_path):
+        """A real GPU platform gets mixed precision and a joined DeviceIndex.
+
+        Covers the non-CPU/Reference branch: constructing with a registered GPU
+        platform sets Precision='mixed' and joins device_ids into DeviceIndex.
+        Skip-gated because it needs a real OpenCL platform registered.
+        """
+        from molecular_simulations.simulate.omm_simulator import Minimizer
+
+        top_file = tmp_path / 'system.prmtop'
+        top_file.write_text('placeholder topology')
+        coor_file = tmp_path / 'system.inpcrd'
+        coor_file.write_text('placeholder coordinates')
+
+        minimizer = Minimizer(
+            topology=str(top_file),
+            coordinates=str(coor_file),
+            platform='OpenCL',
+            device_ids=[0, 1],
+        )
+
+        assert minimizer.properties['Precision'] == 'mixed'
+        assert minimizer.properties['DeviceIndex'] == '0,1'
+
     def test_load_amber(self, real_amber_system_files):
         """Test load_amber builds a real System from prmtop/inpcrd."""
         from openmm import System
@@ -877,6 +935,83 @@ class TestSimulatorProduction:
         # Restart mode appended more log rows instead of truncating.
         lines_after = sim.prod_log.read_text().count('\n')
         assert lines_after > lines_before
+        assert sim.state.exists()
+        assert sim.chkpt.exists()
+
+
+class TestBaseSimulatorProduction:
+    """Real base-class ``Simulator.production`` on the solvated (PME/NPT) box.
+
+    The implicit-solvent tests exercise ``ImplicitSimulator.production`` (the
+    override with no barostat). The base ``Simulator.production`` adds the
+    ``MonteCarloBarostat`` and calls ``context.reinitialize(True)`` before
+    loading the checkpoint, so it can only run on a boxed system. These tests
+    build a tiny real eq checkpoint via ``_equilibrate`` (no heating -> fast),
+    then run base production for real with tiny step counts.
+    """
+
+    def _seed_eq_checkpoint(self, real_amber_explicit_files):
+        """Build a tiny real eq.chk compatible with base production's context."""
+        sim, simulation = _build_real_explicit_simulation(
+            real_amber_explicit_files,
+            equil_steps=8,
+            n_equil_cycles=1,
+            prod_steps=2,
+            prod_reporter_frequency=1,
+            eq_reporter_frequency=1,
+        )
+        # _equilibrate relaxes the restraint, adds the barostat, and writes
+        # eq.state/eq.chk -- a genuine checkpoint for production to load.
+        sim._equilibrate(simulation)
+        return sim
+
+    def test_base_production_no_restart_adds_barostat(
+        self, real_amber_explicit_files
+    ):
+        """Base production builds a real PME+NPT system and runs (restart=False)."""
+        from openmm import MonteCarloBarostat
+
+        sim = self._seed_eq_checkpoint(real_amber_explicit_files)
+
+        sim.production(chkpt=str(sim.eq_chkpt), restart=False)
+
+        # Base production adds a MonteCarloBarostat before reinitialize().
+        forces = sim.simulation.system.getForces()
+        assert any(isinstance(f, MonteCarloBarostat) for f in forces)
+        # Real production artifacts written to disk.
+        assert sim.dcd.exists()
+        assert sim.chkpt.exists()
+        assert sim.state.exists()
+
+    def test_base_production_restart_appends(self, real_amber_explicit_files):
+        """Base production(restart=True) appends to the real log and DCD.
+
+        Covers the uncovered append branch (open(prod_log, 'a') + DCDReporter
+        append=True): the restart pass must extend prod.log/prod.dcd rather than
+        truncate them. Proven by the log prefix being preserved and both files
+        growing in size.
+        """
+        sim = self._seed_eq_checkpoint(real_amber_explicit_files)
+
+        # Seed prod.log/prod.dcd with a real non-restart production, then persist
+        # a real restart checkpoint at the path production reopens.
+        sim.production(chkpt=str(sim.eq_chkpt), restart=False)
+        sim.simulation.saveCheckpoint(str(sim.restart))
+
+        log_before = sim.prod_log.read_text()
+        dcd_size_before = sim.dcd.stat().st_size
+
+        sim.production(chkpt=str(sim.restart), restart=True)
+
+        log_after = sim.prod_log.read_text()
+        dcd_size_after = sim.dcd.stat().st_size
+
+        # Append, not truncate: the original log content is still the prefix and
+        # more rows were added; the DCD grew rather than being overwritten.
+        assert log_after.startswith(log_before)
+        assert len(log_after) > len(log_before)
+        assert dcd_size_after > dcd_size_before
+        # A fresh production state/checkpoint were written.
         assert sim.state.exists()
         assert sim.chkpt.exists()
 
@@ -1175,6 +1310,32 @@ class TestSimulatorCheckNumStepsLeftAdvanced:
         # Should have appended new entry
         content = dup_log.read_text()
         assert content.count('\n') >= 2
+
+    def test_check_num_steps_left_penultimate_line_fallback(self, tmp_path):
+        """A broken final log line falls back to parsing the penultimate line.
+
+        Covers the second ``try`` branch: the last line is unparseable (one
+        token, so ``split()[1]`` raises IndexError), so the step count is read
+        from ``prod_log[-2]`` instead. If that fallback did not parse the 100000
+        step, prod_steps would be left untouched at 500000.
+        """
+        from molecular_simulations.simulate.omm_simulator import Simulator
+
+        log_content = '#header\tstep\tenergy\n0\t100000\t-1000.0\npartial\n'
+        (tmp_path / 'prod.log').write_text(log_content)
+
+        sim = Simulator(
+            path=tmp_path,
+            platform='CPU',
+            prod_steps=500000,
+            prod_reporter_frequency=10000,
+        )
+        sim.prod_log = tmp_path / 'prod.log'
+
+        sim.check_num_steps_left()
+
+        # 500000 - 100000 = 400000 (last_step read via the [-2] fallback).
+        assert sim.prod_steps == 400000
 
     def test_check_num_steps_left_handles_malformed_log(self, tmp_path):
         """Test check_num_steps_left handles malformed log gracefully."""

@@ -81,117 +81,6 @@ def traj_ppi(two_chain_trajectory, tmp_path):
 
 
 # ============================================================================
-# Pure logic tests - no mocking needed
-# ============================================================================
-
-
-class TestPPInteractionsPureLogic:
-    """Test pure logic methods that don't need MDAnalysis."""
-
-    def test_parse_results_structure(self):
-        """Test parse_results returns correct DataFrame structure - no mocks."""
-
-        # We can test parse_results without initializing the full class
-        # by creating a minimal mock object with just the method we need
-        results = {
-            'positive': {
-                'A_ALA1-B_LYS10': {'hydrophobic': 0.5, 'hbond': 0.3, 'saltbridge': 0.0}
-            },
-            'negative': {
-                'A_GLU5-B_ARG15': {'hydrophobic': 0.0, 'hbond': 0.0, 'saltbridge': 0.8}
-            },
-        }
-
-        # Test the static logic of parse_results directly
-        data_rows = []
-        for cov_type, pair_dict in results.items():
-            for pair, data in pair_dict.items():
-                if any(val > 0.0 for val in data.values()):
-                    row = {
-                        'Residue Pair': pair,
-                        'Hydrophobic': data['hydrophobic'],
-                        'Hydrogen Bond': data['hbond'],
-                        'Salt Bridge': data['saltbridge'],
-                        'Covariance': cov_type,
-                    }
-                    data_rows.append(row)
-
-        df = pl.DataFrame(data_rows)
-
-        assert isinstance(df, pl.DataFrame)
-        assert 'Residue Pair' in df.columns
-        assert 'Hydrophobic' in df.columns
-        assert 'Covariance' in df.columns
-        assert len(df) == 2
-
-    def test_parse_results_filters_zeros(self):
-        """Test that parse_results filters out all-zero entries - no mocks."""
-        results = {
-            'positive': {
-                'A_ALA1-B_LYS10': {'hydrophobic': 0.5, 'hbond': 0.0, 'saltbridge': 0.0},
-                'A_GLY2-B_SER11': {'hydrophobic': 0.0, 'hbond': 0.0, 'saltbridge': 0.0},
-            },
-            'negative': {},
-        }
-
-        data_rows = []
-        for cov_type, pair_dict in results.items():
-            for pair, data in pair_dict.items():
-                if any(val > 0.0 for val in data.values()):
-                    row = {
-                        'Residue Pair': pair,
-                        'Hydrophobic': data['hydrophobic'],
-                        'Hydrogen Bond': data['hbond'],
-                        'Salt Bridge': data['saltbridge'],
-                        'Covariance': cov_type,
-                    }
-                    data_rows.append(row)
-
-        df = pl.DataFrame(data_rows)
-        assert len(df) == 1
-        assert 'A_ALA1-B_LYS10' in df['Residue Pair'].to_list()
-
-    def test_interpret_covariance_logic(self):
-        """Test interpret_covariance logic with numpy arrays - no mocks."""
-        # Test the interpretation logic without the full class
-        mapping = {'ag1': {0: 1, 1: 2}, 'ag2': {0: 10, 1: 11}}
-
-        cov_mat = np.array(
-            [
-                [0.5, -0.3],
-                [-0.2, 0.4],
-            ]
-        )
-
-        pos_corr = np.where(cov_mat > 0.0)
-        neg_corr = np.where(cov_mat < 0.0)
-
-        seen = set()
-        positive = []
-        for i in range(len(pos_corr[0])):
-            res1 = mapping['ag1'][pos_corr[0][i]]
-            res2 = mapping['ag2'][pos_corr[1][i]]
-            if (res1, res2) not in seen:
-                positive.append((res1, res2))
-                seen.add((res1, res2))
-                seen.add((res2, res1))
-
-        negative = []
-        for i in range(len(neg_corr[0])):
-            res1 = mapping['ag1'][neg_corr[0][i]]
-            res2 = mapping['ag2'][neg_corr[1][i]]
-            if (res1, res2) not in seen:
-                negative.append((res1, res2))
-                seen.add((res1, res2))
-                seen.add((res2, res1))
-
-        assert len(positive) == 2
-        assert len(negative) == 2
-        assert (1, 10) in positive
-        assert (2, 11) in positive
-
-
-# ============================================================================
 # Integration tests using real MDAnalysis
 # ============================================================================
 
@@ -721,6 +610,152 @@ class TestPPInteractionsSave:
         assert saltbridge_ppi.out.exists()
         loaded = json.loads(saltbridge_ppi.out.read_text())
         assert loaded == results
+
+
+@requires_mdanalysis
+class TestGetCovarianceCutoffs:
+    """Drive get_covariance's distance-cutoff zeroing on both signs.
+
+    Builds a real, in-memory MDAnalysis Universe (two CA per chain) with
+    hand-chosen positions over two frames so the raw covariance matrix is
+    exactly [[+1, 0], [0, -1]] before cutoffs and the four residue-pair
+    distances straddle both cov_cutoff boundaries. This exercises every arm
+    of the sign/distance filter (cov_ppi lines 217-221) with real geometry.
+    """
+
+    def _controlled_ppi(self, two_chain_pdb, tmp_path, cov_cutoff):
+        import MDAnalysis as mda
+        from MDAnalysis.coordinates.memory import MemoryReader
+
+        from molecular_simulations.analysis.cov_ppi import PPInteractions
+
+        u = mda.Universe.empty(
+            4,
+            n_residues=4,
+            atom_resindex=[0, 1, 2, 3],
+            residue_segindex=[0, 0, 0, 0],
+            trajectory=True,
+        )
+        u.add_TopologyAttr('name', ['CA', 'CA', 'CA', 'CA'])
+        u.add_TopologyAttr('type', ['C', 'C', 'C', 'C'])
+        u.add_TopologyAttr('resname', ['LYS', 'LYS', 'ASP', 'ASP'])
+        u.add_TopologyAttr('resid', [1, 2, 1, 2])
+        u.add_TopologyAttr('chainID', ['A', 'A', 'B', 'B'])
+
+        # frame0 / frame1 are mirror images about the per-atom mean, so
+        # C[i, j] reduces to dot(dR1_i, dR2_j) from frame0 (see scratch check).
+        frame0 = [[1, 0, 0], [1, 10, 0], [1, 0, 5], [-1, 10, 13]]
+        frame1 = [[-1, 0, 0], [-1, 10, 0], [-1, 0, 5], [1, 10, 13]]
+        coords = np.array([frame0, frame1], dtype=float)
+        u.load_new(coords, format=MemoryReader)
+
+        ppi = PPInteractions(
+            top=str(two_chain_pdb),
+            traj=str(two_chain_pdb),
+            out=tmp_path / 'results.json',
+            cov_cutoff=cov_cutoff,
+            plot=False,
+        )
+        # Swap in the controlled real Universe (not a mock).
+        ppi.u = u
+        ppi.n_frames = 2
+        return ppi
+
+    def test_covariance_cutoffs_zero_by_sign(self, two_chain_pdb, tmp_path):
+        """Positive-far and negative-far pairs are zeroed; close ones survive."""
+        ppi = self._controlled_ppi(two_chain_pdb, tmp_path, cov_cutoff=(11.0, 13.0))
+
+        C = ppi.get_covariance()
+
+        assert C.shape == (2, 2)
+        # (A1,B1) C=+1 dist=5  <=11 -> kept
+        assert np.isclose(C[0, 0], 1.0)
+        # (A2,B1) C=+1 dist~11.18 >11 -> positive branch zeroed (lines 218-219)
+        assert C[1, 0] == 0.0
+        # (A1,B2) C=-1 dist~16.4 >13 -> negative branch zeroed (lines 220-221)
+        assert C[0, 1] == 0.0
+        # (A2,B2) C=-1 dist=13    not >13 -> kept
+        assert np.isclose(C[1, 1], -1.0)
+
+    def test_covariance_permissive_cutoffs_keep_all(self, two_chain_pdb, tmp_path):
+        """With huge cutoffs no pair is zeroed -> raw [[+1, 0-ish], ...] survives."""
+        ppi = self._controlled_ppi(
+            two_chain_pdb, tmp_path, cov_cutoff=(1000.0, 1000.0)
+        )
+
+        C = ppi.get_covariance()
+
+        # Nothing exceeds the cutoffs, so the raw signed covariance is preserved.
+        assert np.isclose(C[0, 0], 1.0)
+        assert np.isclose(C[1, 1], -1.0)
+
+
+class TestInterpretCovarianceAlreadySeen:
+    """Exercise the 'already seen' skip arms of interpret_covariance."""
+
+    def test_positive_pair_already_seen_is_skipped(self, saltbridge_ppi):
+        """A reversed positive pair already in `seen` is not re-added (264->261)."""
+        # Overlapping resid namespaces so cell (1,1) yields (2,1), the reverse
+        # of (1,2) added by cell (0,0) -> hits the 'already seen' skip.
+        saltbridge_ppi.mapping = {'ag1': {0: 1, 1: 2}, 'ag2': {0: 2, 1: 1}}
+        cov = np.array([[0.5, 0.5], [0.5, 0.5]])
+
+        positive, negative = saltbridge_ppi.interpret_covariance(cov)
+
+        # (2,1) is skipped, so only three unique pairs survive.
+        assert positive == [(1, 2), (1, 1), (2, 2)]
+        assert negative == []
+
+    def test_negative_pair_already_seen_is_skipped(self, saltbridge_ppi):
+        """A reversed negative pair already in `seen` is not re-added (273->270)."""
+        saltbridge_ppi.mapping = {'ag1': {0: 1, 1: 2}, 'ag2': {0: 2, 1: 1}}
+        cov = np.array([[-0.5, -0.5], [-0.5, -0.5]])
+
+        positive, negative = saltbridge_ppi.interpret_covariance(cov)
+
+        assert negative == [(1, 2), (1, 1), (2, 2)]
+        assert positive == []
+
+
+class TestIdentifyInteractionTypeRouting:
+    """Exercise the func-not-shared skip arm of identify_interaction_type."""
+
+    def test_partial_capability_overlap(self, saltbridge_ppi):
+        """ASP (hbond+saltbridge) vs SER (hbond only) keeps only the shared func."""
+        _functions, labels = saltbridge_ppi.identify_interaction_type('ASP', 'SER')
+
+        # hbond is shared -> appended (lines 331-333); saltbridge is not shared
+        # by SER -> skipped (the 331->330 false arm).
+        assert labels == ['hydrophobic', 'hbond']
+        assert 'saltbridge' not in labels
+
+    def test_glycine_has_no_shared_capabilities(self, saltbridge_ppi):
+        """GLY is absent from the type table, so only hydrophobic is routed."""
+        _functions, labels = saltbridge_ppi.identify_interaction_type('GLY', 'LYS')
+
+        # GLY contributes an empty func list, so the zip loop never appends.
+        assert labels == ['hydrophobic']
+
+
+class TestAnalyzeHydrophobicNoContact:
+    """Exercise analyze_hydrophobic's no-contact (occupancy 0.0) arm."""
+
+    def test_no_contact_returns_zero(self, two_chain_pdb, tmp_path):
+        """With a sub-angstrom cutoff no carbons ever contact -> 0.0 (lines 430-433)."""
+        from molecular_simulations.analysis.cov_ppi import PPInteractions
+
+        ppi = PPInteractions(
+            top=str(two_chain_pdb),
+            traj=str(two_chain_pdb),
+            out=tmp_path / 'results.json',
+            hydrophobic_cutoff=0.01,
+            plot=False,
+        )
+        lys = ppi.u.select_atoms('chainID A and resname LYS')
+        asp = ppi.u.select_atoms('chainID B and resname ASP')
+
+        # Every frame's minimum carbon-carbon distance exceeds 0.01 A.
+        assert ppi.analyze_hydrophobic(lys, asp) == 0.0
 
 
 if __name__ == '__main__':

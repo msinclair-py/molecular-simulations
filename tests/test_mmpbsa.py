@@ -371,6 +371,42 @@ class TestVerifyCombinedOutputs:
         # Should not raise.
         mmpbsa._verify_combined_outputs()
 
+    def test_verify_sasa_no_data_lines_raises(self, tmp_path, fake_amberhome):
+        """A non-empty SASA file that holds only comment lines is invalid."""
+        mmpbsa = _build_mmpbsa(tmp_path, fake_amberhome)
+
+        for system in ['complex', 'receptor', 'ligand']:
+            # Non-empty but comment-only -> zero data lines (branch at line ~669).
+            (mmpbsa.path / f'{system}_surf.dat').write_text('#Frame SASA\n#comment\n')
+            # Keep the energy files valid so only the SASA branch fires.
+            (mmpbsa.path / f'{system}_gb.mdout').write_text(' BOND = 100.0\n')
+            (mmpbsa.path / f'{system}_pb.mdout').write_text(' BOND = 100.0\n')
+
+        with pytest.raises(RuntimeError) as excinfo:
+            mmpbsa._verify_combined_outputs()
+
+        msg = str(excinfo.value)
+        assert 'Output verification failed' in msg
+        assert 'Invalid files' in msg
+        assert 'no data lines' in msg
+
+    def test_verify_energy_no_bond_raises(self, tmp_path, fake_amberhome):
+        """A non-empty energy file without a ' BOND' record is invalid."""
+        mmpbsa = _build_mmpbsa(tmp_path, fake_amberhome)
+
+        for system in ['complex', 'receptor', 'ligand']:
+            (mmpbsa.path / f'{system}_surf.dat').write_text('#Frame SASA\n1 1000.0\n')
+            # No ' BOND' token anywhere -> invalid (branch at line ~681).
+            (mmpbsa.path / f'{system}_gb.mdout').write_text('ANGLE = 50.0\n')
+            (mmpbsa.path / f'{system}_pb.mdout').write_text('ANGLE = 50.0\n')
+
+        with pytest.raises(RuntimeError) as excinfo:
+            mmpbsa._verify_combined_outputs()
+
+        msg = str(excinfo.value)
+        assert 'Invalid files' in msg
+        assert 'no energy data' in msg
+
 
 class TestRunFrameParallelFailures:
     """Real failure-aggregation logic in _run_frame_parallel.
@@ -572,6 +608,242 @@ class TestOutputAnalyzerGenerateSummary:
             assert system in stats
             assert 'gb' in stats[system]
             assert 'pb' in stats[system]
+
+    def test_generate_summary_computes_real_statistics(self, monkeypatch, tmp_path):
+        """Assert the real numeric means/errors written into statistics.json."""
+        import polars as pl
+
+        from molecular_simulations.simulate.mmpbsa import OutputAnalyzer
+
+        monkeypatch.chdir(tmp_path)
+
+        analyzer = OutputAnalyzer(path=str(tmp_path), surface_tension=0.0072)
+        # Two frames per system, constant within a system -> std == 0.
+        analyzer.gb = pl.DataFrame(
+            {
+                'VDWAALS': [-10.0, -10.0, -5.0, -5.0, -20.0, -20.0],
+                'EEL': [-100.0, -100.0, -50.0, -50.0, -160.0, -160.0],
+                'EGB': [-20.0, -20.0, -10.0, -10.0, -35.0, -35.0],
+                'ESURF': [5.0, 5.0, 3.0, 3.0, 9.0, 9.0],
+                'system': [
+                    'receptor',
+                    'receptor',
+                    'ligand',
+                    'ligand',
+                    'complex',
+                    'complex',
+                ],
+            }
+        )
+        analyzer.pb = analyzer.gb.rename({'EGB': 'EPB', 'ESURF': 'ECAVITY'})
+        analyzer.n_frames = 2
+        analyzer.square_root_N = np.sqrt(2)
+        analyzer.contributions = {
+            'G gas': ['VDWAALS', 'EEL'],
+            'G solv': ['EGB', 'ESURF', 'EPB', 'ECAVITY'],
+        }
+
+        analyzer.generate_summary()
+
+        with open('statistics.json') as f:
+            stats = json.load(f)
+
+        rec_gb = stats['receptor']['gb']
+        # Column means/stdevs are the real per-frame statistics.
+        assert np.isclose(rec_gb['VDWAALS']['mean'], -10.0)
+        assert np.isclose(rec_gb['VDWAALS']['std'], 0.0)
+        assert np.isclose(rec_gb['VDWAALS']['err'], 0.0)
+        assert np.isclose(rec_gb['EEL']['mean'], -100.0)
+        # G gas pools VDWAALS + EEL over both frames -> mean of [-10,-10,-100,-100].
+        assert np.isclose(rec_gb['G gas']['mean'], -55.0)
+        # G solv pools EGB + ESURF -> mean of [-20,-20,5,5].
+        assert np.isclose(rec_gb['G solv']['mean'], -7.5)
+        # 'total' pools every energy column for the system.
+        assert np.isclose(
+            rec_gb['total']['mean'], np.mean([-10, -10, -100, -100, -20, -20, 5, 5])
+        )
+
+
+class TestOutputAnalyzerCheckBondedTerms:
+    """check_bonded_terms enforces receptor + ligand == complex on bonded terms."""
+
+    def _analyzer(self, tmp_path):
+        from molecular_simulations.simulate.mmpbsa import OutputAnalyzer
+
+        return OutputAnalyzer(path=str(tmp_path), surface_tension=0.0072, log=False)
+
+    @staticmethod
+    def _consistent_df():
+        import polars as pl
+
+        # complex bonded == receptor + ligand for every bonded column.
+        return pl.DataFrame(
+            {
+                'BOND': [10.0, 5.0, 15.0],
+                'ANGLE': [4.0, 2.0, 6.0],
+                'DIHED': [3.0, 1.0, 4.0],
+                '1-4 VDW': [2.0, 1.0, 3.0],
+                '1-4 EEL': [8.0, 2.0, 10.0],
+                'VDWAALS': [-10.0, -5.0, -16.0],
+                'EEL': [-100.0, -50.0, -160.0],
+                'EGB': [-20.0, -10.0, -35.0],
+                'ESURF': [5.0, 3.0, 9.0],
+                'RESTRAINT': [0.0, 0.0, 0.0],
+                'system': ['receptor', 'ligand', 'complex'],
+            }
+        )
+
+    def test_consistent_bonded_terms_pass(self, tmp_path):
+        analyzer = self._analyzer(tmp_path)
+        analyzer.gb = self._consistent_df()
+        analyzer.pb = self._consistent_df()
+
+        # Must not raise; also computes derived frame counts.
+        analyzer.check_bonded_terms()
+
+        assert analyzer.n_frames == analyzer.gb.height
+        assert np.isclose(analyzer.square_root_N, np.sqrt(analyzer.n_frames))
+        # RESTRAINT is stripped by check_bonded_terms.
+        assert 'RESTRAINT' not in analyzer.gb.columns
+        assert 'RESTRAINT' not in analyzer.pb.columns
+
+    def test_inconsistent_bonded_terms_raise(self, tmp_path):
+        import polars as pl
+
+        analyzer = self._analyzer(tmp_path)
+        bad = self._consistent_df().with_columns(
+            pl.Series('BOND', [10.0, 5.0, 100.0])  # complex 100 != 10 + 5
+        )
+        analyzer.gb = bad
+        analyzer.pb = self._consistent_df()
+
+        with pytest.raises(
+            ValueError, match=r'Bonded terms for receptor \+ ligand != complex!'
+        ):
+            analyzer.check_bonded_terms()
+
+
+class TestOutputAnalyzerComputeDG:
+    """compute_dG forms ΔG = complex - receptor - ligand and writes deltaG.txt."""
+
+    @staticmethod
+    def _make_analyzer(tmp_path):
+        import polars as pl
+
+        from molecular_simulations.simulate.mmpbsa import OutputAnalyzer
+
+        analyzer = OutputAnalyzer(path=str(tmp_path), surface_tension=0.0072, log=False)
+        # Constant-per-system, two frames each; systems ordered
+        # receptor, ligand, complex to match analyzer.systems.
+        analyzer.gb = pl.DataFrame(
+            {
+                'VDWAALS': [-10.0, -10.0, -5.0, -5.0, -20.0, -20.0],
+                'EEL': [-100.0, -100.0, -50.0, -50.0, -160.0, -160.0],
+                'EGB': [-20.0, -20.0, -10.0, -10.0, -35.0, -35.0],
+                'ESURF': [5.0, 5.0, 3.0, 3.0, 9.0, 9.0],
+                'system': [
+                    'receptor',
+                    'receptor',
+                    'ligand',
+                    'ligand',
+                    'complex',
+                    'complex',
+                ],
+            }
+        )
+        analyzer.pb = pl.DataFrame(
+            {
+                'VDWAALS': [-10.0, -10.0, -5.0, -5.0, -20.0, -20.0],
+                'EEL': [-100.0, -100.0, -50.0, -50.0, -160.0, -160.0],
+                'EPB': [-18.0, -18.0, -9.0, -9.0, -30.0, -30.0],
+                'ECAVITY': [4.0, 4.0, 2.0, 2.0, 7.0, 7.0],
+                'system': [
+                    'receptor',
+                    'receptor',
+                    'ligand',
+                    'ligand',
+                    'complex',
+                    'complex',
+                ],
+            }
+        )
+        analyzer.square_root_N = np.sqrt(2)
+        analyzer.contributions = {
+            'G gas': ['VDWAALS', 'EEL'],
+            'G solv': ['EGB', 'ESURF', 'EPB', 'ECAVITY'],
+        }
+        return analyzer
+
+    def test_compute_dG_binding_free_energy(self, tmp_path):
+        analyzer = self._make_analyzer(tmp_path)
+
+        analyzer.compute_dG()
+
+        # PB ∆G Binding = sum over columns of (complex - receptor - ligand):
+        #   VDWAALS: -20-(-10)-(-5) = -5
+        #   EEL:     -160-(-100)-(-50) = -10
+        #   EPB:     -30-(-18)-(-9)  = -3
+        #   ECAVITY:  7-4-2 = 1
+        #   total = -17; std = 0 across identical frames.
+        assert analyzer.free_energy is not None
+        assert np.allclose(analyzer.free_energy, [-17.0, 0.0])
+
+        # deltaG.txt written for real into the analyzer's path.
+        report = (tmp_path / 'deltaG.txt').read_text()
+        assert 'Generalized Born' in report
+        assert 'Poisson Boltzmann' in report
+        # GB ΔG Binding = -5 + -10 + -5 + 1 = -19.
+        assert '∆G Binding          -19.000' in report
+        assert '∆G Binding          -17.000' in report
+        # Per-component GB solvation ΔG (EGB -5, ESURF +1) => G solv -4.
+        assert 'G solv              -4.000' in report
+
+
+class TestOutputAnalyzerPrettyPrint:
+    """pretty_print formats the energy table and prints it when logging is off."""
+
+    def test_pretty_print_table_to_stdout(self, tmp_path, capsys):
+        import polars as pl
+
+        from molecular_simulations.simulate.mmpbsa import OutputAnalyzer
+
+        analyzer = OutputAnalyzer(path=str(tmp_path), surface_tension=0.0072, log=False)
+
+        # Each column holds exactly [mean, std, err] as compute_dG produces.
+        gb = pl.DataFrame(
+            {
+                'VDWAALS': [-5.0, 0.5, 0.1],
+                'EEL': [-10.0, 1.0, 0.2],
+                'G gas': [-15.0, 1.1, 0.22],
+                '∆G Binding': [-19.0, 1.2, 0.24],
+            }
+        )
+        pb = pl.DataFrame(
+            {
+                'VDWAALS': [-5.0, 0.5, 0.1],
+                'EEL': [-10.0, 1.0, 0.2],
+                'G gas': [-15.0, 1.1, 0.22],
+                '∆G Binding': [-17.0, 1.3, 0.26],
+            }
+        )
+
+        analyzer.pretty_print([gb, pb])
+
+        out = capsys.readouterr().out
+        assert '=== Generalized Born  ===' in out
+        assert '=== Poisson Boltzmann ===' in out
+        assert (
+            'Energy Component    Average         Std. Dev.       Std. Err. of Mean'
+            in out
+        )
+        # Formatted numeric rows: value<16.3f columns.
+        assert 'VDWAALS             -5.000          0.500           0.100' in out
+        assert '∆G Binding          -19.000         1.200           0.240' in out
+        assert '∆G Binding          -17.000         1.300           0.260' in out
+
+        # PB ∆G Binding captured into free_energy; file also written.
+        assert np.allclose(analyzer.free_energy, [-17.0, 1.3])
+        assert (tmp_path / 'deltaG.txt').exists()
 
 
 # ============================================================================

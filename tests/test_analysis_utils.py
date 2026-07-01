@@ -157,6 +157,24 @@ class TestEmbedEnergyData:
         assert result.shape == (3,)
         np.testing.assert_array_almost_equal(result, expected)
 
+    def test_sanitize_data_single_term(self):
+        """sanitize_data with a single energy term (n_terms == 1) is not summed.
+
+        With input of shape (n_residues, 1) the summation branch
+        (``data.shape[1] > 1``) is skipped, so the per-residue values pass
+        through unchanged rather than collapsing the single-term column.
+        """
+        from molecular_simulations.analysis.utils import EmbedEnergyData
+
+        # (3 residues, 1 term): the lone term must not be summed away.
+        data = np.array([[1.5], [2.5], [3.5]])
+
+        result = EmbedEnergyData.sanitize_data(data)
+
+        # No summation over the single term: shape and values are preserved.
+        assert result.shape == (3, 1)
+        np.testing.assert_array_almost_equal(result, np.array([[1.5], [2.5], [3.5]]))
+
     def test_preprocess_rescaling(self, pdb_copy):
         """Test that preprocessing rescales data appropriately"""
         from molecular_simulations.analysis.utils import EmbedEnergyData

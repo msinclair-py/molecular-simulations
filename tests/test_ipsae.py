@@ -469,5 +469,122 @@ class TestModelParserCIF:
             assert parser.chains == ['A', 'A']
 
 
+class TestParseStructureCBFallback:
+    """Cover ipSAE.parse_structure_file's CA fallback when no CB is present."""
+
+    def test_ca_only_residue_falls_back_to_ca(self, tmp_path):
+        """A residue with only a CA atom yields empty cb_residues -> CA fallback."""
+        pdb = tmp_path / 'ca_only.pdb'
+        # ALA with a single CA atom: it registers as an anchor residue but has no
+        # CB (and is not GLY), so parser.cb_residues stays empty -> line 89-90.
+        pdb.write_text(
+            'ATOM      1  CA  ALA A   1      10.000  20.000  30.000  1.00 20.00           C\n'
+            'END\n'
+        )
+
+        obj = ipSAE(str(pdb), 'plddt.npy', 'pae.npy', out_path=str(tmp_path))
+        obj.parse_structure_file()
+
+        assert obj.parser.cb_residues == []
+        # cb_coordinates falls back to the CA coordinates array.
+        assert obj.cb_coordinates.shape == (1, 3)
+        assert np.array_equal(obj.cb_coordinates, obj.coordinates)
+
+
+class TestComputeLISAllAboveCutoff:
+    """Cover compute_LIS when every selected PAE is >= the cutoff."""
+
+    def test_lis_zero_when_all_pae_above_cutoff(self):
+        """selected_pae is non-empty but no value passes the cutoff -> LIS 0.0."""
+        calc = ScoreCalculator(
+            np.array(['A', 'A', 'B', 'B']), {'A': 'protein', 'B': 'protein'}, 4
+        )
+        calc.PAE = np.full((4, 4), 30.0)  # all >= PAE_cutoff (12.0)
+
+        assert calc.compute_LIS('A', 'B') == 0.0
+
+
+class TestComputeIpTMEmptyChain:
+    """Cover compute_ipTM_ipSAE when the scored chain has no residues."""
+
+    def test_zero_when_scored_chain_absent(self):
+        """chain2 absent from `chains` -> empty masks -> ipTM and ipSAE both 0.0."""
+        # 'B' is a known chain type but contributes no residues to `chains`, so
+        # mask_c2 is all-False (line 357 skip) and no row has a valid PAE
+        # (line 369 skip); both scores collapse to 0.0.
+        calc = ScoreCalculator(
+            np.array(['A', 'A']), {'A': 'protein', 'B': 'protein'}, 2
+        )
+        calc.PAE = np.zeros((2, 2))
+
+        ipTM, ipSAE_score = calc.compute_ipTM_ipSAE('A', 'B')
+
+        assert ipTM == 0.0
+        assert ipSAE_score == 0.0
+
+
+class TestBuildProteinTokenIndices:
+    """Cover build_protein_token_indices token-layout inference and errors."""
+
+    def _parser(self, skip_chains):
+        return ModelParser('unused.pdb', skip_chains=skip_chains)
+
+    def test_non_contiguous_skipped_runs_raise(self):
+        """Skipped chains in two separate runs are unsolvable -> ValueError."""
+        parser = self._parser({'B', 'D'})
+        parser.chain_order = ['A', 'B', 'C', 'D']
+        parser.chain_residue_counts = {'A': 2, 'C': 2}
+
+        with pytest.raises(ValueError, match='non-contiguous'):
+            parser.build_protein_token_indices(6)
+
+    def test_kept_exceeds_total_raises(self):
+        """More kept residues than total tokens -> negative span -> ValueError."""
+        parser = self._parser({'B'})
+        parser.chain_order = ['A', 'B']
+        parser.chain_residue_counts = {'A': 5}
+
+        with pytest.raises(ValueError, match='exceeds'):
+            parser.build_protein_token_indices(3)
+
+    def test_contiguous_skip_infers_indices(self):
+        """A single contiguous skip block leaves the correct kept-token indices."""
+        parser = self._parser({'B'})
+        parser.chain_order = ['A', 'B', 'C']
+        parser.chain_residue_counts = {'A': 2, 'C': 2}
+
+        parser.build_protein_token_indices(6)
+
+        # A occupies tokens 0,1; the 2-token skip block spans 2,3; C is 4,5.
+        assert parser.protein_token_indices == [0, 1, 4, 5]
+
+
+class TestParseCifLineAuthFallback:
+    """Cover parse_cif_line's auth_seq_id fallback for a missing label_seq_id."""
+
+    def test_auth_seq_id_used_when_label_missing(self):
+        """label_seq_id '.' with allow_missing + auth_seq_id present -> auth used."""
+        cif_line = 'ATOM 1 CA . GLY A . 10.0 20.0 30.0 1.00 20.00 C 5'
+        fields = {
+            'id': 1,
+            'label_atom_id': 2,
+            'label_comp_id': 4,
+            'label_asym_id': 5,
+            'label_seq_id': 6,
+            'Cartn_x': 7,
+            'Cartn_y': 8,
+            'Cartn_z': 9,
+            'auth_seq_id': 13,
+        }
+
+        result = ModelParser.parse_cif_line(
+            cif_line, fields, allow_missing_seq_id=True
+        )
+
+        assert result is not None
+        assert result['resid'] == 5
+        assert result['res'] == 'GLY'
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

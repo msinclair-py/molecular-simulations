@@ -825,5 +825,72 @@ class TestEVBPath:
             assert evb.path == expected_path
 
 
+class TestEVBAnalyzerSaveMetadata:
+    """EVBAnalyzer.save_metadata writes a real, re-readable TOML file."""
+
+    def test_save_metadata_default_path(self, tmp_path) -> None:
+        try:
+            import tomllib
+        except ModuleNotFoundError:
+            import tomli as tomllib
+
+        from molecular_simulations.simulate.free_energy import EVBAnalyzer
+
+        analyzer = EVBAnalyzer(
+            log_path=tmp_path,
+            log_prefix='reactant',
+            k_umbrella=160000.0,
+            rc0_values=[0.0, 0.5, 1.0],
+        )
+
+        out = analyzer.save_metadata()
+
+        assert out == tmp_path / 'evb_metadata.toml'
+        assert out.exists()
+
+        # Round-trips through the standard TOML reader with real values.
+        with open(out, 'rb') as f:
+            meta = tomllib.load(f)
+
+        evb = meta['evb']
+        assert evb['log_path'] == str(tmp_path)
+        assert evb['log_prefix'] == 'reactant'
+        assert evb['k_umbrella'] == 160000.0
+        assert evb['rc0_values'] == [0.0, 0.5, 1.0]
+        # output_path defaults to log_path, so it is intentionally omitted.
+        assert 'output_path' not in evb
+
+    def test_save_metadata_custom_output_path(self, tmp_path) -> None:
+        try:
+            import tomllib
+        except ModuleNotFoundError:
+            import tomli as tomllib
+
+        from molecular_simulations.simulate.free_energy import EVBAnalyzer
+
+        out_dir = tmp_path / 'results'
+        out_dir.mkdir()
+        analyzer = EVBAnalyzer(
+            log_path=tmp_path,
+            log_prefix='product',
+            k_umbrella=1600.0,
+            rc0_values=[-0.2, 0.2],
+            output_path=out_dir,
+        )
+
+        # Write to an explicit, caller-supplied destination.
+        dest = tmp_path / 'meta.toml'
+        out = analyzer.save_metadata(output_path=dest)
+
+        assert out == dest
+        with open(dest, 'rb') as f:
+            evb = tomllib.load(f)['evb']
+
+        assert evb['log_prefix'] == 'product'
+        assert evb['rc0_values'] == [-0.2, 0.2]
+        # output_path differs from log_path, so it is recorded.
+        assert evb['output_path'] == str(out_dir)
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

@@ -1069,5 +1069,27 @@ class TestConstantPHEnsembleRunMethods:
         assert isinstance(results[0], RuntimeError)
 
 
+class TestSetupWorkerLogger:
+    """Test suite for the module-level setup_worker_logger helper."""
+
+    @pytest.mark.skip(
+        reason=(
+            "setup_worker_logger is broken/dead code: it calls "
+            "pythonjsonlogger.json.JsonFormatter(task_id=...), but the installed "
+            "python-json-logger (v4) rejects the task_id kwarg (TypeError). The "
+            "project's own JsonFormatter (constantph.logging) additionally "
+            "requires a run_id, so the intended fix is ambiguous. The function "
+            "is never called anywhere in the source. Skipping per no-mock/no-force "
+            "policy; see agent report."
+        )
+    )
+    def test_setup_worker_logger_builds_json_logger(self, tmp_path):
+        """Would assert logger name, JSON formatter handler, and log path."""
+        from molecular_simulations.simulate.cph_simulation import setup_worker_logger
+
+        logger = setup_worker_logger(None, 'worker_1', tmp_path)
+        assert logger.name == 'task.worker_1'
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

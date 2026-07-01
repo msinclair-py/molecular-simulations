@@ -72,6 +72,7 @@ def add_chains(pdb: PathLike, first_res: int = 1, last_res: int = -1) -> PathLik
     u = mda.Universe(pdb)
     u.add_TopologyAttr('chainID')
 
+    split = last_res != -1
     if last_res == -1:
         assert u.residues is not None
         last_res = u.residues.n_residues
@@ -79,7 +80,7 @@ def add_chains(pdb: PathLike, first_res: int = 1, last_res: int = -1) -> PathLik
     chain_A = u.select_atoms(f'resid {first_res} to {last_res}')
     chain_A.atoms.chainIDs = 'A'
 
-    if last_res != -1:
+    if split:
         assert u.residues is not None
         final_res = u.residues.n_residues
 

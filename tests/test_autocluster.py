@@ -91,6 +91,24 @@ class TestGenericDataloader:
             # Should reshape to (10, 12) since 3*4 = 12
             assert loader.data.shape == (10, 12)
 
+    def test_single_row_not_reshaped(self):
+        """A single-row multi-dim array is not flattened (load_data 80->exit).
+
+        vstack of one file yields a single row (``len == 1``), so the
+        ``len(self.data_array) > 2`` reshape guard is skipped and the trailing
+        dimensions survive instead of being erroneously collapsed to (1, 12).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_data = np.random.rand(1, 3, 4)
+            file = Path(tmpdir) / 'data.npy'
+            np.save(file, test_data)
+
+            loader = GenericDataloader([file])
+
+            # The >2-row reshape did not run: shape and values are preserved.
+            assert loader.data.shape == (1, 3, 4)
+            assert np.array_equal(loader.data, test_data)
+
 
 class TestPeriodicDataloader:
     """Test suite for PeriodicDataloader class"""
@@ -286,6 +304,26 @@ class TestAutoKMeans:
             assert 'frame' in df.columns
             assert 'cluster' in df.columns
             assert len(df) == 10
+
+
+class TestAutoKMeansGuards:
+    """Test AutoKMeans guard clauses."""
+
+    def test_map_centers_without_centers_raises(self):
+        """map_centers_to_frames guards against an absent clustering result.
+
+        When sweep_n_clusters has not produced any centers (``self.centers`` is
+        None -- the state left behind by a sweep that found no valid
+        clustering), map_centers_to_frames raises a clear ValueError rather than
+        iterating over nothing.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            np.save(Path(tmpdir) / 'data.npy', np.random.rand(10, 5))
+            auto_km = AutoKMeans(tmpdir)
+            auto_km.centers = None
+
+            with pytest.raises(ValueError, match='sweep_n_clusters'):
+                auto_km.map_centers_to_frames()
 
 
 class TestAutoKMeansRun:

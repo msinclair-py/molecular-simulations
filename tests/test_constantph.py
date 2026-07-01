@@ -3600,5 +3600,343 @@ class TestAcceptanceCriterionParametrized:
         assert is_favorable == expected_favorable
 
 
+# ---------------------------------------------------------------------------
+# ConstantPH._get_zero_parameters Tests (real forces, no mocks)
+# ---------------------------------------------------------------------------
+
+
+class TestConstantPHGetZeroParameters:
+    """Test suite for ConstantPH._get_zero_parameters using real OpenMM forces."""
+
+    def test_zero_parameters_nonbonded_force(self) -> None:
+        """Charge (element 0) is zeroed for a real NonbondedForce; sigma/epsilon kept."""
+        from openmm import NonbondedForce
+
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        force = NonbondedForce()
+
+        # (charge, sigma, epsilon)
+        result = cph._get_zero_parameters((-0.42, 0.31, 0.65), force)
+
+        assert result == (0.0, 0.31, 0.65)
+        assert result[0] == 0.0
+        assert result[1] == 0.31
+        assert result[2] == 0.65
+
+    def test_zero_parameters_gbsaobc_force(self) -> None:
+        """Charge (element 0) is zeroed for a real GBSAOBCForce; radius/scale kept."""
+        from openmm import GBSAOBCForce
+
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        force = GBSAOBCForce()
+
+        # (charge, radius, scale)
+        result = cph._get_zero_parameters((0.55, 0.17, 0.85), force)
+
+        assert result == (0.0, 0.17, 0.85)
+        assert result[0] == 0.0
+        assert result[1] == 0.17
+        assert result[2] == 0.85
+
+    def test_zero_parameters_preserves_tuple_length(self) -> None:
+        """Zeroing does not change the arity of the parameter tuple."""
+        from openmm import NonbondedForce
+
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        force = NonbondedForce()
+
+        original = (1.23, 0.29, 0.42)
+        result = cph._get_zero_parameters(original, force)
+
+        assert len(result) == len(original)
+        assert isinstance(result, tuple)
+        # Only the charge changed.
+        assert result[1:] == original[1:]
+
+
+# ---------------------------------------------------------------------------
+# ConstantPH._identifyProtonatedState Tests (real logic, no mocks)
+# ---------------------------------------------------------------------------
+
+
+class TestConstantPHIdentifyProtonatedState:
+    """Test suite for ConstantPH._identifyProtonatedState."""
+
+    def test_identify_asp_ash(self) -> None:
+        """ASP/ASH -> index of ASH (the protonated aspartate form)."""
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        assert cph._identifyProtonatedState(['ASP', 'ASH']) == 1
+        # Order-independent: the protonated form wins regardless of position.
+        assert cph._identifyProtonatedState(['ASH', 'ASP']) == 0
+
+    def test_identify_histidine_hip(self) -> None:
+        """HID/HIE/HIP -> index of HIP (doubly protonated histidine)."""
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        assert cph._identifyProtonatedState(['HID', 'HIE', 'HIP']) == 2
+        assert cph._identifyProtonatedState(['HIP', 'HID', 'HIE']) == 0
+
+    def test_identify_singly_protonated_histidine_fallback(self) -> None:
+        """No fully-protonated form present -> first HID/HIE intermediate is chosen."""
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        # No HIP present; HID is the first recognised singly-protonated form.
+        assert cph._identifyProtonatedState(['HID', 'HIE']) == 0
+        assert cph._identifyProtonatedState(['HIE', 'HID']) == 0
+
+    def test_identify_unrecognized_returns_zero(self) -> None:
+        """No recognised protonated form -> fallback index 0."""
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        assert cph._identifyProtonatedState(['XAA', 'YBB']) == 0
+
+    def test_identify_glutamate_and_lysine(self) -> None:
+        """GLH and LYS are recognised protonated forms."""
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        assert cph._identifyProtonatedState(['GLU', 'GLH']) == 1
+        assert cph._identifyProtonatedState(['LYN', 'LYS']) == 1
+
+
+# ---------------------------------------------------------------------------
+# ConstantPH.validateStates Tests (real titrations, no mocks)
+# ---------------------------------------------------------------------------
+
+
+def _validation_titration(variants, implicit_h, explicit_h, protonated_index):
+    """Build a real ResidueTitration wired for validateStates()."""
+    titration = ResidueTitration(list(variants), [0.0] * len(variants))
+    titration.implicitStates = [_real_state(h, residue_index=3) for h in implicit_h]
+    titration.explicitStates = [_real_state(h, residue_index=3) for h in explicit_h]
+    titration.protonatedIndex = protonated_index
+    titration.currentIndex = protonated_index
+    return titration
+
+
+class TestConstantPHValidateStates:
+    """Test suite for ConstantPH.validateStates."""
+
+    def test_validate_states_valid(self) -> None:
+        """A consistent titration passes validation and returns True."""
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        cph.titrations = {
+            3: _validation_titration(['ASP', 'ASH'], [4, 5], [4, 5], 1)
+        }
+        assert cph.validateStates() is True
+
+    def test_validate_states_count_mismatch(self) -> None:
+        """State-count != variant-count fails validation."""
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        # Two variants but only one implicit state.
+        cph.titrations = {
+            3: _validation_titration(['ASP', 'ASH'], [4], [4, 5], 0)
+        }
+        assert cph.validateStates() is False
+
+    def test_validate_states_identical_hydrogen_counts(self) -> None:
+        """All states sharing the same numHydrogens fails validation."""
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        cph.titrations = {
+            3: _validation_titration(['ASP', 'ASH'], [5, 5], [4, 5], 1)
+        }
+        assert cph.validateStates() is False
+
+    def test_validate_states_protonated_index_out_of_range(self) -> None:
+        """protonatedIndex >= number of states fails validation."""
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        cph.titrations = {
+            3: _validation_titration(['ASP', 'ASH'], [4, 5], [4, 5], 9)
+        }
+        assert cph.validateStates() is False
+
+    def test_validate_states_reports_issue(self, capsys) -> None:
+        """Failure path prints a FAILED banner naming the problem."""
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        cph = object.__new__(ConstantPH)
+        cph.titrations = {
+            3: _validation_titration(['ASP', 'ASH'], [4, 5], [4, 5], 9)
+        }
+        result = cph.validateStates()
+        captured = capsys.readouterr()
+
+        assert result is False
+        assert 'State validation FAILED' in captured.out
+        assert 'protonatedIndex=9 out of range' in captured.out
+
+
+# ---------------------------------------------------------------------------
+# ConstantPH.printTitrationState Tests (real titrations, capsys, no mocks)
+# ---------------------------------------------------------------------------
+
+
+class TestConstantPHPrintTitrationState:
+    """Test suite for ConstantPH.printTitrationState."""
+
+    def test_print_titration_state_output(self, capsys) -> None:
+        """The formatted per-residue / per-state summary is emitted to stdout."""
+        from molecular_simulations.simulate.constantph.constantph import (
+            ConstantPH,
+            ResidueState,
+        )
+
+        cph = object.__new__(ConstantPH)
+        cph.pH = [7.4]
+        cph.currentPHIndex = 0
+
+        titration = ResidueTitration(['ASP', 'ASH'], [0.0, 5.0])
+        titration.implicitStates = [
+            ResidueState(2, {'N': 0}, {}, {}, 4),
+            ResidueState(2, {'N': 0, 'HD2': 1}, {}, {}, 5),
+        ]
+        titration.explicitStates = [
+            ResidueState(2, {'N': 0}, {}, {}, 4),
+            ResidueState(2, {'N': 0, 'HD2': 1}, {}, {}, 5),
+        ]
+        titration.currentIndex = 1
+        titration.protonatedIndex = 1
+        cph.titrations = {2: titration}
+
+        cph.printTitrationState()
+        out = capsys.readouterr().out
+
+        assert 'Current pH: 7.40' in out
+        assert 'Titratable residues: 1' in out
+        assert 'Res 2: currentState=1, protonatedIdx=1' in out
+        assert "variants=['ASP', 'ASH']" in out
+        assert 'refEnergies=[0.0, 5.0]' in out
+        # Deprotonated state has 4 H / 1 atom, protonated has 5 H / 2 atoms.
+        assert 'state[0]: implicitH=4, explicitH=4, implAtoms=1, explAtoms=1' in out
+        assert 'state[1]: implicitH=5, explicitH=5, implAtoms=2, explAtoms=2' in out
+
+
+# ---------------------------------------------------------------------------
+# ConstantPH._findResidueStates Tests (real ForceField + topology, no mocks)
+# ---------------------------------------------------------------------------
+
+
+class TestConstantPHFindResidueStatesReal:
+    """Real end-to-end exercise of _findResidueStates.
+
+    Uses the committed ACE-LYS-ASP-NME fixture (tests/data/amber/lys_asp.pdb),
+    strips its hydrogens to obtain a heavy-atom topology, then rebuilds the ASP
+    and ASH protonation states with a real amber14 ForceField.
+    """
+
+    @staticmethod
+    def _heavy_atom_topology():
+        import pathlib
+
+        from openmm.app import Modeller, PDBFile, element
+
+        pdb_path = (
+            pathlib.Path(__file__).parent / 'data' / 'amber' / 'lys_asp.pdb'
+        )
+        pdb = PDBFile(str(pdb_path))
+        modeller = Modeller(pdb.topology, pdb.positions)
+        hydrogens = [
+            a for a in modeller.topology.atoms() if a.element == element.hydrogen
+        ]
+        modeller.delete(hydrogens)
+        return modeller.topology, modeller.positions
+
+    def test_find_residue_states_asp_vs_ash(self) -> None:
+        """ASP and ASH differ by one hydrogen and populate real force params."""
+        import openmm
+        from openmm.app import ForceField
+
+        from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+        topology, positions = self._heavy_atom_topology()
+        forcefield = ForceField('amber14-all.xml')
+        ffargs = {
+            'nonbondedMethod': openmm.app.NoCutoff,
+            'constraints': None,
+            'rigidWater': False,
+        }
+        cph = object.__new__(ConstantPH)
+
+        # Residue order is ACE, LYS, ASP, NME -> only index 2 is titrated here.
+        asp_states = cph._findResidueStates(
+            topology, positions, forcefield, [None, None, 'ASP', None], ffargs
+        )
+        ash_states = cph._findResidueStates(
+            topology, positions, forcefield, [None, None, 'ASH', None], ffargs
+        )
+
+        assert len(asp_states) == 1
+        assert len(ash_states) == 1
+
+        asp, ash = asp_states[0], ash_states[0]
+
+        # ASH (protonated) has exactly one more hydrogen than ASP.
+        assert ash.numHydrogens == asp.numHydrogens + 1
+        assert asp.numHydrogens == 4
+        assert ash.numHydrogens == 5
+
+        # Both states are built for the ASP residue (topology index 2).
+        assert asp.residueIndex == 2
+        assert ash.residueIndex == 2
+
+        # ASH gains the carboxyl proton absent in ASP.
+        assert 'HD2' not in asp.atomIndices
+        assert 'HD2' in ash.atomIndices
+
+        # particleParameters / exceptionParameters are populated with real values.
+        assert len(asp.particleParameters) > 0
+        assert len(asp.exceptionParameters) > 0
+        # Every populated force maps a per-atom charge/sigma/epsilon tuple.
+        for force_params in asp.particleParameters.values():
+            assert 'CA' in force_params
+            assert len(force_params['CA']) >= 1
+
+    def test_find_residue_states_returns_residuestate_objects(self) -> None:
+        """The returned objects are real ResidueState instances."""
+        import openmm
+        from openmm.app import ForceField
+
+        from molecular_simulations.simulate.constantph.constantph import (
+            ConstantPH,
+            ResidueState,
+        )
+
+        topology, positions = self._heavy_atom_topology()
+        forcefield = ForceField('amber14-all.xml')
+        ffargs = {
+            'nonbondedMethod': openmm.app.NoCutoff,
+            'constraints': None,
+            'rigidWater': False,
+        }
+        cph = object.__new__(ConstantPH)
+
+        states = cph._findResidueStates(
+            topology, positions, forcefield, [None, None, 'ASP', None], ffargs
+        )
+
+        assert all(isinstance(s, ResidueState) for s in states)
+        assert isinstance(states[0].atomIndices, dict)
+        assert 'N' in states[0].atomIndices
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

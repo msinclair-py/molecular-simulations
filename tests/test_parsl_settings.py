@@ -4,10 +4,12 @@ Unit tests for utils/parsl_settings.py module
 
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 import yaml
+from parsl.config import Config
+from parsl.executors import HighThroughputExecutor
+from parsl.providers import LocalProvider, PBSProProvider
 
 
 class TestBaseSettings:
@@ -92,17 +94,25 @@ class TestLocalSettings:
         assert settings.label == 'custom'
         assert settings.worker_port_range == (15000, 16000)
 
-    @patch('molecular_simulations.utils.parsl_settings.Config')
-    @patch('molecular_simulations.utils.parsl_settings.HighThroughputExecutor')
-    @patch('molecular_simulations.utils.parsl_settings.LocalProvider')
-    def test_local_settings_config_factory(
-        self, mock_provider, mock_executor, mock_config
-    ):
-        """Test LocalSettings config_factory method"""
+    def test_local_settings_config_factory(self):
+        """config_factory builds a real Parsl Config with a local GPU executor."""
         from molecular_simulations.utils.parsl_settings import LocalSettings
 
-        settings = LocalSettings()
-        settings.config_factory(Path('.'))
+        settings = LocalSettings(available_accelerators=2, retries=3, label='gpu')
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = settings.config_factory(Path(tmpdir))
+
+        # Real Config object, not a mock: inspect its actual structure.
+        assert isinstance(config, Config)
+        assert config.retries == 3
+        assert len(config.executors) == 1
+        executor = config.executors[0]
+        assert isinstance(executor, HighThroughputExecutor)
+        assert executor.label == 'gpu'
+        assert isinstance(executor.provider, LocalProvider)
+        # parsl expands an integer accelerator count into per-GPU id strings.
+        assert executor.available_accelerators == ['0', '1']
 
 
 class TestPolarisSettings:
@@ -146,29 +156,27 @@ class TestPolarisSettings:
         assert settings.cpus_per_node == 32
         assert settings.strategy == 'htex_auto_scale'
 
-    @patch('molecular_simulations.utils.parsl_settings.Config')
-    @patch('molecular_simulations.utils.parsl_settings.HighThroughputExecutor')
-    @patch('molecular_simulations.utils.parsl_settings.PBSProProvider')
-    @patch('molecular_simulations.utils.parsl_settings.MpiExecLauncher')
-    @patch('molecular_simulations.utils.parsl_settings.address_by_hostname')
-    def test_polaris_settings_config_factory(
-        self, mock_addr, mock_launcher, mock_provider, mock_executor, mock_config
-    ):
-        """Test PolarisSettings config_factory method"""
+    def test_polaris_settings_config_factory(self):
+        """config_factory builds a real PBSPro-backed Config for Polaris."""
         from molecular_simulations.utils.parsl_settings import PolarisSettings
-
-        mock_addr.return_value = '192.168.1.1'
 
         settings = PolarisSettings(
             account='test_account', queue='debug', walltime='01:00:00'
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            settings.config_factory(run_dir=tmpdir)
+            config = settings.config_factory(run_dir=tmpdir)
 
-        # Should have created config with executor
-        mock_config.assert_called_once()
-        mock_executor.assert_called_once()
+        assert isinstance(config, Config)
+        assert len(config.executors) == 1
+        executor = config.executors[0]
+        assert isinstance(executor, HighThroughputExecutor)
+        assert executor.label == 'htex'
+        assert isinstance(executor.provider, PBSProProvider)
+        # The real PBSPro provider carries the account/queue/walltime through.
+        assert executor.provider.account == 'test_account'
+        assert executor.provider.queue == 'debug'
+        assert executor.provider.walltime == '01:00:00'
 
 
 class TestAuroraSettings:
@@ -198,14 +206,8 @@ class TestAuroraSettings:
         # Should have 12 accelerators (0-11)
         assert settings.available_accelerators == [str(i) for i in range(12)]
 
-    @patch('molecular_simulations.utils.parsl_settings.Config')
-    @patch('molecular_simulations.utils.parsl_settings.HighThroughputExecutor')
-    @patch('molecular_simulations.utils.parsl_settings.PBSProProvider')
-    @patch('molecular_simulations.utils.parsl_settings.MpiExecLauncher')
-    def test_aurora_settings_config_factory(
-        self, mock_launcher, mock_provider, mock_executor, mock_config
-    ):
-        """Test AuroraSettings config_factory method"""
+    def test_aurora_settings_config_factory(self):
+        """config_factory builds a real PBSPro-backed Config for Aurora."""
         from molecular_simulations.utils.parsl_settings import AuroraSettings
 
         settings = AuroraSettings(
@@ -213,10 +215,15 @@ class TestAuroraSettings:
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            settings.config_factory(run_dir=tmpdir)
+            config = settings.config_factory(run_dir=tmpdir)
 
-        # Should have created config
-        mock_config.assert_called_once()
+        assert isinstance(config, Config)
+        assert len(config.executors) == 1
+        executor = config.executors[0]
+        assert isinstance(executor, HighThroughputExecutor)
+        assert isinstance(executor.provider, PBSProProvider)
+        # Aurora exposes its 12 GPU tiles as accelerator ids.
+        assert len(executor.available_accelerators) == 12
 
 
 class TestSettingsRoundTrip:

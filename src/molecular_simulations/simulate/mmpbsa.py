@@ -239,6 +239,7 @@ class MMPBSA(MMPBSASettings):
         gb_surfoff: float = 0.0,
         amberhome: str | None = None,
         parallel_mode: Literal['frame', 'serial'] = 'frame',
+        max_retries: int = 3,
         **kwargs,
     ):
         """Initialize the MMPBSA calculator.
@@ -258,6 +259,8 @@ class MMPBSA(MMPBSASettings):
             gb_surfoff: GB surface offset.
             amberhome: AMBER installation path.
             parallel_mode: Parallelization strategy.
+            max_retries: Retry attempts for each parallel SASA/energy worker
+                before it is reported as failed.
             **kwargs: Additional attributes.
         """
         super().__init__(
@@ -275,6 +278,7 @@ class MMPBSA(MMPBSASettings):
             gb_surfoff=gb_surfoff,
         )
         self.parallel_mode = parallel_mode
+        self.max_retries = max_retries
         self.top = Path(self.top).resolve()
         self.traj = Path(self.dcd).resolve()
         self.path = self.top.parent
@@ -408,7 +412,9 @@ class MMPBSA(MMPBSASettings):
         with ThreadPoolExecutor(max_workers=self.n_cpus) as executor:
             futures = []
             for task in sasa_tasks:
-                futures.append(executor.submit(_run_sasa_calculation, task))
+                futures.append(
+                    executor.submit(_run_sasa_calculation, task, self.max_retries)
+                )
 
             done, _ = wait(futures, return_when=ALL_COMPLETED)
 
@@ -431,7 +437,9 @@ class MMPBSA(MMPBSASettings):
         with ThreadPoolExecutor(max_workers=self.n_cpus) as executor:
             futures = []
             for task in energy_tasks:
-                futures.append(executor.submit(_run_energy_calculation, task))
+                futures.append(
+                    executor.submit(_run_energy_calculation, task, self.max_retries)
+                )
 
             done, _ = wait(futures, return_when=ALL_COMPLETED)
 

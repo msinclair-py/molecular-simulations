@@ -2,18 +2,86 @@
 Unit tests for simulate/reporters.py module
 
 This module tests the custom OpenMM reporters used for tracking
-reaction coordinates during EVB simulations.
+reaction coordinates during EVB simulations. All tests drive the reporter
+with real OpenMM Simulation/State objects (Reference platform) -- no mocks.
 """
 
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 # Mark tests that don't require OpenMM as unit tests
 pytestmark = pytest.mark.unit
+
+
+def _check_openmm() -> bool:
+    """Return True if OpenMM and its Reference platform are available."""
+    try:
+        from openmm import Platform
+
+        Platform.getPlatformByName('Reference')
+        return True
+    except Exception:
+        return False
+
+
+requires_openmm = pytest.mark.skipif(not _check_openmm(), reason='OpenMM not available')
+
+
+def _make_state(positions_nm):
+    """Build a real OpenMM State whose positions are ``positions_nm``.
+
+    A force-free System with one particle per supplied coordinate is built on
+    the Reference platform; the positions (interpreted as nanometers) are set
+    and a real State carrying them is returned. This is exactly what an OpenMM
+    reporter receives at report time.
+    """
+    from openmm import Context, Platform, System, VerletIntegrator
+    from openmm.unit import nanometer, picosecond
+
+    system = System()
+    for _ in positions_nm:
+        system.addParticle(1.0)
+
+    context = Context(
+        system,
+        VerletIntegrator(0.001 * picosecond),
+        Platform.getPlatformByName('Reference'),
+    )
+    context.setPositions(np.array(positions_nm, dtype=float) * nanometer)
+    return context.getState(getPositions=True)
+
+
+def _make_simulation(current_step: int, n_atoms: int = 3):
+    """Build a real OpenMM Simulation with ``currentStep`` preset.
+
+    OpenMM's ``Simulation.currentStep`` is a plain settable attribute, so this
+    gives ``describeNextReport`` a genuine Simulation object to interrogate.
+    """
+    from openmm import Platform, System, VerletIntegrator
+    from openmm.app import Element, Simulation, Topology
+    from openmm.unit import picosecond
+
+    top = Topology()
+    chain = top.addChain()
+    res = top.addResidue('UNK', chain)
+    carbon = Element.getBySymbol('C')
+
+    system = System()
+    for _ in range(n_atoms):
+        top.addAtom('C', carbon, res)
+        system.addParticle(12.0)
+
+    sim = Simulation(
+        top,
+        system,
+        VerletIntegrator(0.001 * picosecond),
+        Platform.getPlatformByName('Reference'),
+    )
+    sim.currentStep = current_step
+    return sim
 
 
 class TestRCReporterInit:
@@ -89,8 +157,9 @@ class TestRCReporterInit:
             reporter.file.close()
 
 
+@requires_openmm
 class TestRCReporterDescribeNextReport:
-    """Test suite for describeNextReport method."""
+    """Test suite for describeNextReport method, driven by a real Simulation."""
 
     def test_describe_next_report_returns_correct_tuple(self) -> None:
         """Test describeNextReport returns proper tuple for OpenMM.
@@ -111,10 +180,9 @@ class TestRCReporterDescribeNextReport:
                 rc0=0.1,
             )
 
-            mock_simulation = MagicMock()
-            mock_simulation.currentStep = 50
+            simulation = _make_simulation(current_step=50)
 
-            result = reporter.describeNextReport(mock_simulation)
+            result = reporter.describeNextReport(simulation)
 
             # Should return 6-tuple
             assert len(result) == 6
@@ -148,10 +216,9 @@ class TestRCReporterDescribeNextReport:
                 rc0=0.1,
             )
 
-            mock_simulation = MagicMock()
-            mock_simulation.currentStep = 100
+            simulation = _make_simulation(current_step=100)
 
-            result = reporter.describeNextReport(mock_simulation)
+            result = reporter.describeNextReport(simulation)
 
             # At boundary, should report at next interval
             steps_until_report = result[0]
@@ -188,17 +255,17 @@ class TestRCReporterDescribeNextReport:
                 rc0=0.1,
             )
 
-            mock_simulation = MagicMock()
-            mock_simulation.currentStep = current_step
+            simulation = _make_simulation(current_step=current_step)
 
-            result = reporter.describeNextReport(mock_simulation)
+            result = reporter.describeNextReport(simulation)
             assert result[0] == expected
 
             reporter.file.close()
 
 
+@requires_openmm
 class TestRCReporterReport:
-    """Test suite for report method."""
+    """Test suite for report method, driven by real OpenMM States."""
 
     def test_report_writes_correct_format(self) -> None:
         """Test report writes data in correct CSV format.
@@ -219,22 +286,18 @@ class TestRCReporterReport:
                 rc0=0.1,
             )
 
-            mock_simulation = MagicMock()
+            simulation = _make_simulation(current_step=0)
 
-            # Create mock state with positions
-            mock_state = MagicMock()
             # Positions: atom 0 at origin, atom 1 at (1,0,0), atom 2 at (0.5,0,0)
-            positions = np.array(
+            state = _make_state(
                 [
                     [0.0, 0.0, 0.0],
                     [1.0, 0.0, 0.0],
                     [0.5, 0.0, 0.0],
                 ]
             )
-            mock_state.getPositions.return_value = positions
-            mock_state.getPeriodicBoxVectors.return_value = np.eye(3)
 
-            reporter.report(mock_simulation, mock_state)
+            reporter.report(simulation, state)
             reporter.file.close()
 
             content = rc_file.read_text()
@@ -279,22 +342,18 @@ class TestRCReporterReport:
                 rc0=0.1,
             )
 
-            mock_simulation = MagicMock()
+            simulation = _make_simulation(current_step=0)
 
             # Report 3 times with different positions
             for i in range(3):
-                mock_state = MagicMock()
-                positions = np.array(
+                state = _make_state(
                     [
                         [0.0, 0.0, 0.0],
                         [float(i + 1), 0.0, 0.0],
                         [0.5, 0.0, 0.0],
                     ]
                 )
-                mock_state.getPositions.return_value = positions
-                mock_state.getPeriodicBoxVectors.return_value = np.eye(3)
-
-                reporter.report(mock_simulation, mock_state)
+                reporter.report(simulation, state)
 
             reporter.file.close()
 
@@ -305,7 +364,11 @@ class TestRCReporterReport:
             assert len(lines) == 4
 
     def test_report_flushes_buffer(self) -> None:
-        """Test report flushes file buffer after writing."""
+        """Test report flushes file buffer after writing.
+
+        The data is observable on disk before the file is closed, proving the
+        reporter flushed.
+        """
         from molecular_simulations.simulate.reporters import RCReporter
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -319,30 +382,29 @@ class TestRCReporterReport:
                 rc0=0.1,
             )
 
-            mock_simulation = MagicMock()
-            mock_state = MagicMock()
-            mock_state.getPositions.return_value = np.zeros((3, 3))
-            mock_state.getPeriodicBoxVectors.return_value = np.eye(3)
+            simulation = _make_simulation(current_step=0)
+            state = _make_state(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.5, 0.0, 0.0],
+                ]
+            )
 
-            # Wrap flush to track calls
-            original_flush = reporter.file.flush
-            flush_called = []
+            reporter.report(simulation, state)
 
-            def mock_flush():
-                flush_called.append(True)
-                original_flush()
-
-            reporter.file.flush = mock_flush
-
-            reporter.report(mock_simulation, mock_state)
-
-            assert len(flush_called) == 1
+            # Read the file WITHOUT closing the reporter: a data line is only
+            # visible here if report() flushed the buffer.
+            content = Path(rc_file).read_text()
+            lines = content.strip().split('\n')
+            assert len(lines) == 2  # header + flushed data line
 
             reporter.file.close()
 
 
+@requires_openmm
 class TestRCReporterDistanceCalculations:
-    """Test suite for distance difference calculations."""
+    """Test suite for distance difference calculations from real States."""
 
     def test_distance_calculation_simple(self) -> None:
         """Test distance calculation with simple geometry.
@@ -364,24 +426,21 @@ class TestRCReporterDistanceCalculations:
                 rc0=0.0,
             )
 
-            mock_simulation = MagicMock()
-            mock_state = MagicMock()
+            simulation = _make_simulation(current_step=0)
 
             # Atom k is between i and j
             # i at (0,0,0), k at (0.3,0,0), j at (1,0,0)
             # dist_ik = 0.3, dist_jk = 0.7
             # rc = 0.3 - 0.7 = -0.4
-            positions = np.array(
+            state = _make_state(
                 [
                     [0.0, 0.0, 0.0],  # i
                     [1.0, 0.0, 0.0],  # j
                     [0.3, 0.0, 0.0],  # k
                 ]
             )
-            mock_state.getPositions.return_value = positions
-            mock_state.getPeriodicBoxVectors.return_value = np.eye(3)
 
-            reporter.report(mock_simulation, mock_state)
+            reporter.report(simulation, state)
             reporter.file.close()
 
             content = rc_file.read_text()
@@ -411,22 +470,19 @@ class TestRCReporterDistanceCalculations:
                 rc0=0.0,
             )
 
-            mock_simulation = MagicMock()
-            mock_state = MagicMock()
+            simulation = _make_simulation(current_step=0)
 
             # 3D positions
             # i at origin, j at (1,1,1), k at (0.5,0.5,0.5)
-            positions = np.array(
+            state = _make_state(
                 [
                     [0.0, 0.0, 0.0],
                     [1.0, 1.0, 1.0],
                     [0.5, 0.5, 0.5],
                 ]
             )
-            mock_state.getPositions.return_value = positions
-            mock_state.getPeriodicBoxVectors.return_value = np.eye(3)
 
-            reporter.report(mock_simulation, mock_state)
+            reporter.report(simulation, state)
             reporter.file.close()
 
             content = rc_file.read_text()
@@ -460,24 +516,21 @@ class TestRCReporterDistanceCalculations:
                 rc0=0.0,
             )
 
-            mock_simulation = MagicMock()
-            mock_state = MagicMock()
+            simulation = _make_simulation(current_step=0)
 
             # k is closer to j than to i
             # i at (0,0,0), j at (1,0,0), k at (0.8,0,0)
             # dist_ik = 0.8, dist_jk = 0.2
             # rc = 0.8 - 0.2 = 0.6
-            positions = np.array(
+            state = _make_state(
                 [
                     [0.0, 0.0, 0.0],
                     [1.0, 0.0, 0.0],
                     [0.8, 0.0, 0.0],
                 ]
             )
-            mock_state.getPositions.return_value = positions
-            mock_state.getPeriodicBoxVectors.return_value = np.eye(3)
 
-            reporter.report(mock_simulation, mock_state)
+            reporter.report(simulation, state)
             reporter.file.close()
 
             content = rc_file.read_text()
@@ -502,24 +555,21 @@ class TestRCReporterDistanceCalculations:
                 rc0=0.0,
             )
 
-            mock_simulation = MagicMock()
-            mock_state = MagicMock()
+            simulation = _make_simulation(current_step=0)
 
             # k is closer to i than to j
             # i at (0,0,0), j at (1,0,0), k at (0.2,0,0)
             # dist_ik = 0.2, dist_jk = 0.8
             # rc = 0.2 - 0.8 = -0.6
-            positions = np.array(
+            state = _make_state(
                 [
                     [0.0, 0.0, 0.0],
                     [1.0, 0.0, 0.0],
                     [0.2, 0.0, 0.0],
                 ]
             )
-            mock_state.getPositions.return_value = positions
-            mock_state.getPeriodicBoxVectors.return_value = np.eye(3)
 
-            reporter.report(mock_simulation, mock_state)
+            reporter.report(simulation, state)
             reporter.file.close()
 
             content = rc_file.read_text()
@@ -558,6 +608,7 @@ class TestRCReporterCleanup:
             assert file_handle.closed
 
 
+@requires_openmm
 class TestRCReporterEdgeCases:
     """Test suite for edge cases and error conditions."""
 
@@ -576,22 +627,19 @@ class TestRCReporterEdgeCases:
                 rc0=0.0,
             )
 
-            mock_simulation = MagicMock()
-            mock_state = MagicMock()
+            simulation = _make_simulation(current_step=0)
 
             # All atoms at same position
-            positions = np.array(
+            state = _make_state(
                 [
                     [0.0, 0.0, 0.0],
                     [0.0, 0.0, 0.0],
                     [0.0, 0.0, 0.0],
                 ]
             )
-            mock_state.getPositions.return_value = positions
-            mock_state.getPeriodicBoxVectors.return_value = np.eye(3)
 
             # Should not raise
-            reporter.report(mock_simulation, mock_state)
+            reporter.report(simulation, state)
             reporter.file.close()
 
             content = rc_file.read_text()
@@ -618,21 +666,18 @@ class TestRCReporterEdgeCases:
                 rc0=0.0,
             )
 
-            mock_simulation = MagicMock()
-            mock_state = MagicMock()
+            simulation = _make_simulation(current_step=0)
 
             # Large coordinate values (e.g., far from origin)
-            positions = np.array(
+            state = _make_state(
                 [
                     [1000.0, 1000.0, 1000.0],
                     [1001.0, 1000.0, 1000.0],
                     [1000.5, 1000.0, 1000.0],
                 ]
             )
-            mock_state.getPositions.return_value = positions
-            mock_state.getPeriodicBoxVectors.return_value = np.eye(3)
 
-            reporter.report(mock_simulation, mock_state)
+            reporter.report(simulation, state)
             reporter.file.close()
 
             content = rc_file.read_text()
@@ -659,10 +704,9 @@ class TestRCReporterEdgeCases:
                 rc0=0.0,
             )
 
-            mock_simulation = MagicMock()
-            mock_simulation.currentStep = 5
+            simulation = _make_simulation(current_step=5)
 
-            result = reporter.describeNextReport(mock_simulation)
+            result = reporter.describeNextReport(simulation)
 
             # With interval=1, should report every step
             assert result[0] == 1
@@ -670,6 +714,7 @@ class TestRCReporterEdgeCases:
             reporter.file.close()
 
 
+@requires_openmm
 @pytest.mark.parametrize(
     'atom_i,atom_j,atom_k,positions,expected_rc',
     [
@@ -710,12 +755,10 @@ class TestRCReporterParametrized:
                 rc0=0.0,
             )
 
-            mock_simulation = MagicMock()
-            mock_state = MagicMock()
-            mock_state.getPositions.return_value = np.array(positions)
-            mock_state.getPeriodicBoxVectors.return_value = np.eye(3)
+            simulation = _make_simulation(current_step=0)
+            state = _make_state(positions)
 
-            reporter.report(mock_simulation, mock_state)
+            reporter.report(simulation, state)
             reporter.file.close()
 
             content = rc_file.read_text()
@@ -726,6 +769,7 @@ class TestRCReporterParametrized:
             assert rc == pytest.approx(expected_rc, rel=1e-5)
 
 
+@requires_openmm
 class TestRCReporterIntegration:
     """Integration-style tests for RCReporter."""
 
@@ -733,7 +777,7 @@ class TestRCReporterIntegration:
         """Test RCReporter in a simulated full workflow.
 
         This test simulates multiple report cycles as would occur
-        during an actual EVB simulation.
+        during an actual EVB simulation, each backed by a real State.
         """
         from molecular_simulations.simulate.reporters import RCReporter
 
@@ -748,25 +792,22 @@ class TestRCReporterIntegration:
                 rc0=-0.2,  # Target RC for this window
             )
 
-            mock_simulation = MagicMock()
+            simulation = _make_simulation(current_step=0)
 
             # Simulate trajectory: k moves from i towards j
             n_frames = 10
             for frame in range(n_frames):
-                mock_state = MagicMock()
                 # k position interpolates from near i to near j
                 k_pos = 0.1 + frame * 0.08  # 0.1 to 0.82
-                positions = np.array(
+                state = _make_state(
                     [
                         [0.0, 0.0, 0.0],  # i (donor)
                         [1.0, 0.0, 0.0],  # j (acceptor)
                         [k_pos, 0.0, 0.0],  # k (transferring atom)
                     ]
                 )
-                mock_state.getPositions.return_value = positions
-                mock_state.getPeriodicBoxVectors.return_value = np.eye(3)
 
-                reporter.report(mock_simulation, mock_state)
+                reporter.report(simulation, state)
 
             reporter.file.close()
 

@@ -4,7 +4,6 @@ Unit tests for ipSAE.py module
 
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
 
 import numpy as np
 import polars as pl
@@ -98,19 +97,18 @@ class TestModelParser:
         result = ModelParser.parse_cif_line(cif_line, fields)
         assert result is None
 
-    @patch(
-        'builtins.open',
-        mock_open(
-            read_data="""ATOM      1  CA  GLY A   1      10.000  20.000  30.000  1.00 20.00           C
-ATOM      2  N   ALA A   2      11.500  21.500  31.500  1.00 20.00           N
-ATOM      3  CA  ALA A   2      12.000  22.000  32.000  1.00 20.00           C
-ATOM      4  CB  ALA A   2      13.000  23.000  33.000  1.00 20.00           C
-END"""
-        ),
-    )
-    def test_parse_structure_file_pdb(self):
-        """Test parsing PDB structure file"""
-        parser = ModelParser('test.pdb')
+    def test_parse_structure_file_pdb(self, tmp_path):
+        """Test parsing a real PDB structure file written to disk."""
+        pdb_file = tmp_path / 'test.pdb'
+        pdb_file.write_text(
+            'ATOM      1  CA  GLY A   1      10.000  20.000  30.000  1.00 20.00           C\n'
+            'ATOM      2  N   ALA A   2      11.500  21.500  31.500  1.00 20.00           N\n'
+            'ATOM      3  CA  ALA A   2      12.000  22.000  32.000  1.00 20.00           C\n'
+            'ATOM      4  CB  ALA A   2      13.000  23.000  33.000  1.00 20.00           C\n'
+            'END\n'
+        )
+
+        parser = ModelParser(str(pdb_file))
         parser.parse_structure_file()
 
         assert len(parser.residues) == 2  # Only CA atoms
@@ -218,91 +216,67 @@ class TestScoreCalculator:
         assert np.isclose(d0_scalar, d0_array[0])
 
     def test_permute_chains(self):
-        """Test chain permutation"""
+        """Test chain permutation against the real permute_chains output."""
         chains = np.array(['A', 'A', 'B', 'B', 'C', 'C'])
         chain_pair_type = {'A': 'protein', 'B': 'protein', 'C': 'protein'}
 
-        # Patch permute_chains to avoid the bug in the implementation
-        with patch.object(ScoreCalculator, 'permute_chains'):
-            calc = ScoreCalculator(chains, chain_pair_type, 6)
+        calc = ScoreCalculator(chains, chain_pair_type, 6)
 
-            # Manually set up what permute_chains should have done
-            calc.permuted = {('A', 'B'): 0, ('A', 'C'): 1, ('B', 'C'): 2}
+        # Real permute_chains stores list(permutations(unique_chains, 2)):
+        # all ordered pairs of distinct chains.
+        assert ('A', 'B') in calc.permuted
+        assert ('B', 'A') in calc.permuted
+        assert ('A', 'C') in calc.permuted
+        assert ('C', 'A') in calc.permuted
+        assert ('B', 'C') in calc.permuted
+        assert ('C', 'B') in calc.permuted
 
-            # Check that expected pairs exist
-            assert ('A', 'B') in calc.permuted
-            assert ('A', 'C') in calc.permuted
-            assert ('B', 'C') in calc.permuted
-            # Self-pairs should not exist
-            assert ('A', 'A') not in calc.permuted
-            assert ('B', 'B') not in calc.permuted
-            assert ('C', 'C') not in calc.permuted
+        # Self-pairs are excluded.
+        assert ('A', 'A') not in calc.permuted
+        assert ('B', 'B') not in calc.permuted
+        assert ('C', 'C') not in calc.permuted
 
-    @patch('polars.DataFrame.write_parquet')
-    def test_compute_scores(self, mock_write):
-        """Test score computation"""
+        # 3 chains -> 3 * 2 = 6 ordered pairs.
+        assert len(calc.permuted) == 6
+
+    def test_compute_scores(self):
+        """Test score computation with the real permute_chains."""
         chains = np.array(['A', 'A', 'B', 'B'])
         chain_pair_type = {'A': 'protein', 'B': 'protein'}
 
-        # Mock permute_chains to avoid the bug
-        with patch.object(ScoreCalculator, 'permute_chains'):
-            calc = ScoreCalculator(chains, chain_pair_type, 4)
+        calc = ScoreCalculator(chains, chain_pair_type, 4)
 
-            # Manually set up permuted chains
-            calc.permuted = {('A', 'B'): 0}
+        # Create data - ensure some distances are within cutoff.
+        # pDockQ_cutoff is 8.0, so make sure some distances are < 8.0
+        distances = np.array(
+            [
+                [0, 1, 5, 6],  # Residue 0 to all others
+                [1, 0, 7, 5],  # Residue 1 to all others
+                [5, 7, 0, 3],  # Residue 2 to all others
+                [6, 5, 3, 0],  # Residue 3 to all others
+            ]
+        )
+        pLDDT = np.array([90, 85, 80, 75])  # Good pLDDT scores
+        PAE = np.array([[0, 2, 8, 10], [2, 0, 9, 8], [8, 9, 0, 5], [10, 8, 5, 0]])
 
-            # Create mock data - ensure some distances are within cutoff
-            # pDockQ_cutoff is 8.0, so make sure some distances are < 8.0
-            distances = np.array(
-                [
-                    [0, 1, 5, 6],  # Residue 0 to all others
-                    [1, 0, 7, 5],  # Residue 1 to all others
-                    [5, 7, 0, 3],  # Residue 2 to all others
-                    [6, 5, 3, 0],  # Residue 3 to all others
-                ]
-            )
-            pLDDT = np.array([90, 85, 80, 75])  # Good pLDDT scores
-            PAE = np.array([[0, 2, 8, 10], [2, 0, 9, 8], [8, 9, 0, 5], [10, 8, 5, 0]])
+        calc.compute_scores(distances, pLDDT, PAE)
 
-            calc.compute_scores(distances, pLDDT, PAE)
-
-            assert hasattr(calc, 'df')
-            assert hasattr(calc, 'scores')
+        assert hasattr(calc, 'df')
+        assert hasattr(calc, 'scores')
+        # Real permuted pairs are (A,B) and (B,A); after get_max_values the
+        # undirected A_B pair collapses to a single row.
+        assert len(calc.scores) == 1
+        assert set(calc.scores['chain1'].to_list()) <= {'A', 'B'}
 
 
 class TestIpSAE:
-    """Test suite for ipSAE class"""
-
-    @pytest.fixture(autouse=True)
-    def mock_model_parser(self):
-        """Mock ModelParser for all tests in this class"""
-        import sys
-
-        # Get the actual MODULE from sys.modules
-        ipSAE_module = sys.modules.get('molecular_simulations.analysis.ipSAE')
-
-        if ipSAE_module is None:
-            # Module not loaded yet, import it
-
-            ipSAE_module = sys.modules['molecular_simulations.analysis.ipSAE']
-
-        # Save the original ModelParser
-        original_parser = ipSAE_module.ModelParser
-
-        # Replace with mock
-        mock_parser_instance = MagicMock()
-        mock_parser_class = MagicMock(return_value=mock_parser_instance)
-        ipSAE_module.ModelParser = mock_parser_class
-
-        yield mock_parser_instance
-
-        # Restore original after test
-        ipSAE_module.ModelParser = original_parser
+    """Test suite for ipSAE class (real ModelParser; no mocks)."""
 
     def test_init(self):
         """Test ipSAE initialization"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create dummy files (ModelParser is mocked so content doesn't matter)
+            # ModelParser.__init__ only stores the path; it does not read the
+            # file, so an empty placeholder is sufficient here.
             structure_file = Path(tmpdir) / 'test.pdb'
             structure_file.touch()
             plddt_file = Path(tmpdir) / 'plddt.npy'
@@ -355,127 +329,78 @@ class TestIpSAE:
 
             assert np.array_equal(result, pae_data)
 
-    @patch('polars.DataFrame.write_parquet')
-    def test_save_scores(self, mock_write):
-        """Test saving scores to parquet"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ipsae = ipSAE('test.pdb', 'plddt.npy', 'pae.npy', out_path=tmpdir)
-            ipsae.scores = pl.DataFrame({'test': [1, 2, 3]})
+    def test_save_scores(self, tmp_path):
+        """Test saving scores to a real parquet file that can be read back."""
+        ipsae = ipSAE('test.pdb', 'plddt.npy', 'pae.npy', out_path=str(tmp_path))
+        ipsae.scores = pl.DataFrame({'test': [1, 2, 3]})
 
-            ipsae.save_scores()
+        ipsae.save_scores()
 
-            mock_write.assert_called_once()
-            args = mock_write.call_args[0]
-            assert 'ipSAE_scores.parquet' in str(args[0])
+        out_file = tmp_path / 'ipSAE_scores.parquet'
+        assert out_file.exists()
+        back = pl.read_parquet(out_file)
+        assert back.columns == ['test']
+        assert back['test'].to_list() == [1, 2, 3]
 
-    def test_parse_structure_file(self):
-        """Test structure file parsing"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ipsae = ipSAE('test.pdb', 'plddt.npy', 'pae.npy', out_path=tmpdir)
+    def test_parse_structure_file(self, two_chain_pdb, tmp_path):
+        """Test structure file parsing against a real two-chain PDB."""
+        ipsae = ipSAE(
+            str(two_chain_pdb), 'plddt.npy', 'pae.npy', out_path=str(tmp_path)
+        )
 
-            # Mock the parser methods directly on the instance
-            ipsae.parser.parse_structure_file = MagicMock()
-            ipsae.parser.classify_chains = MagicMock()
+        ipsae.parse_structure_file()
 
-            # Set up mock data that parse_structure_file would populate
-            ipsae.parser.residues = [
-                {'coor': np.array([0, 0, 0])},
-                {'coor': np.array([1, 1, 1])},
-                {'coor': np.array([2, 2, 2])},
-            ]
-            ipsae.parser.cb_residues = [
-                {'coor': np.array([0.5, 0.5, 0.5])},
-                {'coor': np.array([1.5, 1.5, 1.5])},
-                {'coor': np.array([2.5, 2.5, 2.5])},
-            ]
-            ipsae.parse_structure_file()
+        # Two standard residues (LYS in chain A, ASP in chain B) each contribute
+        # one anchor and one CB coordinate.
+        n_res = len(ipsae.parser.residues)
+        assert n_res == 2
+        assert ipsae.coordinates.shape == (n_res, 3)
+        assert ipsae.cb_coordinates.shape == (n_res, 3)
+        assert ipsae.parser.chain_types == {'A': 'protein', 'B': 'protein'}
 
-            assert ipsae.coordinates.shape == (3, 3)
-            assert ipsae.cb_coordinates.shape == (3, 3)
-            ipsae.parser.parse_structure_file.assert_called_once()
-            ipsae.parser.classify_chains.assert_called_once()
+    def test_prepare_scorer(self, two_chain_pdb, tmp_path):
+        """Test scorer preparation with the real permute_chains."""
+        ipsae = ipSAE(
+            str(two_chain_pdb), 'plddt.npy', 'pae.npy', out_path=str(tmp_path)
+        )
+        ipsae.parse_structure_file()
 
-    def test_prepare_scorer(self):
-        """Test scorer preparation"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ipsae = ipSAE('test.pdb', 'plddt.npy', 'pae.npy', out_path=tmpdir)
+        ipsae.prepare_scorer()
 
-            # Setup mock parser data
-            ipsae.parser.chains = ['A', 'A', 'B']
-            ipsae.parser.chain_types = {'A': 'protein', 'B': 'protein'}
-            ipsae.parser.residues = [{'res': 'GLY'}, {'res': 'ALA'}, {'res': 'VAL'}]
-
-            # Mock permute_chains to avoid the bug
-            with patch.object(ScoreCalculator, 'permute_chains'):
-                ipsae.prepare_scorer()
-
-                assert isinstance(ipsae.scorer, ScoreCalculator)
-                assert np.array_equal(ipsae.scorer.chains, ['A', 'A', 'B'])
+        assert isinstance(ipsae.scorer, ScoreCalculator)
+        assert np.array_equal(ipsae.scorer.chains, np.array(['A', 'B']))
+        # Real permute_chains gives both ordered cross-pairs.
+        assert ('A', 'B') in ipsae.scorer.permuted
+        assert ('B', 'A') in ipsae.scorer.permuted
 
 
 class TestIpSAERun:
-    """Test ipSAE.run method (lines 97-107)."""
+    """Test ipSAE.run end-to-end against a real structure (no mocks)."""
 
-    @pytest.fixture(autouse=True)
-    def mock_model_parser(self):
-        """Mock ModelParser for all tests in this class."""
-        import sys
+    def test_run_full_workflow(self, two_chain_pdb, tmp_path):
+        """run() parses a real PDB, scores, and writes a readable parquet."""
+        # Real two-chain structure yields two scorable residues (A: LYS, B: ASP).
+        plddt_file = tmp_path / 'plddt.npz'
+        pae_file = tmp_path / 'pae.npz'
+        np.savez(plddt_file, plddt=np.array([0.9, 0.8]))
+        np.savez(pae_file, pae=np.array([[0.0, 3.0], [3.0, 0.0]]))
 
-        ipSAE_module = sys.modules.get('molecular_simulations.analysis.ipSAE')
-        if ipSAE_module is None:
-            ipSAE_module = sys.modules['molecular_simulations.analysis.ipSAE']
-        original_parser = ipSAE_module.ModelParser
-        mock_parser_instance = MagicMock()
-        mock_parser_class = MagicMock(return_value=mock_parser_instance)
-        ipSAE_module.ModelParser = mock_parser_class
-        yield mock_parser_instance
-        ipSAE_module.ModelParser = original_parser
+        obj = ipSAE(str(two_chain_pdb), plddt_file, pae_file, out_path=str(tmp_path))
 
-    @patch('polars.DataFrame.write_parquet')
-    def test_run_calls_full_workflow(self, mock_write):
-        """Test run() calls all steps in order."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create mock plddt and pae files
-            plddt_data = np.random.rand(4) * 0.01
-            pae_data = np.random.rand(4, 4) * 10
-            plddt_file = Path(tmpdir) / 'plddt.npz'
-            pae_file = Path(tmpdir) / 'pae.npz'
-            np.savez(plddt_file, plddt=plddt_data)
-            np.savez(pae_file, pae=pae_data)
+        obj.run()
 
-            obj = ipSAE('test.pdb', plddt_file, pae_file, out_path=tmpdir)
+        assert hasattr(obj, 'scores')
+        # Real scores DataFrame carries the expected columns.
+        for col in ('chain1', 'chain2', 'pDockQ', 'pDockQ2', 'LIS', 'ipTM', 'ipSAE'):
+            assert col in obj.scores.columns
+        # Undirected A_B pair collapses to a single row.
+        assert len(obj.scores) == 1
 
-            # Set up mock parser data for parse_structure_file
-            obj.parser.residues = [
-                {'coor': np.array([0, 0, 0]), 'res': 'GLY'},
-                {'coor': np.array([1, 1, 1]), 'res': 'ALA'},
-                {'coor': np.array([5, 5, 5]), 'res': 'VAL'},
-                {'coor': np.array([6, 6, 6]), 'res': 'LEU'},
-            ]
-            obj.parser.cb_residues = [
-                {'coor': np.array([0, 0, 0])},
-                {'coor': np.array([1.5, 1.5, 1.5])},
-                {'coor': np.array([5.5, 5.5, 5.5])},
-                {'coor': np.array([6.5, 6.5, 6.5])},
-            ]
-            obj.parser.chains = ['A', 'A', 'B', 'B']
-            obj.parser.chain_types = {'A': 'protein', 'B': 'protein'}
-
-            mock_scores = pl.DataFrame(
-                {'chain1': ['A'], 'chain2': ['B'], 'score': [0.5]}
-            )
-
-            def set_scores(distances, pLDDT, PAE):
-                obj.scorer.scores = mock_scores
-
-            with (
-                patch.object(ScoreCalculator, 'permute_chains'),
-                patch.object(ScoreCalculator, 'compute_scores', side_effect=set_scores),
-            ):
-                obj.run()
-
-            assert hasattr(obj, 'scores')
-            mock_write.assert_called_once()
+        out_file = tmp_path / 'ipSAE_scores.parquet'
+        assert out_file.exists()
+        back = pl.read_parquet(out_file)
+        assert 'ipSAE' in back.columns
+        assert len(back) == 1
 
 
 class TestScoreCalculatorEdgeCases:
@@ -486,33 +411,29 @@ class TestScoreCalculatorEdgeCases:
         chains = np.array(['A', 'A', 'B', 'B'])
         chain_pair_type = {'A': 'protein', 'B': 'protein'}
 
-        with patch.object(ScoreCalculator, 'permute_chains'):
-            calc = ScoreCalculator(chains, chain_pair_type, 4)
-            # Distances all > pDockQ_cutoff (8.0)
-            calc.distances = np.array(
-                [[0, 1, 100, 100], [1, 0, 100, 100], [100, 100, 0, 1], [100, 100, 1, 0]]
-            )
-            calc.pLDDT = np.array([90, 85, 80, 75])
+        calc = ScoreCalculator(chains, chain_pair_type, 4)
+        # Distances all > pDockQ_cutoff (8.0)
+        calc.distances = np.array(
+            [[0, 1, 100, 100], [1, 0, 100, 100], [100, 100, 0, 1], [100, 100, 1, 0]]
+        )
+        calc.pLDDT = np.array([90, 85, 80, 75])
 
-            pdockq, pdockq2 = calc.compute_pDockQ_scores('A', 'B')
-            assert pdockq == 0.0
-            assert pdockq2 == 0.0
+        pdockq, pdockq2 = calc.compute_pDockQ_scores('A', 'B')
+        assert pdockq == 0.0
+        assert pdockq2 == 0.0
 
     def test_compute_ipTM_nucleic_acid(self):
         """Test ipTM with nucleic_acid pair type (line 322)."""
         chains = np.array(['A', 'A', 'B', 'B'])
         chain_pair_type = {'A': 'protein', 'B': 'nucleic_acid'}
 
-        with patch.object(ScoreCalculator, 'permute_chains'):
-            calc = ScoreCalculator(chains, chain_pair_type, 4)
-            calc.PAE = np.array(
-                [[0, 2, 8, 10], [2, 0, 9, 8], [8, 9, 0, 5], [10, 8, 5, 0]]
-            )
+        calc = ScoreCalculator(chains, chain_pair_type, 4)
+        calc.PAE = np.array([[0, 2, 8, 10], [2, 0, 9, 8], [8, 9, 0, 5], [10, 8, 5, 0]])
 
-            ipTM, ipSAE_score = calc.compute_ipTM_ipSAE('A', 'B')
-            # Should use nucleic_acid d0 (min_value=2.0)
-            assert isinstance(ipTM, float)
-            assert isinstance(ipSAE_score, float)
+        ipTM, ipSAE_score = calc.compute_ipTM_ipSAE('A', 'B')
+        # Should use nucleic_acid d0 (min_value=2.0)
+        assert isinstance(ipTM, float)
+        assert isinstance(ipSAE_score, float)
 
 
 class TestModelParserCIF:

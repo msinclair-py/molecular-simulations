@@ -1,9 +1,8 @@
 """
 Unit tests for analysis/cov_ppi.py module
 
-This module contains both unit tests (with minimal mocks) and integration tests.
-Tests use real MDAnalysis when available, with conditional skips for environments
-without MDAnalysis installed.
+This module uses no mocks. Tests run real MDAnalysis over committed PDB/DCD
+fixtures, with conditional skips for environments without MDAnalysis installed.
 """
 
 import json

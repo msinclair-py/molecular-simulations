@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TypeVar
 
 import yaml
-from calvados.cfg import Components, Config  # ty: ignore[unresolved-import]
 
 _T = TypeVar('_T')
 OptPath = Path | str | None
@@ -216,6 +215,8 @@ class CGBuilder:
         Creates config.yaml in the simulation directory with all
         simulation parameters.
         """
+        from calvados.cfg import Config  # ty: ignore[unresolved-import]
+
         config = Config(
             sysname=self.input_pdb.stem,
             box=self.box_dim,
@@ -240,6 +241,8 @@ class CGBuilder:
         Creates components.yaml in the simulation directory with
         molecule and restraint specifications.
         """
+        from calvados.cfg import Components  # ty: ignore[unresolved-import]
+
         components = Components(
             molecule_type=self.molecule_type,
             nmol=self.nmol,

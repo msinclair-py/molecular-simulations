@@ -9,9 +9,9 @@ These tests verify that different components can work together:
 Run with: pytest tests/test_integration.py --run-integration
 """
 
+import os
 import shutil
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -40,40 +40,41 @@ END
 class TestBuildToSimulate:
     """Test that builders create valid inputs for simulators"""
 
-    @patch.dict('os.environ', {'AMBERHOME': '/mock/amber/path'})
     @pytest.mark.requires_amber
-    def test_implicit_solvent_builder_creates_simulator_inputs(self, tmp_path):
-        """Test ImplicitSolvent builder creates files that Minimizer can use"""
+    @pytest.mark.requires_openmm
+    def test_implicit_solvent_builder_creates_simulator_inputs(
+        self, tmp_path, alanine_dipeptide_pdb, skip_without_amber, skip_without_openmm
+    ):
+        """ImplicitSolvent builder creates real files a Minimizer can load."""
         from molecular_simulations.build import ImplicitSolvent
         from molecular_simulations.simulate import Minimizer
 
-        # Create sample PDB
-        sample_pdb = create_sample_pdb(tmp_path / 'input.pdb')
+        home = os.environ.get('AMBERHOME')
+        if not (home and (Path(home) / 'bin' / 'tleap').exists()):
+            tleap = shutil.which('tleap')
+            home = str(Path(tleap).resolve().parent.parent) if tleap else None
 
-        # Build system
+        # Build a real implicit-solvent system with tleap.
         builder = ImplicitSolvent(
-            path=tmp_path, pdb=sample_pdb, protein=True, out='system.pdb'
+            path=tmp_path,
+            pdb=str(alanine_dipeptide_pdb),
+            protein=True,
+            glycans=False,
+            out='system.pdb',
+            amberhome=home,
         )
+        builder.build()
 
-        # Mock tleap execution
-        with patch.object(builder, 'temp_tleap'):
-            # Create dummy output files
-            (tmp_path / 'system.pdb').write_text(sample_pdb.read_text())
-            (tmp_path / 'system.prmtop').write_text('%FLAG POINTERS\n')
-            (tmp_path / 'system.inpcrd').write_text('coords\n')
+        # tleap really produced these files.
+        prmtop = tmp_path / 'system.prmtop'
+        inpcrd = tmp_path / 'system.inpcrd'
+        assert prmtop.exists()
+        assert inpcrd.exists()
 
-            builder.build()
-
-        # Verify files exist
-        assert (tmp_path / 'system.pdb').exists()
-        assert (tmp_path / 'system.prmtop').exists()
-        assert (tmp_path / 'system.inpcrd').exists()
-
-        # These files should be usable by Minimizer
-        # (We can't actually run minimization without OpenMM, but check init)
+        # The real outputs are usable by Minimizer.
         minimizer = Minimizer(
-            topology=tmp_path / 'system.prmtop',
-            coordinates=tmp_path / 'system.inpcrd',
+            topology=prmtop,
+            coordinates=inpcrd,
             out='min.pdb',
             platform='CPU',
         )
@@ -97,10 +98,9 @@ class TestBuildToSimulate:
         u = mda.Universe(str(output_pdb))
         assert u.atoms.n_atoms > 0
 
-        # Should be usable for analysis (though we mock the analysis)
-        with patch('molecular_simulations.analysis.sasa.KDTree'):
-            sasa = SASA(u.atoms[:5])  # Just use first 5 atoms
-            assert sasa.ag.n_atoms == 5
+        # Real SASA construction (init does not touch any KD-tree).
+        sasa = SASA(u.atoms[:5])  # Just use first 5 atoms
+        assert sasa.ag.n_atoms == 5
 
 
 class TestSimulateToAnalyze:
@@ -119,10 +119,9 @@ class TestSimulateToAnalyze:
         # Analysis tools should be able to work with this
         from molecular_simulations.analysis import SASA
 
-        with patch('molecular_simulations.analysis.sasa.KDTree'):
-            sasa = SASA(u.atoms)
-            sasa._prepare()
-            assert hasattr(sasa.results, 'sasa')
+        sasa = SASA(u.atoms)
+        sasa._prepare()
+        assert hasattr(sasa.results, 'sasa')
 
     def test_energy_log_parseable(self, tmp_path):
         """Test that simulation logs can be parsed for analysis"""
@@ -185,61 +184,37 @@ class TestFullPipeline:
             data = np.random.rand(n_frames, n_features)
             np.save(tmp_path / f'traj_{i}.npy', data)
 
-        # Run clustering analysis
-        with patch(
-            'molecular_simulations.analysis.autocluster.silhouette_score'
-        ) as mock_score:
-            mock_score.return_value = 0.5
+        # Run the real clustering analysis (real PCA + KMeans + silhouette).
+        auto_km = AutoKMeans(tmp_path, pattern='traj_', max_clusters=5, stride=1)
 
-            auto_km = AutoKMeans(tmp_path, pattern='traj_', max_clusters=5, stride=1)
-
-            # Run clustering
-            auto_km.reduce_dimensionality()
-            auto_km.sweep_n_clusters([2, 3])
-            auto_km.map_centers_to_frames()
-            auto_km.save_centers()
-            auto_km.save_labels()
+        auto_km.reduce_dimensionality()
+        auto_km.sweep_n_clusters([2, 3])
+        auto_km.map_centers_to_frames()
+        auto_km.save_centers()
+        auto_km.save_labels()
 
         # Verify outputs exist
         assert (tmp_path / 'cluster_centers.json').exists()
         assert (tmp_path / 'cluster_assignments.parquet').exists()
 
-    @pytest.mark.slow
     def test_fingerprint_calculation_workflow(self, tmp_path):
-        """Test: Load structure -> Calculate fingerprint -> Save"""
+        """Test: construct a Fingerprinter over a real structure path."""
         from molecular_simulations.analysis.fingerprinter import Fingerprinter
 
         # Create sample PDB
         sample_pdb = create_sample_pdb(tmp_path / 'structure.pdb')
 
-        # This test would normally require OpenMM and proper topology
-        # Here we just verify the workflow structure
+        # Fingerprinter construction is pure path/selection logic; no OpenMM or
+        # topology parsing happens until assign_nonbonded_params/load_pdb.
+        fp = Fingerprinter(
+            topology=sample_pdb, target_selection='segid A', out_path=tmp_path
+        )
 
-        # Mock the OpenMM parts
-        with (
-            patch('molecular_simulations.analysis.fingerprinter.AmberPrmtopFile'),
-            patch(
-                'molecular_simulations.analysis.fingerprinter.mda.Universe'
-            ) as mock_u,
-        ):
-            # Setup mocks
-            mock_universe = MagicMock()
-            mock_ag = MagicMock()
-            mock_ag.residues = [MagicMock() for _ in range(5)]
-            for i, res in enumerate(mock_ag.residues):
-                res.atoms.ix = np.array([i])
-            mock_universe.select_atoms.return_value = mock_ag
-            mock_universe.atoms.positions = np.random.rand(10, 3)
-            mock_universe.trajectory = [MagicMock()]
-            mock_u.return_value = mock_universe
-
-            fp = Fingerprinter(
-                topology=sample_pdb, target_selection='segid A', out_path=tmp_path
-            )
-
-            # Verify workflow can be set up
-            assert fp.topology.exists()
-            assert fp.out.parent == tmp_path
+        assert fp.topology.exists()
+        assert fp.out.parent == tmp_path
+        assert fp.target_selection == 'segid A'
+        # Default binder selection is the complement of the target.
+        assert fp.binder_selection == 'not segid A'
 
 
 class TestDataFlow:

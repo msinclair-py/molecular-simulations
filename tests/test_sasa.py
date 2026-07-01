@@ -1,90 +1,60 @@
+"""Tests for the sasa module.
+
+Every test exercises the real Shrake-Rupley implementation: a real MDAnalysis
+Universe built from a committed fixture, real scipy ``KDTree`` spatial queries,
+and real numpy math. Every assertion checks actual computed SASA values for
+finiteness, non-negativity, correct array shape, and physical sanity against
+real fixtures.
 """
-Unit tests for sasa.py module
 
-This module contains both unit tests (with mocks) and integration tests that use
-real MDAnalysis Universe objects when available. Integration tests use actual
-spatial calculations to verify SASA behavior.
-"""
-
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
+import MDAnalysis as mda
 import numpy as np
 import pytest
+from scipy.spatial import KDTree
 
-# ============================================================================
-# Fixtures for conditional real MDAnalysis usage
-# ============================================================================
-
-
-def _check_mdanalysis_available():
-    """Check if MDAnalysis is available."""
-    try:
-        import MDAnalysis as mda  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
-
-# Custom marker for tests requiring MDAnalysis
-requires_mdanalysis = pytest.mark.skipif(
-    not _check_mdanalysis_available(), reason='MDAnalysis not available'
-)
+from molecular_simulations.analysis import SASA, RelativeSASA
 
 
 @pytest.fixture
-def mda_universe():
-    """Return a real MDAnalysis Universe from a test PDB file, or skip."""
-    try:
-        import MDAnalysis as mda
+def mda_universe(alanine_dipeptide_pdb):
+    """Real Universe for the Ace-Ala-Nme dipeptide (23 atoms, 3 residues).
 
-        # Use the test data PDB file
-        test_pdb = Path(__file__).parent / 'data' / 'pdb' / 'alanine_dipeptide.pdb'
-        if test_pdb.exists():
-            return mda.Universe(str(test_pdb))
-        else:
-            pytest.skip(f'Test PDB file not found: {test_pdb}')
-    except ImportError:
-        pytest.skip('MDAnalysis not available')
+    Loaded from a PDB, so it carries ``elements`` (needed by SASA) but no
+    ``bonds`` topology (so it is rejected by RelativeSASA).
+    """
+    return mda.Universe(str(alanine_dipeptide_pdb))
 
 
 @pytest.fixture
-def simple_atomgroup(mda_universe):
-    """Return an AtomGroup from the test universe."""
-    return mda_universe.select_atoms('all')
+def amber_protein(real_amber_system_files):
+    """Real bonded AtomGroup (Ace-Ala-Nme, 22 atoms) from an AMBER prmtop.
 
-
-# ============================================================================
-# Integration tests using real MDAnalysis (when available)
-# ============================================================================
+    Carries both ``elements`` and ``bonds``, so it is valid for RelativeSASA.
+    """
+    u = mda.Universe(
+        str(real_amber_system_files['prmtop']),
+        str(real_amber_system_files['inpcrd']),
+    )
+    return u.select_atoms('protein')
 
 
 class TestSASAIntegration:
-    """Integration tests using real MDAnalysis objects.
+    """End-to-end checks on real spatial machinery and full runs."""
 
-    These tests verify actual SASA calculations rather than mocked interactions.
-    """
-
-    @requires_mdanalysis
     def test_real_universe_loading(self, mda_universe):
-        """Test that we can load a real MDAnalysis Universe."""
+        """A real Universe loads with atoms present."""
         assert mda_universe is not None
-        assert mda_universe.atoms.n_atoms > 0
+        assert mda_universe.atoms.n_atoms == 23
+        assert mda_universe.atoms.n_residues == 3
 
-    @requires_mdanalysis
     def test_real_atomgroup_has_elements(self, mda_universe):
-        """Test that the atomgroup has elements assigned."""
+        """The atomgroup exposes elements used for radii assignment."""
         ag = mda_universe.select_atoms('all')
-        # Elements should be available for SASA calculation
         assert hasattr(ag, 'elements')
+        assert len(ag.elements) == ag.n_atoms
 
-    @requires_mdanalysis
     def test_real_kdtree_spatial_query(self):
-        """Test real KDTree spatial queries work correctly."""
-        from scipy.spatial import KDTree
-
-        # Create test coordinates
+        """Real scipy KDTree neighbour queries are deterministic and correct."""
         positions = np.array(
             [
                 [0.0, 0.0, 0.0],
@@ -96,410 +66,191 @@ class TestSASAIntegration:
 
         kdt = KDTree(positions)
 
-        # Query ball point - should find 3 atoms within radius 2.0 of origin
         neighbors = kdt.query_ball_point([0.0, 0.0, 0.0], r=2.0)
-        assert len(neighbors) == 3  # indices 0, 1, 2
-        assert 3 not in neighbors  # far away point should not be included
+        assert sorted(neighbors) == [0, 1, 2]
+        assert 3 not in neighbors  # far away point excluded
 
-    @requires_mdanalysis
     def test_fibonacci_sphere_generation(self, mda_universe):
-        """Test that Fibonacci sphere points are correctly distributed on unit sphere."""
-        from molecular_simulations.analysis import SASA
-
+        """Fibonacci sphere points lie on the unit sphere."""
         ag = mda_universe.select_atoms('all')
         sasa = SASA(ag, n_points=100)
         sphere = sasa.get_sphere()
 
-        # Check shape
         assert sphere.shape == (100, 3)
-
-        # Check all points lie on unit sphere (norm should be ~1)
         norms = np.linalg.norm(sphere, axis=1)
         assert np.allclose(norms, 1.0, rtol=1e-5)
 
-    @requires_mdanalysis
-    def test_sasa_radii_assignment(self, mda_universe):
-        """Test that atomic radii are correctly assigned from elements."""
-        from molecular_simulations.analysis import SASA
-
+    def test_sasa_full_run_is_physical(self, mda_universe):
+        """A complete SASA.run() yields one finite, non-negative value per residue."""
         ag = mda_universe.select_atoms('all')
-        sasa = SASA(ag, probe_radius=1.4)
+        sasa = SASA(ag, n_points=64)
+        sasa.run()
 
-        # Radii should be VDW radii + probe radius
-        assert len(sasa.radii) == ag.n_atoms
+        result = sasa.results.sasa
+        assert result.shape == (ag.n_residues,)
+        assert np.all(np.isfinite(result))
+        assert np.all(result >= 0)
+        # An exposed tripeptide must have appreciable total surface area.
+        assert np.sum(result) > 0
 
-        # All radii should be positive
-        assert all(r > 0 for r in sasa.radii)
-
-        # Radii should be larger than probe radius (VDW > 0)
-        assert all(r > 1.4 for r in sasa.radii)
-
-    @requires_mdanalysis
-    def test_sasa_prepare_initializes_results(self, mda_universe):
-        """Test that _prepare correctly initializes results arrays."""
-        from molecular_simulations.analysis import SASA
-
-        ag = mda_universe.select_atoms('all')
-        sasa = SASA(ag)
-        sasa._prepare()
-
-        assert hasattr(sasa.results, 'sasa')
-        assert sasa.results.sasa.shape == (ag.n_residues,)
-        assert all(s == 0 for s in sasa.results.sasa)
-
-    @requires_mdanalysis
-    def test_sasa_values_are_positive(self, mda_universe):
-        """Test that SASA calculations produce positive values."""
-        from molecular_simulations.analysis import SASA
-
-        ag = mda_universe.select_atoms('all')
-        sasa = SASA(ag, n_points=64)  # Use fewer points for speed
-
-        # Measure SASA for the atomgroup
-        sasa._prepare()
-        area = sasa.measure_sasa(ag)
-
-        # All SASA values should be non-negative
-        assert all(a >= 0 for a in area)
-
-        # Total SASA should be positive for any molecule
-        assert np.sum(area) > 0
-
-    @requires_mdanalysis
-    def test_relative_sasa_requires_bonds(self, mda_universe):
-        """Test that RelativeSASA raises error without bonds."""
-        from molecular_simulations.analysis import RelativeSASA
-
-        ag = mda_universe.select_atoms('all')
-
-        # This test verifies the error handling for missing bonds
-        if not hasattr(ag, 'bonds') or ag.bonds is None:
-            with pytest.raises(ValueError):
-                RelativeSASA(ag)
-
-    @requires_mdanalysis
-    def test_relative_sasa_runs_on_bonded_system(self, real_amber_system_files):
+    def test_relative_sasa_runs_on_bonded_system(self, amber_protein):
         """RelativeSASA computes per-residue relative areas on a real system.
 
         Regression test for the broadcast bug (issue #9): measure_sasa must use
         the radii of each per-residue sub-selection, not the full AtomGroup.
         """
-        import MDAnalysis as mda
-
-        from molecular_simulations.analysis import RelativeSASA
-
-        u = mda.Universe(
-            str(real_amber_system_files['prmtop']),
-            str(real_amber_system_files['inpcrd']),
-        )
-        protein = u.select_atoms('protein')
-        rsasa = RelativeSASA(protein)
+        rsasa = RelativeSASA(amber_protein, n_points=64)
         rsasa.run()
 
         area = rsasa.results.relative_area
-        assert area.shape == (protein.n_residues,)
+        assert area.shape == (amber_protein.n_residues,)
         assert np.all(np.isfinite(area))
-
-
-# ============================================================================
-# Original unit tests with mocks
-# ============================================================================
-
-# Conditional import with mock fallback
-try:
-    import MDAnalysis as mda
-    from MDAnalysis.core import groups
-
-    from molecular_simulations.analysis import SASA, RelativeSASA
-
-    _MDA_AVAILABLE = True
-except ImportError:
-    _MDA_AVAILABLE = False
-    # Create dummy classes for mocking
-    mda = MagicMock()
-    groups = MagicMock()
-    SASA = MagicMock
-    RelativeSASA = MagicMock
+        # Relative accessibility is a non-negative fraction.
+        assert np.all(area >= 0)
 
 
 class TestSASA:
-    """Test suite for SASA class"""
+    """Unit tests for the SASA class against real atomgroups."""
 
-    @patch('molecular_simulations.analysis.sasa.KDTree')
-    def test_init(self, mock_kdtree):
-        """Test SASA initialization"""
-        # Create mock universe and atomgroup
-        mock_universe = MagicMock()
-        mock_trajectory = MagicMock()
-        mock_universe.trajectory = mock_trajectory
-
-        mock_ag = MagicMock(spec=mda.AtomGroup)
-        mock_ag.universe = mock_universe
-        mock_ag.elements = np.array(['C', 'H', 'O', 'N'])
-
-        # Create SASA instance
-        sasa = SASA(mock_ag, probe_radius=1.4, n_points=256)
+    def test_init(self, mda_universe):
+        """Initialization records parameters and derives radii and sphere."""
+        ag = mda_universe.select_atoms('all')
+        sasa = SASA(ag, probe_radius=1.4, n_points=256)
 
         assert sasa.probe_radius == 1.4
         assert sasa.n_points == 256
-        assert sasa.ag == mock_ag
-        assert hasattr(sasa, 'radii')
-        assert hasattr(sasa, 'sphere')
+        assert sasa.ag is ag
+        assert sasa.radii.shape == (ag.n_atoms,)
+        assert sasa.sphere.shape == (256, 3)
 
-    def test_init_with_updating_atomgroup(self):
-        """Test that UpdatingAtomGroup raises TypeError"""
-        mock_ag = MagicMock(spec=groups.UpdatingAtomGroup)
-
+    def test_init_with_updating_atomgroup(self, mda_universe):
+        """An UpdatingAtomGroup is rejected with TypeError."""
+        updating = mda_universe.select_atoms('all', updating=True)
         with pytest.raises(TypeError):
-            SASA(mock_ag)
+            SASA(updating)
 
     def test_init_without_elements(self):
-        """Test that missing elements raises ValueError"""
-        mock_universe = MagicMock()
-        mock_trajectory = MagicMock()
-        mock_universe.trajectory = mock_trajectory
-
-        mock_ag = MagicMock(spec=mda.AtomGroup)
-        mock_ag.universe = mock_universe
-        del mock_ag.elements  # Remove elements attribute
-
+        """A Universe lacking elements is rejected with ValueError."""
+        u = mda.Universe.empty(3, trajectory=True)
+        assert not hasattr(u.atoms, 'elements')
         with pytest.raises(ValueError):
-            SASA(mock_ag)
+            SASA(u.atoms)
 
-    def test_get_sphere(self):
-        """Test fibonacci sphere generation"""
-        mock_universe = MagicMock()
-        mock_trajectory = MagicMock()
-        mock_universe.trajectory = mock_trajectory
-
-        mock_ag = MagicMock(spec=mda.AtomGroup)
-        mock_ag.universe = mock_universe
-        mock_ag.elements = np.array(['C', 'H'])
-
-        sasa = SASA(mock_ag, n_points=100)
+    def test_get_sphere(self, mda_universe):
+        """get_sphere builds the requested number of unit-sphere points."""
+        ag = mda_universe.select_atoms('all')
+        sasa = SASA(ag, n_points=100)
         sphere = sasa.get_sphere()
 
         assert sphere.shape == (100, 3)
-        # Check that points are on unit sphere
         norms = np.linalg.norm(sphere, axis=1)
         assert np.allclose(norms, 1.0, rtol=1e-5)
 
-    @patch('molecular_simulations.analysis.sasa.KDTree')
-    def test_measure_sasa(self, mock_kdtree):
-        """Test SASA measurement for atomgroup"""
-        # Setup mock objects
-        mock_universe = MagicMock()
-        mock_trajectory = MagicMock()
-        mock_universe.trajectory = mock_trajectory
+    def test_radii_are_physical(self, mda_universe):
+        """Radii are VDW radii plus the probe radius: positive and > probe."""
+        ag = mda_universe.select_atoms('all')
+        sasa = SASA(ag, probe_radius=1.4)
 
-        mock_ag = MagicMock(spec=mda.AtomGroup)
-        mock_ag.universe = mock_universe
-        mock_ag.elements = np.array(['C', 'H', 'O'])
-        mock_ag.n_atoms = 3
-        mock_ag.positions = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+        assert len(sasa.radii) == ag.n_atoms
+        assert np.all(sasa.radii > 1.4)
+        assert sasa.max_radii == pytest.approx(2 * np.max(sasa.radii))
 
-        # Mock KDTree behavior
-        mock_kdtree_instance = MagicMock()
-        mock_kdtree_instance.query_ball_point.return_value = [0, 1]
-        mock_kdtree.return_value = mock_kdtree_instance
-
-        sasa = SASA(mock_ag, n_points=100)
-        sasa.radii = np.array([1.7, 1.2, 1.52])
-        sasa.points_available = set(range(100))
-
-        result = sasa.measure_sasa(mock_ag)
-
-        assert result.shape == (3,)
-        assert all(r >= 0 for r in result)
-
-    def test_prepare(self):
-        """Test _prepare method"""
-        mock_universe = MagicMock()
-        mock_trajectory = MagicMock()
-        mock_universe.trajectory = mock_trajectory
-
-        mock_ag = MagicMock(spec=mda.AtomGroup)
-        mock_ag.universe = mock_universe
-        mock_ag.elements = np.array(['C', 'H'])
-        mock_ag.n_residues = 5
-
-        sasa = SASA(mock_ag)
+    def test_measure_sasa(self, mda_universe):
+        """measure_sasa returns one finite, non-negative area per atom."""
+        ag = mda_universe.select_atoms('all')
+        sasa = SASA(ag, n_points=100)
         sasa._prepare()
 
-        assert hasattr(sasa.results, 'sasa')
-        assert sasa.results.sasa.shape == (5,)
-        assert all(s == 0 for s in sasa.results.sasa)
+        result = sasa.measure_sasa(ag)
 
-    @patch.object(SASA, 'measure_sasa')
-    def test_single_frame(self, mock_measure):
-        """Test _single_frame method"""
-        mock_universe = MagicMock()
-        mock_trajectory = MagicMock()
-        mock_universe.trajectory = mock_trajectory
+        assert result.shape == (ag.n_atoms,)
+        assert np.all(np.isfinite(result))
+        assert np.all(result >= 0)
+        assert np.sum(result) > 0
 
-        # Setup mock atoms with residue IDs
-        mock_atoms = []
-        for i in range(3):
-            mock_atom = MagicMock()
-            mock_atom.resid = i + 1
-            mock_atoms.append(mock_atom)
+    def test_prepare(self, mda_universe):
+        """_prepare zeroes the per-residue results array and seeds the point set."""
+        ag = mda_universe.select_atoms('all')
+        sasa = SASA(ag, n_points=64)
+        sasa._prepare()
 
-        mock_ag = MagicMock(spec=mda.AtomGroup)
-        mock_ag.universe = mock_universe
-        mock_ag.elements = np.array(['C', 'H', 'O'])
-        mock_ag.n_residues = 3
-        mock_ag.atoms = mock_atoms
+        assert sasa.results.sasa.shape == (ag.n_residues,)
+        assert np.all(sasa.results.sasa == 0)
+        assert sasa.points_available == set(range(64))
 
-        # Mock measure_sasa to return area values
-        mock_measure.return_value = np.array([10.0, 20.0, 30.0])
+    def test_single_frame_sums_per_residue(self, mda_universe):
+        """_single_frame accumulates per-atom area into per-residue totals."""
+        ag = mda_universe.select_atoms('all')
+        sasa = SASA(ag, n_points=64)
+        sasa._prepare()
 
-        sasa = SASA(mock_ag)
-        sasa.results = MagicMock()
-        sasa.results.sasa = np.zeros(3)
-
+        area = sasa.measure_sasa(ag)
         sasa._single_frame()
 
-        mock_measure.assert_called_once_with(mock_ag)
-        assert sasa.results.sasa[0] == 10.0
-        assert sasa.results.sasa[1] == 20.0
-        assert sasa.results.sasa[2] == 30.0
+        per_residue = sasa.results.sasa
+        assert per_residue.shape == (ag.n_residues,)
+        assert np.all(np.isfinite(per_residue))
+        assert np.all(per_residue >= 0)
+        # Summing per-residue totals must recover the total per-atom area.
+        assert np.sum(per_residue) == pytest.approx(np.sum(area))
 
-    def test_conclude(self):
-        """Test _conclude method"""
-        mock_universe = MagicMock()
-        mock_trajectory = MagicMock()
-        mock_universe.trajectory = mock_trajectory
-
-        mock_ag = MagicMock(spec=mda.AtomGroup)
-        mock_ag.universe = mock_universe
-        mock_ag.elements = np.array(['C', 'H'])
-
-        sasa = SASA(mock_ag)
-        sasa.results = MagicMock()
+    def test_conclude_averages_over_frames(self, mda_universe):
+        """_conclude divides accumulated SASA by the number of frames."""
+        ag = mda_universe.select_atoms('all')
+        sasa = SASA(ag, n_points=64)
         sasa.results.sasa = np.array([100.0, 200.0, 300.0])
         sasa.n_frames = 10
 
         sasa._conclude()
 
-        assert sasa.results.sasa[0] == 10.0
-        assert sasa.results.sasa[1] == 20.0
-        assert sasa.results.sasa[2] == 30.0
+        assert np.allclose(sasa.results.sasa, [10.0, 20.0, 30.0])
 
 
 class TestRelativeSASA:
-    """Test suite for RelativeSASA class"""
+    """Unit tests for the RelativeSASA class against real atomgroups."""
 
-    def test_init_without_bonds(self):
-        """Test that missing bonds raises ValueError"""
-        mock_universe = MagicMock()
-        mock_trajectory = MagicMock()
-        mock_universe.trajectory = mock_trajectory
-
-        mock_ag = MagicMock(spec=mda.AtomGroup)
-        mock_ag.universe = mock_universe
-        mock_ag.elements = np.array(['C', 'H'])
-        del mock_ag.bonds  # Remove bonds attribute
-
+    def test_init_without_bonds(self, mda_universe):
+        """An AtomGroup without bond topology is rejected with ValueError."""
+        ag = mda_universe.select_atoms('all')
+        assert not hasattr(ag, 'bonds')
         with pytest.raises(ValueError):
-            RelativeSASA(mock_ag)
+            RelativeSASA(ag)
 
-    def test_prepare(self):
-        """Test _prepare method for RelativeSASA"""
-        mock_universe = MagicMock()
-        mock_trajectory = MagicMock()
-        mock_universe.trajectory = mock_trajectory
+    def test_prepare(self, amber_protein):
+        """_prepare zeroes both the absolute and relative results arrays."""
+        rsasa = RelativeSASA(amber_protein, n_points=64)
+        rsasa._prepare()
 
-        mock_ag = MagicMock(spec=mda.AtomGroup)
-        mock_ag.universe = mock_universe
-        mock_ag.elements = np.array(['C', 'H'])
-        mock_ag.bonds = MagicMock()
-        mock_ag.n_residues = 5
+        assert rsasa.results.sasa.shape == (amber_protein.n_residues,)
+        assert rsasa.results.relative_area.shape == (amber_protein.n_residues,)
+        assert np.all(rsasa.results.sasa == 0)
+        assert np.all(rsasa.results.relative_area == 0)
 
-        rel_sasa = RelativeSASA(mock_ag)
-        rel_sasa._prepare()
+    def test_single_frame_relative(self, amber_protein):
+        """_single_frame fills relative_area with finite, non-negative fractions."""
+        rsasa = RelativeSASA(amber_protein, n_points=64)
+        rsasa._prepare()
 
-        assert hasattr(rel_sasa.results, 'sasa')
-        assert hasattr(rel_sasa.results, 'relative_area')
-        assert rel_sasa.results.sasa.shape == (5,)
-        assert rel_sasa.results.relative_area.shape == (5,)
+        rsasa._single_frame()
 
-    @patch.object(RelativeSASA, 'measure_sasa')
-    def test_single_frame_relative(self, mock_measure):
-        """Test _single_frame method for RelativeSASA"""
-        mock_universe = MagicMock()
-        mock_trajectory = MagicMock()
-        mock_universe.trajectory = mock_trajectory
+        rel = rsasa.results.relative_area
+        assert rel.shape == (amber_protein.n_residues,)
+        assert np.all(np.isfinite(rel))
+        assert np.all(rel >= 0)
+        # Absolute SASA was also accumulated and is positive overall.
+        assert np.sum(rsasa.results.sasa) > 0
 
-        # Setup mock residues
-        mock_residues = MagicMock()
-        mock_residues.resindices = np.array([0, 1, 2])
-        mock_residues.resids = np.array([1, 2, 3])
+    def test_conclude_relative(self, amber_protein):
+        """_conclude averages both absolute and relative arrays over frames."""
+        rsasa = RelativeSASA(amber_protein, n_points=64)
+        rsasa.results.sasa = np.array([100.0, 200.0, 300.0])
+        rsasa.results.relative_area = np.array([0.5, 0.6, 0.7])
+        rsasa.n_frames = 10
 
-        # Setup mock atoms
-        mock_atoms = []
-        for i in range(3):
-            mock_atom = MagicMock()
-            mock_atom.resid = i + 1
-            mock_atoms.append(mock_atom)
+        rsasa._conclude()
 
-        # Setup mock atomgroup
-        mock_ag = MagicMock(spec=mda.AtomGroup)
-        mock_ag.universe = mock_universe
-        mock_ag.elements = np.array(['C', 'H', 'O'])
-        mock_ag.bonds = MagicMock()
-        mock_ag.n_residues = 3
-        mock_ag.atoms = mock_atoms
-        mock_ag.residues = mock_residues
-
-        # Mock select_atoms to return tripeptide
-        mock_tripeptide = MagicMock()
-        mock_tripeptide.__len__ = MagicMock(return_value=3)
-        mock_tripeptide.resindices = np.array([0, 1, 2])
-        mock_ag.select_atoms.return_value = mock_tripeptide
-
-        # Mock measure_sasa to return different values for different calls
-        mock_measure.side_effect = [
-            np.array([10.0, 20.0, 30.0]),  # Initial SASA
-            np.array([5.0, 10.0, 15.0]),  # Tripeptide SASA
-            np.array([5.0, 10.0, 15.0]),  # Tripeptide SASA
-            np.array([5.0, 10.0, 15.0]),  # Tripeptide SASA
-        ]
-
-        rel_sasa = RelativeSASA(mock_ag)
-        rel_sasa.results = MagicMock()
-        rel_sasa.results.sasa = np.zeros(3)
-        rel_sasa.results.relative_area = np.zeros(3)
-
-        rel_sasa._single_frame()
-
-        assert mock_measure.called
-
-    def test_conclude_relative(self):
-        """Test _conclude method for RelativeSASA"""
-        mock_universe = MagicMock()
-        mock_trajectory = MagicMock()
-        mock_universe.trajectory = mock_trajectory
-
-        mock_ag = MagicMock(spec=mda.AtomGroup)
-        mock_ag.universe = mock_universe
-        mock_ag.elements = np.array(['C', 'H'])
-        mock_ag.bonds = MagicMock()
-
-        rel_sasa = RelativeSASA(mock_ag)
-        rel_sasa.results = MagicMock()
-        rel_sasa.results.sasa = np.array([100.0, 200.0, 300.0])
-        rel_sasa.results.relative_area = np.array([0.5, 0.6, 0.7])
-        rel_sasa.n_frames = 10
-
-        rel_sasa._conclude()
-
-        # Use approximate comparison for floating point
-        assert np.isclose(rel_sasa.results.sasa[0], 10.0)
-        assert np.isclose(rel_sasa.results.sasa[1], 20.0)
-        assert np.isclose(rel_sasa.results.sasa[2], 30.0)
-        assert np.isclose(rel_sasa.results.relative_area[0], 0.05)
-        assert np.isclose(rel_sasa.results.relative_area[1], 0.06)
-        assert np.isclose(rel_sasa.results.relative_area[2], 0.07)
+        assert np.allclose(rsasa.results.sasa, [10.0, 20.0, 30.0])
+        assert np.allclose(rsasa.results.relative_area, [0.05, 0.06, 0.07])
 
 
 if __name__ == '__main__':

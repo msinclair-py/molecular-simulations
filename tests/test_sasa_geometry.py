@@ -1,24 +1,24 @@
-from unittest.mock import MagicMock
-
 import MDAnalysis as mda
 import numpy as np
 
 from molecular_simulations.analysis.sasa import SASA
 
 
-def test_get_sphere_points_on_unit_sphere():
-    """Test that get_sphere generates points on a unit sphere"""
-    # Create a minimal mock setup for SASA
-    mock_universe = MagicMock()
-    mock_trajectory = MagicMock()
-    mock_universe.trajectory = mock_trajectory
+def test_get_sphere_points_on_unit_sphere(real_amber_system_files):
+    """Test that get_sphere generates points on a unit sphere.
 
-    mock_ag = MagicMock(spec=mda.AtomGroup)
-    mock_ag.universe = mock_universe
-    mock_ag.elements = np.array(['C', 'H'])  # Need at least some elements
+    Uses a real Universe (the tleap-built Ace-Ala-Nme system) so SASA is
+    constructed through its real __init__ -- including the real element-based
+    radii assignment -- before exercising the Fibonacci-sphere geometry.
+    """
+    u = mda.Universe(
+        str(real_amber_system_files['prmtop']),
+        str(real_amber_system_files['inpcrd']),
+    )
+    ag = u.select_atoms('all')
 
-    # Create SASA instance
-    sasa = SASA(mock_ag, n_points=256)
+    # Create SASA instance from a real AtomGroup
+    sasa = SASA(ag, n_points=256)
 
     # Get the sphere
     s = sasa.get_sphere()

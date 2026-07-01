@@ -5,9 +5,9 @@ This module tests the numerical/statistical analysis methods in free_energy.py
 WITHOUT mocking the ALGORITHMS. All tests use numpy-generated synthetic data
 to validate the algorithms directly.
 
-Note: Module-level imports (omm_simulator, reporters) are mocked to allow
-import of the free_energy module in environments where OpenMM is not fully
-configured. The actual numerical algorithms under test are NOT mocked.
+Note: free_energy.py is imported for real -- OpenMM, MDAnalysis, numpy and
+parsl are all available, so omm_simulator and reporters import cleanly with
+no mocking required.
 
 Tested methods:
     - _detect_equilibration_autocorr: Autocorrelation-based equilibration detection
@@ -21,48 +21,13 @@ The test strategy focuses on:
     3. Edge cases (empty arrays, single samples, no overlap, etc.)
 """
 
-import sys
 from collections.abc import Callable
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
 # Constants matching free_energy.py
 KB = 8.314462618e-3  # Boltzmann constant in kJ/(mol*K)
-
-
-# =============================================================================
-# MODULE IMPORT SETUP
-# =============================================================================
-
-
-@pytest.fixture(autouse=True)
-def mock_free_energy_deps():
-    """Mock external dependencies to allow importing free_energy module.
-
-    The free_energy module uses absolute imports for omm_simulator and reporters
-    (to support Parsl serialization). We mock these as top-level modules.
-
-    The numerical algorithms under test do NOT depend on these mocked modules
-    and are tested without mocking.
-    """
-    # Create mock modules for dependencies
-    mock_omm_simulator = MagicMock()
-    mock_reporters = MagicMock()
-
-    # Patch sys.modules before import - use top-level module names
-    with patch.dict(
-        sys.modules,
-        {
-            'omm_simulator': mock_omm_simulator,
-            'reporters': mock_reporters,
-        },
-    ):
-        # Clear cached import if exists
-        if 'molecular_simulations.simulate.free_energy' in sys.modules:
-            del sys.modules['molecular_simulations.simulate.free_energy']
-        yield mock_omm_simulator, mock_reporters
 
 
 # =============================================================================
@@ -424,11 +389,11 @@ def generate_double_well_pmf_data(
 
 
 @pytest.fixture
-def analyzer_class(mock_free_energy_deps):
-    """Import and return the EVBAnalyzer class.
+def analyzer_class():
+    """Import and return the real EVBAnalyzer class.
 
-    Depends on mock_free_energy_deps to ensure imports are mocked.
-    The autouse=True on mock_free_energy_deps ensures this runs first.
+    free_energy.py (and its omm_simulator/reporters imports) loads cleanly
+    against the real OpenMM/MDAnalysis/numpy/parsl stack -- no mocking needed.
     """
     from molecular_simulations.simulate.free_energy import EVBAnalyzer
 

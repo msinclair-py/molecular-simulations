@@ -40,9 +40,8 @@ def trim_trajectory(
     selection = u.select_atoms(sel) if sel is not None else u.atoms
     assert selection is not None
 
-    positions = np.zeros(
-        (u.trajectory.n_frames // stride, selection.n_atoms, 3), dtype=np.float32
-    )
+    n_kept = len(range(0, u.trajectory.n_frames, stride))
+    positions = np.zeros((n_kept, selection.n_atoms, 3), dtype=np.float32)
 
     for i, _ in enumerate(u.trajectory[::stride]):
         positions[i, ...] = selection.positions.copy().astype(np.float32)
@@ -60,4 +59,5 @@ def trim_trajectory(
 
     with mda.Writer(str(out), n_atoms=selection.n_atoms) as w:
         for pos in positions:
-            w.write(pos)
+            selection.atoms.positions = pos
+            w.write(selection.atoms)

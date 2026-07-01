@@ -1,20 +1,22 @@
-"""
-Unit tests for fingerprinter.py module
+"""Tests for the fingerprinter module.
+
+The pure-math helpers (unravel_index, dist_mat, electrostatic, lennard_jones and
+their vectorized sums) are tested directly. The Fingerprinter class is exercised
+end-to-end against real fixtures: real OpenMM AmberPrmtopFile parameter
+extraction and real MDAnalysis Universes built from committed test systems.
 """
 
 import os
 
-# Disable numba JIT compilation to avoid path resolution issues during testing
+# Disable numba JIT compilation to avoid path resolution issues during testing.
 os.environ['NUMBA_DISABLE_JIT'] = '1'
 
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
-
+import MDAnalysis as mda
 import numpy as np
 import pytest
 
 from molecular_simulations.analysis.fingerprinter import (
+    Fingerprinter,
     _dist_mat,
     dist_mat,
     electrostatic,
@@ -249,307 +251,147 @@ class TestFingerprints:
 
 
 class TestFingerprinterClass:
-    """Test suite for Fingerprinter class"""
+    """Test suite for Fingerprinter construction and configuration."""
 
-    def test_fingerprinter_init(self):
-        """Test Fingerprinter initialization"""
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
+    def test_fingerprinter_init(self, real_amber_system_files):
+        """Default binder selection is the complement of the target."""
+        top = real_amber_system_files['prmtop']
+        fp = Fingerprinter(topology=str(top), target_selection='segid A')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.prmtop'
-            top_file.write_text('mock topology')
+        assert fp.topology == top
+        assert fp.target_selection == 'segid A'
+        assert fp.binder_selection == 'not segid A'
 
-            fp = Fingerprinter(topology=str(top_file), target_selection='segid A')
-
-            assert fp.topology == top_file
-            assert fp.target_selection == 'segid A'
-            assert fp.binder_selection == 'not segid A'
-
-    def test_fingerprinter_init_with_binder_selection(self):
-        """Test Fingerprinter with explicit binder selection"""
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.prmtop'
-            top_file.write_text('mock topology')
-
-            fp = Fingerprinter(
-                topology=str(top_file),
-                target_selection='segid A',
-                binder_selection='segid B',
-            )
-
-            assert fp.binder_selection == 'segid B'
-
-    def test_fingerprinter_output_path(self):
-        """Test Fingerprinter output path configuration"""
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.prmtop'
-            top_file.write_text('mock topology')
-
-            out_path = path / 'output'
-            out_path.mkdir()
-
-            fp = Fingerprinter(
-                topology=str(top_file), out_path=str(out_path), out_name='custom.npz'
-            )
-
-            assert fp.out == out_path / 'custom.npz'
-
-    @patch('molecular_simulations.analysis.fingerprinter.AmberPrmtopFile')
-    @patch('molecular_simulations.analysis.fingerprinter.openmm')
-    def test_assign_nonbonded_params(self, mock_openmm, mock_prmtop):
-        """Test assign_nonbonded_params method"""
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
-
-        # Setup mocks
-        mock_system = MagicMock()
-        mock_system.getNumParticles.return_value = 10
-
-        mock_nonbonded = MagicMock()
-        mock_nonbonded.getParticleParameters.return_value = (
-            MagicMock(__truediv__=Mock(return_value=0.5)),  # charge
-            MagicMock(__truediv__=Mock(return_value=0.3)),  # sigma
-            MagicMock(__truediv__=Mock(return_value=0.1)),  # epsilon
+    def test_fingerprinter_init_with_binder_selection(self, real_amber_system_files):
+        """An explicit binder selection is honoured."""
+        top = real_amber_system_files['prmtop']
+        fp = Fingerprinter(
+            topology=str(top),
+            target_selection='segid A',
+            binder_selection='segid B',
         )
 
-        mock_system.getForces.return_value = [mock_nonbonded]
-        mock_openmm.NonbondedForce = type(mock_nonbonded)
+        assert fp.binder_selection == 'segid B'
 
-        mock_prmtop_inst = MagicMock()
-        mock_prmtop_inst.createSystem.return_value = mock_system
-        mock_prmtop.return_value = mock_prmtop_inst
+    def test_fingerprinter_output_path(self, real_amber_system_files):
+        """Output path and filename are composed from the provided arguments."""
+        top = real_amber_system_files['prmtop']
+        out_path = real_amber_system_files['path'] / 'output'
+        out_path.mkdir()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.prmtop'
-            top_file.write_text('mock topology')
+        fp = Fingerprinter(
+            topology=str(top), out_path=str(out_path), out_name='custom.npz'
+        )
 
-            fp = Fingerprinter(topology=str(top_file))
-            fp.assign_nonbonded_params()
+        assert fp.out == out_path / 'custom.npz'
 
-            assert len(fp.charges) == 10
-            assert len(fp.sigmas) == 10
-            assert len(fp.epsilons) == 10
+    def test_assign_nonbonded_params(self, real_amber_system_files):
+        """Real OpenMM parameter extraction yields finite arrays of length 22."""
+        fp = Fingerprinter(topology=str(real_amber_system_files['prmtop']))
+        fp.assign_nonbonded_params()
 
-    @patch('molecular_simulations.analysis.fingerprinter.mda')
-    def test_load_pdb_with_pdb_file(self, mock_mda):
-        """Test load_pdb with PDB file"""
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
+        for arr in (fp.charges, fp.sigmas, fp.epsilons):
+            assert arr.shape == (22,)
+            assert np.all(np.isfinite(arr))
 
-        mock_mda.Universe.return_value = MagicMock()
+        # Sigma and epsilon are non-negative physical Lennard-Jones parameters.
+        assert np.all(fp.sigmas >= 0)
+        assert np.all(fp.epsilons >= 0)
+        # The system is overall neutral, so total charge is ~0.
+        assert fp.charges.sum() == pytest.approx(0.0, abs=1e-4)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.pdb'
-            top_file.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
+    def test_save(self, real_amber_system_files):
+        """save() writes both fingerprint arrays to a loadable NPZ file."""
+        fp = Fingerprinter(topology=str(real_amber_system_files['prmtop']))
+        fp.target_fingerprint = np.random.rand(10, 5, 2)
+        fp.binder_fingerprint = np.random.rand(10, 3, 2)
 
-            fp = Fingerprinter(topology=str(top_file))
-            fp.load_pdb()
+        fp.save()
 
-            mock_mda.Universe.assert_called_once_with(top_file)
-
-    @patch('molecular_simulations.analysis.fingerprinter.mda')
-    def test_load_pdb_with_prmtop_and_trajectory(self, mock_mda):
-        """Test load_pdb with prmtop and trajectory"""
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
-
-        mock_mda.Universe.return_value = MagicMock()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.prmtop'
-            top_file.write_text('mock topology')
-            traj_file = path / 'traj.dcd'
-            traj_file.write_text('mock trajectory')
-
-            fp = Fingerprinter(topology=str(top_file), trajectory=str(traj_file))
-            fp.load_pdb()
-
-            mock_mda.Universe.assert_called_once_with(top_file, traj_file)
-
-    @patch('molecular_simulations.analysis.fingerprinter.mda')
-    def test_assign_residue_mapping(self, mock_mda):
-        """Test assign_residue_mapping method"""
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
-
-        # Create mock residues
-        mock_residue1 = MagicMock()
-        mock_residue1.atoms.ix = np.array([0, 1, 2])
-        mock_residue2 = MagicMock()
-        mock_residue2.atoms.ix = np.array([3, 4])
-
-        mock_target = MagicMock()
-        mock_target.residues = [mock_residue1, mock_residue2]
-
-        mock_binder_res1 = MagicMock()
-        mock_binder_res1.atoms.ix = np.array([5, 6])
-
-        mock_binder = MagicMock()
-        mock_binder.residues = [mock_binder_res1]
-
-        mock_universe = MagicMock()
-        mock_universe.select_atoms.side_effect = [mock_target, mock_binder]
-        mock_mda.Universe.return_value = mock_universe
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.pdb'
-            top_file.write_text('mock')
-
-            fp = Fingerprinter(topology=str(top_file))
-            fp.u = mock_universe
-            fp.assign_residue_mapping()
-
-            assert len(fp.target_resmap) == 2
-            assert len(fp.binder_resmap) == 1
-
-    def test_save(self):
-        """Test save method"""
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.prmtop'
-            top_file.write_text('mock topology')
-
-            fp = Fingerprinter(topology=str(top_file))
-            fp.target_fingerprint = np.random.rand(10, 5, 2)
-            fp.binder_fingerprint = np.random.rand(10, 3, 2)
-
-            fp.save()
-
-            assert fp.out.exists()
-
-            # Load and verify
-            data = np.load(fp.out)
-            assert 'target' in data
-            assert 'binder' in data
+        assert fp.out.exists()
+        data = np.load(fp.out)
+        assert 'target' in data
+        assert 'binder' in data
 
 
 class TestFingerprinterLoadPdb:
-    """Test suite for Fingerprinter.load_pdb method."""
+    """Test suite for Fingerprinter.load_pdb against real structures."""
 
-    @patch('molecular_simulations.analysis.fingerprinter.mda')
-    def test_load_pdb_with_pdb_file(self, mock_mda):
-        """Test load_pdb creates Universe from PDB file."""
-        mock_universe = MagicMock()
-        mock_mda.Universe.return_value = mock_universe
+    def test_load_pdb_with_pdb_file(self, real_amber_system_files):
+        """A PDB topology loads into a real Universe with the right atom count."""
+        fp = Fingerprinter(topology=str(real_amber_system_files['pdb']))
+        fp.load_pdb()
 
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
+        assert isinstance(fp.u, mda.Universe)
+        assert fp.u.atoms.n_atoms == 22
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.pdb'
-            top_file.write_text('mock pdb')
+    def test_load_pdb_with_prmtop_and_trajectory(self, real_amber_system_files):
+        """A prmtop + DCD trajectory loads all frames into a real Universe."""
+        fp = Fingerprinter(
+            topology=str(real_amber_system_files['prmtop']),
+            trajectory=str(real_amber_system_files['dcd']),
+        )
+        fp.load_pdb()
 
-            fp = Fingerprinter(topology=str(top_file))
-            fp.load_pdb()
+        assert fp.u.atoms.n_atoms == 22
+        assert len(fp.u.trajectory) == 5
 
-            mock_mda.Universe.assert_called_once_with(top_file)
-            assert fp.u is mock_universe
+    def test_load_pdb_with_prmtop_finds_inpcrd(self, real_amber_system_files):
+        """Without a trajectory, load_pdb discovers the sibling .inpcrd file."""
+        # real_amber_system_files copies prmtop and inpcrd into the same dir.
+        fp = Fingerprinter(topology=str(real_amber_system_files['prmtop']))
+        fp.load_pdb()
 
-    @patch('molecular_simulations.analysis.fingerprinter.mda')
-    def test_load_pdb_with_prmtop_and_trajectory(self, mock_mda):
-        """Test load_pdb creates Universe from prmtop + trajectory."""
-        mock_universe = MagicMock()
-        mock_mda.Universe.return_value = mock_universe
-
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.prmtop'
-            top_file.write_text('mock prmtop')
-            traj_file = path / 'traj.dcd'
-            traj_file.write_text('mock traj')
-
-            fp = Fingerprinter(topology=str(top_file), trajectory=str(traj_file))
-            fp.load_pdb()
-
-            mock_mda.Universe.assert_called_once_with(top_file, Path(str(traj_file)))
-
-    @patch('molecular_simulations.analysis.fingerprinter.mda')
-    def test_load_pdb_with_prmtop_finds_inpcrd(self, mock_mda):
-        """Test load_pdb finds .inpcrd when no trajectory specified."""
-        mock_universe = MagicMock()
-        mock_mda.Universe.return_value = mock_universe
-
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.prmtop'
-            top_file.write_text('mock prmtop')
-            inpcrd_file = path / 'system.inpcrd'
-            inpcrd_file.write_text('mock inpcrd')
-
-            fp = Fingerprinter(topology=str(top_file))
-            fp.load_pdb()
-
-            mock_mda.Universe.assert_called_once_with(top_file, inpcrd_file)
+        assert fp.u.atoms.n_atoms == 22
+        assert fp.u.atoms.positions.shape == (22, 3)
 
 
-class TestFingerprinterIterateFrames:
-    """Test suite for Fingerprinter.iterate_frames method."""
+class TestFingerprinterResidueMapping:
+    """Test suite for Fingerprinter.assign_residue_mapping."""
 
-    def test_iterate_frames_initializes_arrays(self):
-        """Test iterate_frames creates correct-shaped fingerprint arrays."""
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
+    def test_assign_residue_mapping_two_chains(self, two_chain_pdb):
+        """Residue mappings split a real two-chain system by chainID."""
+        fp = Fingerprinter(
+            topology=str(two_chain_pdb),
+            target_selection='chainID A',
+            binder_selection='chainID B',
+        )
+        fp.load_pdb()
+        fp.assign_residue_mapping()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.prmtop'
-            top_file.write_text('mock')
+        # Each chain is Ace-(residue)-Nme: three residues.
+        assert len(fp.target_resmap) == 3
+        assert len(fp.binder_resmap) == 3
 
-            fp = Fingerprinter(topology=str(top_file))
-
-            # Mock universe and trajectory
-            fp.u = MagicMock()
-            fp.u.trajectory = [MagicMock(), MagicMock()]  # 2 frames
-            fp.target_resmap = [np.array([0, 1]), np.array([2, 3])]
-            fp.binder_resmap = [np.array([4, 5, 6])]
-
-            with patch.object(fp, 'calculate_fingerprints'):
-                fp.iterate_frames()
-
-            assert fp.target_fingerprint.shape == (2, 2, 2)
-            assert fp.binder_fingerprint.shape == (2, 1, 2)
+        # Concatenated atom indices cover every atom exactly once per side.
+        target = fp.u.select_atoms('chainID A')
+        binder = fp.u.select_atoms('chainID B')
+        assert fp.target_inds.shape == (target.n_atoms,)
+        assert fp.binder_inds.shape == (binder.n_atoms,)
+        assert set(fp.target_inds).isdisjoint(set(fp.binder_inds))
 
 
-class TestFingerprinterRun:
-    """Test suite for Fingerprinter.run method."""
+class TestFingerprinterPipeline:
+    """End-to-end run of the full fingerprinting workflow on a real system."""
 
-    def test_run_calls_workflow(self):
-        """Test run() calls all workflow steps in order."""
-        from molecular_simulations.analysis.fingerprinter import Fingerprinter
+    def test_run_produces_physical_fingerprints(self, real_amber_system_files):
+        """run() computes finite per-residue fingerprints over every frame."""
+        fp = Fingerprinter(
+            topology=str(real_amber_system_files['prmtop']),
+            trajectory=str(real_amber_system_files['dcd']),
+            target_selection='resid 1',
+            binder_selection='resid 2 3',
+        )
+        fp.run()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / 'system.prmtop'
-            top_file.write_text('mock')
+        # 5 frames; target = 1 residue, binder = 2 residues; last axis is (LJ, ES).
+        assert fp.target_fingerprint.shape == (5, 1, 2)
+        assert fp.binder_fingerprint.shape == (5, 2, 2)
+        assert np.all(np.isfinite(fp.target_fingerprint))
+        assert np.all(np.isfinite(fp.binder_fingerprint))
 
-            fp = Fingerprinter(topology=str(top_file))
-
-            with (
-                patch.object(fp, 'assign_nonbonded_params') as mock_params,
-                patch.object(fp, 'load_pdb') as mock_load,
-                patch.object(fp, 'assign_residue_mapping') as mock_map,
-                patch.object(fp, 'iterate_frames') as mock_iter,
-            ):
-                fp.run()
-
-            mock_params.assert_called_once()
-            mock_load.assert_called_once()
-            mock_map.assert_called_once()
-            mock_iter.assert_called_once()
+        # Parameters were extracted for all 22 atoms during the run.
+        assert fp.charges.shape == (22,)
 
 
 if __name__ == '__main__':

@@ -276,7 +276,7 @@ class Fingerprinter:
     Args:
         topology: Path to topology file (prmtop or PDB).
         trajectory: Path to trajectory or coordinate file. If None,
-            will look for inpcrd or rst7 with same stem as topology.
+            will look for an inpcrd with the same stem as the topology.
         target_selection: MDAnalysis selection string for target.
             Defaults to 'segid A'.
         binder_selection: MDAnalysis selection string for binder.
@@ -346,9 +346,8 @@ class Fingerprinter:
     def load_pdb(self) -> None:
         """Load the structure into an MDAnalysis Universe.
 
-        Can handle either PDB or AMBER prmtop files. For prmtop files,
-        will look for inpcrd or rst7 coordinates if trajectory was not
-        specified.
+        Can handle either PDB or AMBER prmtop files. For prmtop files, uses the
+        supplied trajectory, or a sibling ``.inpcrd`` if no trajectory was given.
         """
         if self.topology.suffix == '.pdb':
             self.u = mda.Universe(self.topology)
@@ -358,7 +357,10 @@ class Fingerprinter:
             elif self.topology.with_suffix('.inpcrd').exists():
                 coordinates = self.topology.with_suffix('.inpcrd')
             else:
-                coordinates = self.topology.with_suffix('.rst7')
+                raise FileNotFoundError(
+                    f'No trajectory given and no sibling .inpcrd found for '
+                    f'{self.topology}'
+                )
 
             self.u = mda.Universe(self.topology, coordinates)
 

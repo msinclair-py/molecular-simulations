@@ -345,6 +345,20 @@ class TestFingerprinterLoadPdb:
         assert fp.u.atoms.n_atoms == 22
         assert fp.u.atoms.positions.shape == (22, 3)
 
+    def test_load_pdb_prmtop_without_coordinates_raises(
+        self, real_amber_system_files, tmp_path
+    ):
+        """A prmtop with no trajectory and no sibling .inpcrd raises clearly."""
+        import shutil
+
+        # Copy only the prmtop into an otherwise-empty dir (no .inpcrd alongside).
+        lonely_prmtop = tmp_path / 'system.prmtop'
+        shutil.copy(real_amber_system_files['prmtop'], lonely_prmtop)
+
+        fp = Fingerprinter(topology=str(lonely_prmtop))
+        with pytest.raises(FileNotFoundError, match='no sibling'):
+            fp.load_pdb()
+
 
 class TestFingerprinterResidueMapping:
     """Test suite for Fingerprinter.assign_residue_mapping."""

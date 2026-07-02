@@ -3938,5 +3938,158 @@ class TestConstantPHFindResidueStatesReal:
         assert 'N' in states[0].atomIndices
 
 
+# ---------------------------------------------------------------------------
+# Full ConstantPH.__init__ pipeline (real, committed solvated fixture)
+# ---------------------------------------------------------------------------
+
+
+def _build_solvated_cph(files):
+    """Construct a real ConstantPH from the committed solvated Lys-Asp fixture.
+
+    Mirrors how ``run_cph_sim`` assembles the constructor arguments (explicit PME
+    args, implicit non-periodic args, real Langevin integrators, LYS/ASP variants
+    at indices 1/2). The committed ``lys_asp_solv`` fixture was pre-built with
+    tleap, so this whole pipeline runs in CI with no AmberTools at runtime -- only
+    OpenMM + ParmEd + amber14-all.xml, all available.
+    """
+    from openmm import LangevinIntegrator, Platform
+    from openmm.app import PME, CutoffNonPeriodic, HBonds
+    from openmm.unit import (
+        amu,
+        kelvin,
+        kilojoules_per_mole,
+        nanometers,
+        picosecond,
+    )
+
+    from molecular_simulations.simulate.constantph.constantph import ConstantPH
+
+    explicit_args = dict(
+        nonbondedMethod=PME,
+        nonbondedCutoff=0.9 * nanometers,
+        constraints=HBonds,
+        hydrogenMass=1.5 * amu,
+    )
+    implicit_args = dict(
+        nonbondedMethod=CutoffNonPeriodic,
+        nonbondedCutoff=2.0 * nanometers,
+        constraints=HBonds,
+    )
+    reference_energies = {
+        1: [0.0 * kilojoules_per_mole, 0.0 * kilojoules_per_mole],
+        2: [0.0 * kilojoules_per_mole, 0.0 * kilojoules_per_mole],
+    }
+
+    return ConstantPH(
+        prmtop_file=files['prmtop'],
+        inpcrd_file=files['inpcrd'],
+        pH=[7.0],
+        residueVariants={1: ['LYN', 'LYS'], 2: ['ASP', 'ASH']},
+        referenceEnergies=reference_energies,
+        relaxationSteps=5,
+        explicitArgs=explicit_args,
+        implicitArgs=implicit_args,
+        integrator=LangevinIntegrator(
+            300 * kelvin, 1.0 / picosecond, 0.004 * picosecond
+        ),
+        relaxationIntegrator=LangevinIntegrator(
+            300 * kelvin, 10.0 / picosecond, 0.002 * picosecond
+        ),
+        platform=Platform.getPlatformByName('CPU'),
+    )
+
+
+@pytest.fixture(scope='module')
+def real_solvated_cph():
+    """A real ConstantPH built once from the committed solvated fixture.
+
+    Module-scoped so the ~1.3 s construction happens a single time; the tests
+    that use it only make read-only assertions about the built systems/states.
+    """
+    # tmp_path is function-scoped, so resolve the committed files directly rather
+    # than via the (function-scoped) real_amber_titratable_solvated_files fixture.
+    from pathlib import Path
+
+    src = Path(__file__).parent / 'data' / 'amber'
+    files = {
+        'prmtop': str(src / 'lys_asp_solv.prmtop'),
+        'inpcrd': str(src / 'lys_asp_solv.inpcrd'),
+    }
+    return _build_solvated_cph(files)
+
+
+class TestConstantPHRealInitPipeline:
+    """Exercise the full ConstantPH.__init__ pipeline on a real solvated system.
+
+    These cover the methods that need a real solvated titratable system --
+    _buildImplicitSystemWithParmEd, _buildProteinOnlyTopology,
+    _buildProtonationStates, _mapStatesToImplicitSystem, _buildExplicitSystem,
+    _mapStatesToExplicitSystem -- which cannot be reached from object.__new__.
+    """
+
+    def test_titrations_built_for_lys_and_asp(self, real_solvated_cph):
+        """Both titratable residues get real ResidueTitration objects."""
+        titrations = real_solvated_cph.titrations
+        assert set(titrations) == {1, 2}
+        assert titrations[1].variants == ['LYN', 'LYS']
+        assert titrations[2].variants == ['ASP', 'ASH']
+
+    def test_implicit_system_is_solvent_stripped(self, real_solvated_cph):
+        """ParmEd strips water/ions: implicit system is the 46-atom peptide."""
+        # 2620-atom solvated explicit system, 46-atom (Ace-Lys-Asp-Nme) implicit.
+        assert real_solvated_cph.explicitSystem.getNumParticles() == 2620
+        assert real_solvated_cph.implicitSystem.getNumParticles() == 46
+
+    def test_protonation_states_have_expected_hydrogen_counts(
+        self, real_solvated_cph
+    ):
+        """The built protonation states carry the real +1-proton differences."""
+        lys = real_solvated_cph.titrations[1]
+        asp = real_solvated_cph.titrations[2]
+        # LYN (neutral) has one fewer H than LYS (protonated); ASP one fewer than ASH.
+        lys_h = sorted(s.numHydrogens for s in lys.explicitStates)
+        asp_h = sorted(s.numHydrogens for s in asp.explicitStates)
+        assert lys_h == [12, 13]
+        assert asp_h == [4, 5]
+
+    def test_atom_index_mapping_covers_implicit_system(self, real_solvated_cph):
+        """implicitAtomIndex maps every implicit atom into the explicit system."""
+        idx = real_solvated_cph.implicitAtomIndex
+        assert len(idx) == 46
+        # Every mapped index is a valid explicit-system particle.
+        assert idx.max() < real_solvated_cph.explicitSystem.getNumParticles()
+        assert idx.min() >= 0
+
+    def test_validate_states_passes_on_real_build(self, real_solvated_cph):
+        """The real, fully-built protonation states pass validation."""
+        assert real_solvated_cph.validateStates() is True
+
+    def test_explicit_context_has_real_energy(self, real_solvated_cph):
+        """The explicit Simulation was created with positions and a finite energy."""
+        import numpy as np
+
+        state = real_solvated_cph.simulation.context.getState(getEnergy=True)
+        pe = state.getPotentialEnergy()._value
+        assert np.isfinite(pe)
+
+    def test_attempt_mc_step_runs_and_keeps_states_valid(
+        self, real_amber_titratable_solvated_files
+    ):
+        """A real MC titration step runs and leaves the ensemble in a valid state.
+
+        Builds its own instance (attemptMCStep can mutate protonation state) and
+        checks the real move machinery -- position mapping into the implicit
+        context, energy evaluation, Metropolis accept/reject -- runs without error
+        and leaves every residue at a valid variant index.
+        """
+        cph = _build_solvated_cph(real_amber_titratable_solvated_files)
+
+        cph.attemptMCStep(300.0)
+
+        for resid, titration in cph.titrations.items():
+            assert 0 <= titration.currentIndex < len(titration.variants), resid
+        assert cph.validateStates() is True
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

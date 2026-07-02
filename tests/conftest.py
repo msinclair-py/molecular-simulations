@@ -433,6 +433,40 @@ def real_amber_titratable_files(tmp_path: Path) -> dict:
     }
 
 
+@pytest.fixture
+def real_amber_titratable_solvated_files(tmp_path: Path) -> dict:
+    """Provide a real, SOLVATED titratable AMBER system for full ConstantPH runs.
+
+    Unlike :func:`real_amber_titratable_files` (the same Ace-Lys-Asp-Nme peptide
+    in vacuum, used for the lightweight ``build_dicts`` residue-identification
+    logic), this is that peptide solvated in a ~3.5 nm TIP3P box (2620 atoms,
+    net-neutral, generated with tleap ``leaprc.protein.ff19SB`` +
+    ``leaprc.water.tip3p``). It carries periodic box vectors, so the explicit
+    PME system that ``ConstantPH.__init__`` builds (nonbondedCutoff 0.9 nm) is
+    valid, and ParmEd can strip the water/ions down to the 46-atom implicit
+    system. This lets the WHOLE ``ConstantPH.__init__`` pipeline run for real in
+    CI with no AmberTools at runtime (the fixture was pre-built with tleap).
+
+    Titratable residues are LYS (index 1) and ASP (index 2); ACE/NME are the
+    excluded termini.
+
+    Returns:
+        Dictionary with ``prmtop``, ``inpcrd`` (copied to ``system.*``) and
+        ``path`` (the temp directory).
+    """
+    import shutil
+
+    src = get_test_data_dir() / 'amber'
+    shutil.copy(src / 'lys_asp_solv.prmtop', tmp_path / 'system.prmtop')
+    shutil.copy(src / 'lys_asp_solv.inpcrd', tmp_path / 'system.inpcrd')
+
+    return {
+        'prmtop': tmp_path / 'system.prmtop',
+        'inpcrd': tmp_path / 'system.inpcrd',
+        'path': tmp_path,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Ligand/SDF Fixtures
 # ---------------------------------------------------------------------------

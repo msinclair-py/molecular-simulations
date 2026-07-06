@@ -25,6 +25,7 @@ dependencies = [
     'mdtraj',
     'natsort',
     'numba',
+    'numpy>=2.0',
     'openmm>=8.0',
     'parmed',
     'parsl>=2024.1.29',
@@ -32,7 +33,7 @@ dependencies = [
     'pydantic',
     'python-json-logger>=3',
     'pyyaml',
-    'rust-simulation-tools',
+    'rust-simulation-tools>=0.2.5',
     'scikit-learn',
     'seaborn'
 ]
@@ -57,7 +58,7 @@ docs = [
 dev = [
     'pytest>=7.0',
     'coverage[toml]>=7.0',
-    'numpy>=1.22',
+    'numpy>=2.0',
     'ruff>=0.15',
     'pre-commit>=3.5',
     'gemmi',
@@ -128,5 +129,19 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
+# Exclude code that is not meant to be reached by the unit suite so the metric
+# reflects real, testable code rather than rewarding dead lines.
+exclude_lines = [
+    'pragma: no cover',
+    'if __name__ == .__main__.:',
+    'raise NotImplementedError',
+    'raise AssertionError',
+    '@(abc\.)?abstractmethod',
+    'if TYPE_CHECKING:',
+]
+# Abstract-method bodies are just a bare ``...`` or ``pass``; drop them too.
+exclude_also = [
+    '^\s*\.\.\.\s*$',
+]
 
 [tool.ty]

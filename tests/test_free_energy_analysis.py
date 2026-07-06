@@ -5,9 +5,9 @@ This module tests the numerical/statistical analysis methods in free_energy.py
 WITHOUT mocking the ALGORITHMS. All tests use numpy-generated synthetic data
 to validate the algorithms directly.
 
-Note: Module-level imports (omm_simulator, reporters) are mocked to allow
-import of the free_energy module in environments where OpenMM is not fully
-configured. The actual numerical algorithms under test are NOT mocked.
+Note: free_energy.py is imported for real -- OpenMM, MDAnalysis, numpy and
+parsl are all available, so omm_simulator and reporters import cleanly with
+no mocking required.
 
 Tested methods:
     - _detect_equilibration_autocorr: Autocorrelation-based equilibration detection
@@ -21,48 +21,13 @@ The test strategy focuses on:
     3. Edge cases (empty arrays, single samples, no overlap, etc.)
 """
 
-import sys
 from collections.abc import Callable
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
 # Constants matching free_energy.py
 KB = 8.314462618e-3  # Boltzmann constant in kJ/(mol*K)
-
-
-# =============================================================================
-# MODULE IMPORT SETUP
-# =============================================================================
-
-
-@pytest.fixture(autouse=True)
-def mock_free_energy_deps():
-    """Mock external dependencies to allow importing free_energy module.
-
-    The free_energy module uses absolute imports for omm_simulator and reporters
-    (to support Parsl serialization). We mock these as top-level modules.
-
-    The numerical algorithms under test do NOT depend on these mocked modules
-    and are tested without mocking.
-    """
-    # Create mock modules for dependencies
-    mock_omm_simulator = MagicMock()
-    mock_reporters = MagicMock()
-
-    # Patch sys.modules before import - use top-level module names
-    with patch.dict(
-        sys.modules,
-        {
-            'omm_simulator': mock_omm_simulator,
-            'reporters': mock_reporters,
-        },
-    ):
-        # Clear cached import if exists
-        if 'molecular_simulations.simulate.free_energy' in sys.modules:
-            del sys.modules['molecular_simulations.simulate.free_energy']
-        yield mock_omm_simulator, mock_reporters
 
 
 # =============================================================================
@@ -424,11 +389,11 @@ def generate_double_well_pmf_data(
 
 
 @pytest.fixture
-def analyzer_class(mock_free_energy_deps):
-    """Import and return the EVBAnalyzer class.
+def analyzer_class():
+    """Import and return the real EVBAnalyzer class.
 
-    Depends on mock_free_energy_deps to ensure imports are mocked.
-    The autouse=True on mock_free_energy_deps ensures this runs first.
+    free_energy.py (and its omm_simulator/reporters imports) loads cleanly
+    against the real OpenMM/MDAnalysis/numpy/parsl stack -- no mocking needed.
     """
     from molecular_simulations.simulate.free_energy import EVBAnalyzer
 
@@ -1354,6 +1319,60 @@ def test_pmf_at_various_temperatures(analyzer_class, tmp_path, temperature):
 
     # Should produce valid output
     assert (~np.isnan(result.pmf)).sum() > 0
+
+
+class TestCheckRunStatus:
+    """EVBAnalyzer.check_run_status inspects real per-window log files."""
+
+    def test_status_counts_and_frames(self, analyzer_class, tmp_path):
+        """Complete, missing and readable windows are reported correctly."""
+        # Windows 0 and 2 present (with 3 and 2 frames); window 1 missing.
+        (tmp_path / 'reactant_0.log').write_text('rc\n0.1\n0.2\n0.3\n')
+        (tmp_path / 'reactant_2.log').write_text('rc\n0.4\n0.5\n')
+
+        analyzer = analyzer_class(
+            log_path=tmp_path,
+            log_prefix='reactant',
+            k_umbrella=160000.0,
+            rc0_values=[0.0, 0.5, 1.0],
+        )
+
+        status = analyzer.check_run_status()
+
+        assert status['n_expected'] == 3
+        assert status['n_complete'] == 2
+        assert status['missing_windows'] == [1]
+        assert status['frames_per_window'][0] == 3
+        assert status['frames_per_window'][2] == 2
+        assert np.isclose(status['complete_fraction'], 2 / 3)
+        # Only integer frame counts are summed.
+        assert status['total_frames'] == 5
+
+    def test_status_captures_unreadable_window(self, analyzer_class, tmp_path):
+        """An unreadable window log is captured as a per-window error string."""
+        # Window 0 is a valid CSV; window 1 exists but is empty -> polars raises.
+        (tmp_path / 'reactant_0.log').write_text('rc\n0.1\n0.2\n')
+        (tmp_path / 'reactant_1.log').write_text('')
+
+        analyzer = analyzer_class(
+            log_path=tmp_path,
+            log_prefix='reactant',
+            k_umbrella=160000.0,
+            rc0_values=[0.0, 0.5],
+        )
+
+        status = analyzer.check_run_status()
+
+        # Both files exist, so both windows are 'complete'.
+        assert status['n_complete'] == 2
+        assert status['missing_windows'] == []
+        assert status['frames_per_window'][0] == 2
+        # The corrupt window is stored as an 'Error: ...' string, not an int.
+        err = status['frames_per_window'][1]
+        assert isinstance(err, str)
+        assert err.startswith('Error:')
+        # Error strings are excluded from the integer total.
+        assert status['total_frames'] == 2
 
 
 if __name__ == '__main__':

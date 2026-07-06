@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import parmed as pmd
-from calvados import sim  # ty: ignore[unresolved-import]
 from openmm.app import Simulation
 
 try:
@@ -332,6 +331,8 @@ class MultiResolutionSimulator:
             cg_builder.build()  # writes config and components yamls
 
             # run CG
+            from calvados import sim  # ty: ignore[unresolved-import]
+
             sim.run(
                 path=str(cg_path), fconfig='config.yaml', fcomponents='components.yaml'
             )

@@ -6,9 +6,9 @@ This module tests the new EVB analysis features added in the recent update:
 - EVBAnalyzer class: Standalone analyzer for existing EVB data
 - New EVB methods: Analysis methods added to the EVB class
 
-Tests use MINIMAL mocking and prefer real synthetic data that simulates
-actual umbrella sampling output. This ensures the statistical algorithms
-are tested with realistic inputs.
+Tests use no mocks: they run the real statistical algorithms over real
+synthetic data that simulates actual umbrella sampling output, so the
+algorithms are exercised with realistic inputs.
 
 Testing strategy:
 - Generate synthetic RC data from known distributions

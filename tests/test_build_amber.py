@@ -1,446 +1,310 @@
-"""
-Unit tests for build/build_amber.py module
+"""Tests for build/build_amber.py.
+
+These tests run against the REAL build code with NO mocking of ``subprocess``.
+
+They split into two groups:
+
+* No-binary tests run in any environment (including CI without AmberTools).
+  They cover the pure logic (force-field selection, box sizing, ion counts,
+  directory cleanup) and the REAL input-file/command generation. For the latter
+  the ``fake_amberhome`` fixture supplies stub ``tleap``/``cpptraj`` executables
+  so the build code's real ``subprocess.run`` calls succeed and write their real
+  input files, which the tests read back and assert on.
+
+* Binary tests are gated behind ``skip_without_amber`` and actually run tleap to
+  produce a topology/coordinate pair. They run where AmberTools is installed and
+  skip cleanly otherwise.
 """
 
 import os
-import tempfile
+import shutil
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
+from molecular_simulations.build.build_amber import ExplicitSolvent, ImplicitSolvent
+
+PDB_TEXT = 'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
+
+
+def _write_pdb(directory: Path, text: str = PDB_TEXT) -> Path:
+    pdb = directory / 'test.pdb'
+    pdb.write_text(text)
+    return pdb
+
+
+def _real_amberhome() -> str | None:
+    """Resolve a real AMBERHOME for skip-gated binary tests."""
+    home = os.environ.get('AMBERHOME')
+    if home and (Path(home) / 'bin' / 'tleap').exists():
+        return home
+    tleap = shutil.which('tleap')
+    if tleap is not None:
+        return str(Path(tleap).resolve().parent.parent)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# ImplicitSolvent: construction + logic (no binary)
+# ---------------------------------------------------------------------------
+
 
 class TestImplicitSolvent:
-    """Test suite for ImplicitSolvent class"""
+    """Construction and force-field logic for ImplicitSolvent."""
 
-    def test_implicit_solvent_init_with_path(self):
-        """Test ImplicitSolvent initialization with path"""
-        from molecular_simulations.build.build_amber import ImplicitSolvent
+    def test_init_with_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = _write_pdb(tmp_path)
+        builder = ImplicitSolvent(path=tmp_path, pdb=str(pdb), protein=True)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
+        assert builder.path == tmp_path.resolve()
+        assert 'leaprc.protein.ff19SB' in builder.ffs
+        assert builder.tleap == str(tmp_path / 'bin' / 'tleap')
 
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ImplicitSolvent(path=tmpdir, pdb=str(pdb_path), protein=True)
+    def test_init_none_path_uses_pdb_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = _write_pdb(tmp_path)
+        builder = ImplicitSolvent(path=None, pdb=str(pdb), protein=True)
 
-            assert builder.path == Path(tmpdir).resolve()
-            assert 'leaprc.protein.ff19SB' in builder.ffs
+        assert builder.path == tmp_path.resolve()
 
-    def test_implicit_solvent_init_none_path(self):
-        """Test ImplicitSolvent with path=None uses pdb directory"""
-        from molecular_simulations.build.build_amber import ImplicitSolvent
+    def test_no_amberhome_raises(self, tmp_path, monkeypatch):
+        monkeypatch.delenv('AMBERHOME', raising=False)
+        pdb = _write_pdb(tmp_path)
+        with pytest.raises(ValueError, match='AMBERHOME is not set'):
+            ImplicitSolvent(path=tmp_path, pdb=str(pdb), amberhome=None)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
+    def test_custom_output(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = _write_pdb(tmp_path)
+        builder = ImplicitSolvent(path=tmp_path, pdb=str(pdb), out='custom_output.pdb')
 
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ImplicitSolvent(path=None, pdb=str(pdb_path), protein=True)
+        assert builder.out.name == 'custom_output.pdb'
 
-            assert builder.path == Path(tmpdir).resolve()
+    def test_forcefield_selection(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = _write_pdb(tmp_path)
+        builder = ImplicitSolvent(
+            path=tmp_path, pdb=str(pdb), protein=True, rna=True, dna=True
+        )
 
-    def test_implicit_solvent_no_amberhome(self):
-        """Test ImplicitSolvent raises error when AMBERHOME not set"""
-        from molecular_simulations.build.build_amber import ImplicitSolvent
+        assert 'leaprc.protein.ff19SB' in builder.ffs
+        assert 'leaprc.RNA.Shaw' in builder.ffs
+        assert 'leaprc.DNA.OL21' in builder.ffs
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
+    def test_kwargs_set_as_attributes(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = _write_pdb(tmp_path)
+        builder = ImplicitSolvent(
+            path=tmp_path, pdb=str(pdb), custom_param='custom_value', another_param=42
+        )
 
-            # Remove AMBERHOME if it exists
-            env = os.environ.copy()
-            env.pop('AMBERHOME', None)
+        assert builder.custom_param == 'custom_value'
+        assert builder.another_param == 42
 
-            with patch.dict(os.environ, env, clear=True):
-                with pytest.raises(ValueError, match='AMBERHOME is not set'):
-                    ImplicitSolvent(path=tmpdir, pdb=str(pdb_path), amberhome=None)
 
-    def test_implicit_solvent_custom_output(self):
-        """Test ImplicitSolvent with custom output path"""
-        from molecular_simulations.build.build_amber import ImplicitSolvent
+# ---------------------------------------------------------------------------
+# ImplicitSolvent: REAL tleap input generation (stub binary, no AmberTools)
+# ---------------------------------------------------------------------------
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
 
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ImplicitSolvent(
-                    path=tmpdir, pdb=str(pdb_path), out='custom_output.pdb'
-                )
+class TestImplicitTleapInput:
+    """The real tleap input file generated by tleap_it()."""
 
-            assert 'custom_output.pdb' in str(builder.out)
+    def test_tleap_it_writes_real_input(self, tmp_path, fake_amberhome):
+        pdb = _write_pdb(tmp_path)
+        builder = ImplicitSolvent(path=tmp_path, pdb=str(pdb), debug=True)
 
-    def test_implicit_solvent_forcefields(self):
-        """Test forcefield selection based on switches"""
-        from molecular_simulations.build.build_amber import ImplicitSolvent
+        # Runs the real tleap_it -> debug_tleap -> subprocess against the stub.
+        builder.tleap_it()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
+        leap_file = tmp_path / 'tleap.in'
+        assert leap_file.exists()
+        content = leap_file.read_text()
+        assert 'source leaprc.protein.ff19SB' in content
+        assert f'loadpdb {builder.pdb}' in content
+        assert 'set default pbradii mbondi3' in content
+        assert f'savepdb prot {builder.out}' in content
+        assert 'saveamberparm prot' in content
+        assert 'quit' in content
 
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                # Test with multiple forcefields
-                builder = ImplicitSolvent(
-                    path=tmpdir, pdb=str(pdb_path), protein=True, rna=True, dna=True
-                )
+        # The stub tleap was really invoked on that file (it copied it back).
+        captured = (fake_amberhome / 'tleap_input.txt').read_text()
+        assert captured == content
 
-            assert 'leaprc.protein.ff19SB' in builder.ffs
-            assert 'leaprc.RNA.Shaw' in builder.ffs
-            assert 'leaprc.DNA.OL21' in builder.ffs
+    def test_temp_tleap_runs_real_subprocess(self, tmp_path, fake_amberhome):
+        """temp_tleap writes a temp input file and really invokes tleap on it."""
+        pdb = _write_pdb(tmp_path)
+        builder = ImplicitSolvent(path=tmp_path, pdb=str(pdb))
 
-    def test_implicit_solvent_write_leap(self):
-        """Test tleap_it method writes correct leap input"""
-        from molecular_simulations.build.build_amber import ImplicitSolvent
+        builder.temp_tleap('source leaprc.protein.ff19SB\nquit\n')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
+        # The stub captured the exact input temp_tleap handed to tleap -f.
+        captured = (fake_amberhome / 'tleap_input.txt').read_text()
+        assert 'source leaprc.protein.ff19SB' in captured
+        assert 'quit' in captured
 
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ImplicitSolvent(path=tmpdir, pdb=str(pdb_path))
 
-            builder.debug = True
-            with patch('subprocess.run'):
-                builder.tleap_it()
-
-            leap_file = Path(tmpdir) / 'tleap.in'
-            assert leap_file.exists()
-            content = leap_file.read_text()
-            assert 'leaprc.protein.ff19SB' in content
-            assert 'loadpdb' in content
+# ---------------------------------------------------------------------------
+# ExplicitSolvent: construction + logic (no binary)
+# ---------------------------------------------------------------------------
 
 
 class TestExplicitSolvent:
-    """Test suite for ExplicitSolvent class"""
+    """Construction and pure logic for ExplicitSolvent."""
 
-    def test_explicit_solvent_init(self):
-        """Test ExplicitSolvent initialization"""
-        from molecular_simulations.build.build_amber import ExplicitSolvent
+    def test_init_defaults(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = _write_pdb(tmp_path)
+        builder = ExplicitSolvent(path=tmp_path, pdb=str(pdb), padding=15.0)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
+        assert builder.pad == 15.0
+        assert 'leaprc.water.opc' in builder.ffs
+        assert builder.water_box == 'OPCBOX'
 
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ExplicitSolvent(path=tmpdir, pdb=str(pdb_path), padding=15.0)
+    def test_polarizable(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = _write_pdb(tmp_path)
+        builder = ExplicitSolvent(path=tmp_path, pdb=str(pdb), polarizable=True)
 
-            assert builder.pad == 15.0
-            assert 'leaprc.water.opc' in builder.ffs
-            assert builder.water_box == 'OPCBOX'
+        assert 'leaprc.protein.ff15ipq' in builder.ffs
+        assert 'leaprc.water.spceb' in builder.ffs
+        assert builder.water_box == 'SPCBOX'
 
-    def test_explicit_solvent_polarizable(self):
-        """Test ExplicitSolvent with polarizable forcefield"""
-        from molecular_simulations.build.build_amber import ExplicitSolvent
+    def test_disulfides(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = _write_pdb(tmp_path)
+        builder = ExplicitSolvent(
+            path=tmp_path, pdb=str(pdb), disulfide_residues=[10, 20]
+        )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
-
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ExplicitSolvent(
-                    path=tmpdir, pdb=str(pdb_path), polarizable=True
-                )
-
-            assert 'leaprc.protein.ff15ipq' in builder.ffs
-            assert 'leaprc.water.spceb' in builder.ffs
-            assert builder.water_box == 'SPCBOX'
+        assert 'protein.10 = CYX' in builder.disulfides
+        assert 'protein.20 = CYX' in builder.disulfides
 
     def test_get_ion_numbers(self):
-        """Test get_ion_numbers static method"""
-        from molecular_simulations.build.build_amber import ExplicitSolvent
-
-        # Test with known volume
-        volume = 1000000  # 100 nm^3 in cubic Angstroms
-        num_ions = ExplicitSolvent.get_ion_numbers(volume)
-
-        # Should be a positive integer
+        num_ions = ExplicitSolvent.get_ion_numbers(1_000_000)
         assert isinstance(num_ions, int)
         assert num_ions > 0
 
-    def test_get_ion_numbers_different_volumes(self):
-        """Test get_ion_numbers with different volumes"""
-        from molecular_simulations.build.build_amber import ExplicitSolvent
-
-        small_volume = 125000  # 50 Å cube
-        large_volume = 1000000  # 100 Å cube
-
-        small_ions = ExplicitSolvent.get_ion_numbers(small_volume)
-        large_ions = ExplicitSolvent.get_ion_numbers(large_volume)
-
-        # Larger volume should need more ions
-        assert large_ions > small_ions
-
-    def test_get_pdb_extent(self):
-        """Test get_pdb_extent method"""
-        from molecular_simulations.build.build_amber import ExplicitSolvent
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create PDB with known coordinates
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_content = """ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00
-ATOM      2  CA  ALA A   1      10.000   5.000   3.000  1.00  0.00
-ATOM      3  C   ALA A   1       5.000  15.000   8.000  1.00  0.00
-"""
-            pdb_path.write_text(pdb_content)
-
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ExplicitSolvent(path=tmpdir, pdb=str(pdb_path), padding=10.0)
-
-            # Need to set pdb path explicitly for the method
-            builder.pdb = str(pdb_path)
-
-            extent = builder.get_pdb_extent()
-
-            # X extent: 10-0 = 10
-            # Y extent: 15-0 = 15
-            # Z extent: 8-0 = 8
-            # Max is 15, plus 2*10 padding = 35
-            assert extent == 35
-
-
-class TestBuildWorkflow:
-    """Test the build workflow methods"""
-
-    @patch('molecular_simulations.build.build_amber.subprocess')
-    def test_temp_tleap(self, mock_subprocess):
-        """Test temp_tleap method"""
-        from molecular_simulations.build.build_amber import ImplicitSolvent
-
-        mock_subprocess.run.return_value = MagicMock(returncode=0)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
-
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ImplicitSolvent(
-                    path=tmpdir, pdb=str(pdb_path), delete_temp_file=True
-                )
-
-            tleap_input = """source leaprc.protein.ff19SB
-prot = loadpdb test.pdb
-quit
-"""
-            builder.temp_tleap(tleap_input)
-
-            # Should have called subprocess.run
-            mock_subprocess.run.assert_called_once()
-
-    @patch('molecular_simulations.build.build_amber.subprocess')
-    def test_prep_pdb(self, mock_subprocess):
-        """Test prep_pdb method"""
-        from molecular_simulations.build.build_amber import ExplicitSolvent
-
-        mock_subprocess.run.return_value = MagicMock(returncode=0)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
-
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ExplicitSolvent(path=tmpdir, pdb=str(pdb_path))
-
-            builder.prep_pdb()
-
-            # Should have run pdb4amber
-            mock_subprocess.run.assert_called_once()
-
-            # pdb should be updated to protein.pdb
-            assert 'protein.pdb' in builder.pdb
-
-    def test_clean_up_directory(self):
-        """Test clean_up_directory method"""
-        from molecular_simulations.build.build_amber import ExplicitSolvent
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
-
-            pdb_path = tmpdir / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
-
-            # Create some files that should be moved
-            (tmpdir / 'leap.log').write_text('log content')
-            (tmpdir / 'protein.pdb').write_text('pdb content')
-
-            # Create files that should NOT be moved
-            (tmpdir / 'system.prmtop').write_text('topology')
-            (tmpdir / 'system.inpcrd').write_text('coordinates')
-
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ExplicitSolvent(path=str(tmpdir), pdb=str(pdb_path))
-
-            builder.clean_up_directory()
-
-            # Check build directory exists
-            assert (tmpdir / 'build').exists()
-
-            # prmtop and inpcrd should still be in main directory
-            assert (tmpdir / 'system.prmtop').exists()
-            assert (tmpdir / 'system.inpcrd').exists()
-
-
-class TestKwargsHandling:
-    """Test handling of extra keyword arguments"""
-
-    def test_kwargs_set_as_attributes(self):
-        """Test that kwargs are set as instance attributes"""
-        from molecular_simulations.build.build_amber import ImplicitSolvent
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
-
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ImplicitSolvent(
-                    path=tmpdir,
-                    pdb=str(pdb_path),
-                    custom_param='custom_value',
-                    another_param=42,
-                )
-
-            assert builder.custom_param == 'custom_value'
-            assert builder.another_param == 42
-
-
-class TestExplicitSolventBuild:
-    """Test suite for ExplicitSolvent build workflow methods."""
-
-    @patch('molecular_simulations.build.build_amber.subprocess')
-    def test_build_calls_workflow_steps(self, mock_subprocess):
-        """Test build() orchestrates prep_pdb, get_pdb_extent, etc."""
-        from molecular_simulations.build.build_amber import ExplicitSolvent
-
-        mock_subprocess.run.return_value = MagicMock(returncode=0)
-        mock_subprocess.DEVNULL = -1
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-                'ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00  0.00\n'
-                'END\n'
-            )
-
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ExplicitSolvent(path=tmpdir, pdb=str(pdb_path), protein=True)
-
-            with (
-                patch.object(builder, 'prep_pdb') as mock_prep,
-                patch.object(
-                    builder, 'get_pdb_extent', return_value=50.0
-                ) as mock_extent,
-                patch.object(builder, 'get_ion_numbers', return_value=10) as mock_ions,
-                patch.object(builder, 'assemble_system') as mock_assemble,
-                patch.object(builder, 'clean_up_directory') as mock_clean,
-            ):
-                builder.build()
-
-            mock_prep.assert_called_once()
-            mock_extent.assert_called_once()
-            mock_ions.assert_called_once_with(50.0**3)
-            mock_assemble.assert_called_once_with(50.0, 10)
-            mock_clean.assert_called_once()
-
-    @patch('molecular_simulations.build.build_amber.subprocess')
-    def test_prep_pdb_runs_pdb4amber(self, mock_subprocess):
-        """Test prep_pdb calls pdb4amber subprocess."""
-        from molecular_simulations.build.build_amber import ExplicitSolvent
-
-        mock_subprocess.run.return_value = MagicMock(returncode=0)
-        mock_subprocess.DEVNULL = -1
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
-
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ExplicitSolvent(path=tmpdir, pdb=str(pdb_path), protein=True)
-
-            builder.prep_pdb()
-
-            # Check subprocess was called with pdb4amber
-            mock_subprocess.run.assert_called()
-
-            # pdb should be updated to protein.pdb
-            assert builder.pdb.endswith('protein.pdb')
-
-    @patch('molecular_simulations.build.build_amber.subprocess')
-    def test_assemble_system_calls_tleap(self, mock_subprocess):
-        """Test assemble_system generates tleap input."""
-        from molecular_simulations.build.build_amber import ExplicitSolvent
-
-        mock_subprocess.run.return_value = MagicMock(returncode=0)
-        mock_subprocess.DEVNULL = -1
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
-
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ExplicitSolvent(path=tmpdir, pdb=str(pdb_path), protein=True)
-
-            with patch.object(builder, 'temp_tleap') as mock_tleap:
-                builder.assemble_system(dim=60.0, num_ions=15)
-
-            mock_tleap.assert_called_once()
-            tleap_input = mock_tleap.call_args[0][0]
-            assert 'solvatebox' in tleap_input
-            assert 'addIonsRand' in tleap_input
-            assert '15' in tleap_input
-            assert '60.0' in tleap_input
-
-    @patch('molecular_simulations.build.build_amber.subprocess')
-    def test_assemble_system_debug_mode(self, mock_subprocess):
-        """Test assemble_system uses debug_tleap in debug mode."""
-        from molecular_simulations.build.build_amber import ExplicitSolvent
-
-        mock_subprocess.run.return_value = MagicMock(returncode=0)
-        mock_subprocess.DEVNULL = -1
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = Path(tmpdir) / 'test.pdb'
-            pdb_path.write_text(
-                'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
-            )
-
-            with patch.dict(os.environ, {'AMBERHOME': '/fake/amber'}):
-                builder = ExplicitSolvent(
-                    path=tmpdir, pdb=str(pdb_path), protein=True, debug=True
-                )
-
-            with patch.object(builder, 'debug_tleap') as mock_debug:
-                builder.assemble_system(dim=60.0, num_ions=15)
-
-            mock_debug.assert_called_once()
+    def test_get_ion_numbers_scales_with_volume(self):
+        small = ExplicitSolvent.get_ion_numbers(125_000)
+        large = ExplicitSolvent.get_ion_numbers(1_000_000)
+        assert large > small
+
+    def test_get_pdb_extent(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb_text = (
+            'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
+            'ATOM      2  CA  ALA A   1      10.000   5.000   3.000  1.00  0.00\n'
+            'ATOM      3  C   ALA A   1       5.000  15.000   8.000  1.00  0.00\n'
+        )
+        pdb = _write_pdb(tmp_path, pdb_text)
+        builder = ExplicitSolvent(path=tmp_path, pdb=str(pdb), padding=10.0)
+        builder.pdb = str(pdb)
+
+        # max extent is Y (15) + 2*10 padding = 35
+        assert builder.get_pdb_extent() == 35
+
+    def test_clean_up_directory(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = _write_pdb(tmp_path)
+        (tmp_path / 'leap.log').write_text('log content')
+        (tmp_path / 'protein.pdb').write_text('pdb content')
+        (tmp_path / 'system.prmtop').write_text('topology')
+        (tmp_path / 'system.inpcrd').write_text('coordinates')
+
+        builder = ExplicitSolvent(path=tmp_path, pdb=str(pdb))
+        builder.clean_up_directory()
+
+        assert (tmp_path / 'build').exists()
+        assert (tmp_path / 'system.prmtop').exists()
+        assert (tmp_path / 'system.inpcrd').exists()
+        # Intermediate files were moved into build/.
+        assert (tmp_path / 'build' / 'leap.log').exists()
+        assert (tmp_path / 'build' / 'protein.pdb').exists()
+
+
+# ---------------------------------------------------------------------------
+# ExplicitSolvent: REAL input generation (stub binary, no AmberTools)
+# ---------------------------------------------------------------------------
+
+
+class TestExplicitInputGeneration:
+    """Real tleap/cpptraj inputs generated by ExplicitSolvent."""
+
+    def test_assemble_system_writes_real_input(self, tmp_path, fake_amberhome):
+        pdb = _write_pdb(tmp_path)
+        builder = ExplicitSolvent(path=tmp_path, pdb=str(pdb), protein=True, debug=True)
+
+        builder.assemble_system(dim=60.0, num_ions=15)
+
+        content = (tmp_path / 'tleap.in').read_text()
+        assert 'source leaprc.protein.ff19SB' in content
+        assert 'source leaprc.water.opc' in content
+        assert f'PROT = loadpdb {builder.pdb}' in content
+        assert 'set PROT box {60.0 60.0 60.0}' in content
+        assert 'solvatebox PROT OPCBOX {0 0 0}' in content
+        assert 'addIonsRand PROT Na+ 15 Cl- 15' in content
+        assert 'saveamberparm PROT' in content
+
+    def test_prep_pdb_builds_real_cpptraj_input(self, tmp_path, fake_amberhome):
+        pdb = _write_pdb(tmp_path)
+        builder = ExplicitSolvent(path=tmp_path, pdb=str(pdb), protein=True)
+
+        builder.prep_pdb()
+
+        # The stub cpptraj captured the exact stdin the build code piped to it.
+        cpptraj_input = (fake_amberhome / 'cpptraj_input.txt').read_text()
+        assert f'parm {pdb}' in cpptraj_input
+        assert f'loadcrd {pdb} name IN' in cpptraj_input
+        assert 'prepareforleap' in cpptraj_input
+        assert 'existingdisulfides' in cpptraj_input
+        assert 'quit' in cpptraj_input
+
+        # prep_pdb advances the working PDB and records the ss-bond leap file.
+        assert builder.pdb.endswith('protein.pdb')
+        assert builder.ss_bonds_leap == tmp_path / 'ss_bonds.leap'
+
+
+# ---------------------------------------------------------------------------
+# Skip-gated: real AmberTools execution
+# ---------------------------------------------------------------------------
+
+
+class TestRealAmberBuild:
+    """End-to-end builds that actually run tleap (require AmberTools)."""
+
+    def test_implicit_build_produces_topology(
+        self, tmp_path, alanine_dipeptide_pdb, skip_without_amber
+    ):
+        home = _real_amberhome()
+        builder = ImplicitSolvent(
+            path=tmp_path,
+            pdb=str(alanine_dipeptide_pdb),
+            protein=True,
+            glycans=False,
+            amberhome=home,
+        )
+        builder.build()
+
+        assert builder.out.with_suffix('.prmtop').exists()
+        assert builder.out.with_suffix('.inpcrd').exists()
+
+    def test_explicit_build_produces_topology(
+        self, tmp_path, alanine_dipeptide_pdb, skip_without_amber
+    ):
+        home = _real_amberhome()
+        builder = ExplicitSolvent(
+            path=tmp_path,
+            pdb=str(alanine_dipeptide_pdb),
+            protein=True,
+            padding=10.0,
+            amberhome=home,
+        )
+        builder.build()
+
+        assert builder.out.with_suffix('.prmtop').exists()
+        assert builder.out.with_suffix('.inpcrd').exists()
 
 
 if __name__ == '__main__':

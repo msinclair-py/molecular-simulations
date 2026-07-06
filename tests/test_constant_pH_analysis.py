@@ -5,7 +5,6 @@ Unit tests for analysis/constant_pH_analysis.py module
 import tempfile
 import warnings
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import polars as pl
@@ -922,17 +921,13 @@ class TestTitrationAnalyzerAdvanced:
             with pytest.raises(RuntimeError, match='Must call run'):
                 analyzer.diagnose('20')
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    def test_plot_residue(self, mock_tight, mock_subplots):
-        """Test plot_residue with mocked matplotlib"""
+    def test_plot_residue(self):
+        """Test plot_residue renders a real Figure (Agg backend)."""
+        from matplotlib.figure import Figure
+
         from molecular_simulations.analysis.constant_pH_analysis import (
             TitrationAnalyzer,
         )
-
-        mock_fig = MagicMock()
-        mock_ax = MagicMock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             analyzer = TitrationAnalyzer(self.create_test_log(tmpdir))
@@ -940,8 +935,12 @@ class TestTitrationAnalyzerAdvanced:
 
             fig = analyzer.plot_residue('20')
 
-            assert fig is mock_fig
-            mock_ax.errorbar.assert_called()
+            # A single real Figure/Axes with plotted data was produced.
+            assert isinstance(fig, Figure)
+            assert len(fig.axes) == 1
+            ax = fig.axes[0]
+            assert ax.has_data()
+            assert 'Residue 20' in ax.get_title()
 
     def test_plot_residue_before_run(self):
         """Test plot_residue raises error before run"""
@@ -1186,18 +1185,11 @@ class TestTitrationAnalyzerPlotting:
         log_path.write_text(''.join(lines))
         return log_path
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    @patch('matplotlib.pyplot.close')
-    def test_plot_all(self, mock_close, mock_tight, mock_subplots):
-        """Test plot_all method with mocked matplotlib"""
+    def test_plot_all(self):
+        """Test plot_all writes a real, non-empty figure per residue."""
         from molecular_simulations.analysis.constant_pH_analysis import (
             TitrationAnalyzer,
         )
-
-        mock_fig = MagicMock()
-        mock_ax = MagicMock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = self.create_test_log(tmpdir)
@@ -1208,32 +1200,29 @@ class TestTitrationAnalyzerPlotting:
 
             analyzer.plot_all(output_dir=plot_dir, verbose=False)
 
-            # Check that subplots was called for each residue
-            assert mock_subplots.call_count == 2  # Two residues
-            assert mock_close.call_count == 2
+            # One real image per residue (residues 20 -> ASP, 76 -> GLU).
+            pngs = sorted(plot_dir.glob('*.png'))
+            assert len(pngs) == 2
+            assert all(p.stat().st_size > 0 for p in pngs)
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    @patch('matplotlib.pyplot.close')
-    def test_plot_all_with_residue_filter(self, mock_close, mock_tight, mock_subplots):
-        """Test plot_all with specific residues"""
+    def test_plot_all_with_residue_filter(self):
+        """Test plot_all with a residue filter renders just that residue."""
         from molecular_simulations.analysis.constant_pH_analysis import (
             TitrationAnalyzer,
         )
 
-        mock_fig = MagicMock()
-        mock_ax = MagicMock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
-
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = self.create_test_log(tmpdir)
+            plot_dir = Path(tmpdir) / 'plots'
 
             analyzer = TitrationAnalyzer(log_path, output_dir=tmpdir)
             analyzer.run(methods=['curvefit'], verbose=False)
 
-            analyzer.plot_all(residues=['20'], verbose=False)
+            analyzer.plot_all(output_dir=plot_dir, residues=['20'], verbose=False)
 
-            assert mock_subplots.call_count == 1
+            pngs = sorted(plot_dir.glob('*.png'))
+            assert len(pngs) == 1
+            assert pngs[0].stat().st_size > 0
 
     def test_plot_all_before_run(self):
         """Test plot_all raises error before run"""
@@ -1249,17 +1238,13 @@ class TestTitrationAnalyzerPlotting:
             with pytest.raises(RuntimeError, match='Must call run'):
                 analyzer.plot_all()
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    def test_plot_summary(self, mock_tight, mock_subplots):
-        """Test plot_summary method"""
+    def test_plot_summary(self):
+        """Test plot_summary renders a real two-panel comparison Figure."""
+        from matplotlib.figure import Figure
+
         from molecular_simulations.analysis.constant_pH_analysis import (
             TitrationAnalyzer,
         )
-
-        mock_fig = MagicMock()
-        mock_axes = [MagicMock(), MagicMock()]
-        mock_subplots.return_value = (mock_fig, mock_axes)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = self.create_test_log(tmpdir)
@@ -1269,8 +1254,10 @@ class TestTitrationAnalyzerPlotting:
 
             fig = analyzer.plot_summary()
 
-            assert fig is mock_fig
-            mock_subplots.assert_called_once()
+            # Real 2-panel figure (scatter + histogram), both with data.
+            assert isinstance(fig, Figure)
+            assert len(fig.axes) == 2
+            assert all(ax.has_data() for ax in fig.axes)
 
     def test_plot_summary_no_comparison(self):
         """Test plot_summary raises error without comparison data"""
@@ -1287,17 +1274,13 @@ class TestTitrationAnalyzerPlotting:
             with pytest.raises(RuntimeError, match='Need both curvefit and weighted'):
                 analyzer.plot_summary()
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    def test_plot_protonation_summary(self, mock_tight, mock_subplots):
-        """Test plot_protonation_summary method"""
+    def test_plot_protonation_summary(self):
+        """Test plot_protonation_summary renders a real bar Figure."""
+        from matplotlib.figure import Figure
+
         from molecular_simulations.analysis.constant_pH_analysis import (
             TitrationAnalyzer,
         )
-
-        mock_fig = MagicMock()
-        mock_ax = MagicMock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = self.create_test_log(tmpdir)
@@ -1307,20 +1290,18 @@ class TestTitrationAnalyzerPlotting:
 
             fig = analyzer.plot_protonation_summary(target_pH=4.0)
 
-            assert fig is mock_fig
-            mock_ax.bar.assert_called()
+            # Real figure with one bar per residue (two residues).
+            assert isinstance(fig, Figure)
+            assert len(fig.axes) == 1
+            assert len(fig.axes[0].patches) == 2
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    def test_plot_residue_with_existing_ax(self, mock_tight, mock_subplots):
-        """Test plot_residue with pre-existing axes"""
+    def test_plot_residue_with_existing_ax(self):
+        """Test plot_residue draws onto a caller-supplied real Axes."""
+        import matplotlib.pyplot as plt
+
         from molecular_simulations.analysis.constant_pH_analysis import (
             TitrationAnalyzer,
         )
-
-        mock_fig = MagicMock()
-        mock_ax = MagicMock()
-        mock_ax.get_figure.return_value = mock_fig
 
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = self.create_test_log(tmpdir)
@@ -1328,23 +1309,19 @@ class TestTitrationAnalyzerPlotting:
             analyzer = TitrationAnalyzer(log_path)
             analyzer.run(methods=['curvefit'], verbose=False)
 
-            fig = analyzer.plot_residue('20', ax=mock_ax)
+            fig_in, ax = plt.subplots()
+            fig = analyzer.plot_residue('20', ax=ax)
 
-            assert fig is mock_fig
-            # subplots should not be called when ax is provided
-            mock_subplots.assert_not_called()
+            # The method must reuse the provided Axes' Figure, not make a new one.
+            assert fig is fig_in
+            assert ax.has_data()
+            plt.close(fig_in)
 
-    @patch('matplotlib.pyplot.subplots')
-    @patch('matplotlib.pyplot.tight_layout')
-    def test_plot_residue_save(self, mock_tight, mock_subplots):
-        """Test plot_residue with save option"""
+    def test_plot_residue_save(self):
+        """Test plot_residue writes a real, non-empty figure to disk."""
         from molecular_simulations.analysis.constant_pH_analysis import (
             TitrationAnalyzer,
         )
-
-        mock_fig = MagicMock()
-        mock_ax = MagicMock()
-        mock_subplots.return_value = (mock_fig, mock_ax)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = self.create_test_log(tmpdir)
@@ -1355,7 +1332,8 @@ class TestTitrationAnalyzerPlotting:
 
             analyzer.plot_residue('20', save=save_path)
 
-            mock_fig.savefig.assert_called_once()
+            assert save_path.exists()
+            assert save_path.stat().st_size > 0
 
 
 class TestAnalyzeCphAdvanced:
@@ -1383,14 +1361,8 @@ class TestAnalyzeCphAdvanced:
         log_path.write_text(''.join(lines))
         return log_path
 
-    @patch(
-        'molecular_simulations.analysis.constant_pH_analysis.TitrationAnalyzer.plot_all'
-    )
-    @patch(
-        'molecular_simulations.analysis.constant_pH_analysis.TitrationAnalyzer.plot_summary'
-    )
-    def test_analyze_cph_with_plots(self, mock_plot_summary, mock_plot_all):
-        """Test analyze_cph with plot=True"""
+    def test_analyze_cph_with_plots(self):
+        """Test analyze_cph with plot=True writes real plot files to disk."""
         from molecular_simulations.analysis.constant_pH_analysis import analyze_cph
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1406,8 +1378,15 @@ class TestAnalyzeCphAdvanced:
             )
 
             assert analyzer._analyzed
-            mock_plot_all.assert_called_once()
-            mock_plot_summary.assert_called_once()
+            # plot_all wrote a per-residue figure into output/plots ...
+            plot_dir = out_dir / 'plots'
+            pngs = sorted(plot_dir.glob('*.png'))
+            assert len(pngs) == 2
+            assert all(p.stat().st_size > 0 for p in pngs)
+            # ... and plot_summary saved the comparison figure.
+            summary = out_dir / 'summary.png'
+            assert summary.exists()
+            assert summary.stat().st_size > 0
 
     def test_analyze_cph_bootstrap(self):
         """Test analyze_cph with bootstrap method"""
@@ -1946,6 +1925,153 @@ class TestRunVerboseOutput:
 
             captured = capsys.readouterr()
             assert 'bootstrap' in captured.out.lower()
+
+
+class TestPrepareUnknownResname:
+    """Cover prepare's 'UNK' fallback when a residue column has no observations."""
+
+    def test_all_null_column_maps_to_unk(self):
+        """A residue column with only nulls yields resid_to_resname == 'UNK'."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Build a real TitrationCurve from a valid log ...
+            log_path = Path(tmpdir) / 'cpH.log'
+            log_path.write_text(
+                'cpH: resids 20\n'
+                "rank=0 cpH: pH 4.0: ['ASH']\n"
+                "rank=0 cpH: pH 5.0: ['ASP']\n"
+            )
+            tc = TitrationCurve(log_path, make_plots=False)
+
+            # ... then hand it a real DataFrame whose residue column is all-null,
+            # the only way prepare() reaches the 'no first_state' branch.
+            tc.df = pl.DataFrame(
+                {
+                    'rankid': [0, 1],
+                    'current_pH': [4.0, 5.0],
+                    '20': pl.Series('20', [None, None], dtype=pl.Utf8),
+                }
+            )
+            tc.resid_cols = ['20']
+
+            tc.prepare()
+
+            assert tc.resid_to_resname['20'] == 'UNK'
+
+
+class TestCurveFitFailureFallback:
+    """Cover compute_titrations_curvefit's exception fallback to NaN."""
+
+    def test_infeasible_initial_guess_yields_nan(self):
+        """pH values above the pKa bound make p0 infeasible -> curve_fit raises."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # pKa is bounded to [0, 14]; a pKa0 guess taken from pH >= 20 is
+            # outside the bounds, so curve_fit raises and the fit falls back to
+            # NaN (lines 497-499). Three points clear the < 3 early-return.
+            log_path = Path(tmpdir) / 'cpH.log'
+            log_path.write_text(
+                'cpH: resids 20\n'
+                "rank=0 cpH: pH 20.0: ['ASH']\n"
+                "rank=0 cpH: pH 21.0: ['ASP']\n"
+                "rank=0 cpH: pH 22.0: ['ASH']\n"
+            )
+            tc = TitrationCurve(log_path, make_plots=False)
+            tc.prepare()
+
+            fits = tc.compute_titrations_curvefit()
+
+            assert np.isnan(fits['pKa'][0])
+            assert np.isnan(fits['Hill_n'][0])
+            assert np.isnan(fits['pKa_err'][0])
+            assert fits['n_points'][0] == 3
+
+
+class TestInsufficientPointsOtherMethods:
+    """Cover the < 3 point fallback rows in weighted and bootstrap fitting."""
+
+    def _single_pH_log(self, tmpdir):
+        log_path = Path(tmpdir) / 'cpH.log'
+        # Only one distinct pH value -> x.size == 1 < 3 for the residue.
+        log_path.write_text(
+            "cpH: resids 20\nrank=0 cpH: pH 4.0: ['ASH']\nrank=0 cpH: pH 4.0: ['ASP']\n"
+        )
+        return log_path
+
+    def test_weighted_insufficient_points(self):
+        """< 3 points -> weighted fit emits a NaN row tagged 'weighted'."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tc = TitrationCurve(self._single_pH_log(tmpdir), make_plots=False)
+            tc.prepare()
+
+            fits = tc.compute_titrations_weighted(verbose=False)
+
+            assert np.isnan(fits['pKa'][0])
+            assert np.isnan(fits['Hill_n'][0])
+            assert fits['method'][0] == 'weighted'
+            assert fits['n_points'][0] == 1
+
+    def test_bootstrap_insufficient_points(self):
+        """< 3 points -> bootstrap emits a NaN row with NaN confidence bounds."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tc = TitrationCurve(self._single_pH_log(tmpdir), make_plots=False)
+            tc.prepare()
+
+            fits = tc.compute_titrations_bootstrap(n_bootstrap=5, verbose=False)
+
+            assert np.isnan(fits['pKa'][0])
+            assert np.isnan(fits['pKa_lo'][0])
+            assert np.isnan(fits['pKa_hi'][0])
+            assert fits['method'][0] == 'bootstrap'
+            assert fits['n_points'][0] == 1
+
+
+class TestCompareMethods:
+    """Cover TitrationCurve.compare_methods, including the resid filter."""
+
+    def _titratable_log(self, tmpdir):
+        log_path = Path(tmpdir) / 'cpH.log'
+        lines = ['cpH: resids 20\n']
+        for pH in [3.0, 4.0, 5.0, 6.0, 7.0]:
+            for _ in range(20):
+                p = 1 / (1 + 10 ** (pH - 4.5))
+                s = 'ASH' if np.random.random() < p else 'ASP'
+                lines.append(f"rank=0 cpH: pH {pH:.1f}: ['{s}']\n")
+        log_path.write_text(''.join(lines))
+        return log_path
+
+    def test_compare_methods_builds_diff_columns(self):
+        """compare_methods joins curvefit + weighted and adds difference columns."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tc = TitrationCurve(self._titratable_log(tmpdir), make_plots=False)
+            tc.prepare()
+
+            comparison = tc.compare_methods()
+
+            for col in ('pKa', 'pKa_weighted', 'pKa_diff', 'Hill_n_diff'):
+                assert col in comparison.columns
+            assert comparison['resid'].to_list() == ['20']
+
+    def test_compare_methods_resid_filter(self):
+        """The resids argument restricts the comparison to those residues."""
+        from molecular_simulations.analysis.constant_pH_analysis import TitrationCurve
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tc = TitrationCurve(self._titratable_log(tmpdir), make_plots=False)
+            tc.prepare()
+
+            # '20' is present; '999' is absent -> only '20' survives the filter.
+            comparison = tc.compare_methods(resids=['999'])
+
+            assert comparison['resid'].to_list() == []
 
 
 if __name__ == '__main__':

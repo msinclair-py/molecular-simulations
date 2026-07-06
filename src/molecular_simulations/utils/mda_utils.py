@@ -40,9 +40,8 @@ def trim_trajectory(
     selection = u.select_atoms(sel) if sel is not None else u.atoms
     assert selection is not None
 
-    positions = np.zeros(
-        (u.trajectory.n_frames // stride, selection.n_atoms, 3), dtype=np.float32
-    )
+    n_kept = len(range(0, u.trajectory.n_frames, stride))
+    positions = np.zeros((n_kept, selection.n_atoms, 3), dtype=np.float32)
 
     for i, _ in enumerate(u.trajectory[::stride]):
         positions[i, ...] = selection.positions.copy().astype(np.float32)
@@ -53,11 +52,16 @@ def trim_trajectory(
         else:
             align_idx = selection.select_atoms(align_sel).ix
 
-        positions = kabsch_align(positions, positions[0], align_idx)
+        # rust_simulation_tools.kabsch_align requires float64 coordinates and
+        # int64 indices; feed it those exact dtypes (the aligned result comes
+        # back float64, which MDAnalysis's Writer accepts).
+        coords = positions.astype(np.float64)
+        positions = kabsch_align(coords, coords[0], align_idx.astype(np.int64))
 
     if rewrap:
         pass
 
     with mda.Writer(str(out), n_atoms=selection.n_atoms) as w:
         for pos in positions:
-            w.write(pos)
+            selection.atoms.positions = pos
+            w.write(selection.atoms)

@@ -190,6 +190,64 @@ END
         output_file = pdb_file.parent / (pdb_file.stem + '_withchains.pdb')
         assert output_file.exists()
 
+    def test_add_chains_single_chain_all_A(self, tmp_path):
+        """Default (last_res == -1) assigns every residue to chain A, no chain B."""
+        import MDAnalysis as mda
+
+        from molecular_simulations.build import add_chains
+
+        pdb_file = tmp_path / 'single.pdb'
+        lines = []
+        atom_num = 1
+        for resid in range(1, 7):
+            for name, elem in (('N', 'N'), ('CA', 'C')):
+                lines.append(
+                    f'ATOM  {atom_num:5d}  {name:<3s} ALA A{resid:4d}'
+                    '       0.000   0.000   0.000  1.00  0.00           '
+                    f'{elem}\n'
+                )
+                atom_num += 1
+        lines.append('END\n')
+        pdb_file.write_text(''.join(lines))
+
+        output = add_chains(pdb_file)
+
+        u = mda.Universe(str(output))
+        # No chain B is created: the whole structure is a single chain A.
+        assert set(u.atoms.chainIDs) == {'A'}
+
+    def test_add_chains_split_assigns_chain_B(self, tmp_path):
+        """A real last_res split creates chain B for the trailing residues.
+
+        Chain A spans residues below the split point; residues from ``last_res``
+        onward (the split boundary is inclusive on the B side) become chain B.
+        """
+        import MDAnalysis as mda
+
+        from molecular_simulations.build import add_chains
+
+        pdb_file = tmp_path / 'split.pdb'
+        lines = []
+        atom_num = 1
+        for resid in range(1, 11):
+            for name, elem in (('N', 'N'), ('CA', 'C')):
+                lines.append(
+                    f'ATOM  {atom_num:5d}  {name:<3s} ALA A{resid:4d}'
+                    '       0.000   0.000   0.000  1.00  0.00           '
+                    f'{elem}\n'
+                )
+                atom_num += 1
+        lines.append('END\n')
+        pdb_file.write_text(''.join(lines))
+
+        output = add_chains(pdb_file, first_res=1, last_res=5)
+
+        u = mda.Universe(str(output))
+        chain_by_resid = {res.resid: res.atoms.chainIDs[0] for res in u.residues}
+        # Residues 1-4 are chain A; the split boundary (5) and beyond are chain B.
+        assert [chain_by_resid[r] for r in range(1, 5)] == ['A', 'A', 'A', 'A']
+        assert [chain_by_resid[r] for r in range(5, 11)] == ['B'] * 6
+
 
 class TestImports:
     """Test that module imports work correctly."""

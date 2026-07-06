@@ -6,7 +6,6 @@ with replica exchange across different pH values. It uses Parsl for distributed
 execution of simulation replicas.
 """
 
-import logging
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +16,6 @@ import numpy as np
 import parsl
 from openmm.app import AmberInpcrdFile, AmberPrmtopFile, Topology
 from parsl import Config, python_app
-from pythonjsonlogger.json import JsonFormatter
 
 from .constantph.constantph import ConstantPH
 from .constantph.logging import setup_task_logger
@@ -115,32 +113,6 @@ def run_cph_sim(
             f'Step complete {i}!',
             extra={'path': path, 'pH': pH, 'step': i, 'resnames': current_variants},
         )
-
-
-def setup_worker_logger(self, worker_id: str, log_dir: Path) -> logging.Logger:
-    """Set up a JSON logger for a simulation worker.
-
-    Creates a logger that writes JSON-formatted log entries to a
-    worker-specific file.
-
-    Args:
-        worker_id: Unique identifier for the worker.
-        log_dir: Directory path where log files will be written.
-
-    Returns:
-        Configured logging.Logger instance for the worker.
-    """
-    log_path = log_dir / f'{worker_id}.jsonl'
-
-    logger = logging.getLogger(f'task.{worker_id}')
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
-
-    handler = logging.FileHandler(log_path)
-    handler.setFormatter(JsonFormatter(task_id=worker_id))
-    logger.addHandler(handler)
-
-    return logger
 
 
 class ConstantPHEnsemble:

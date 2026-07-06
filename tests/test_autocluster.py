@@ -4,7 +4,6 @@ Unit tests for autocluster.py module
 
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import polars as pl
@@ -91,6 +90,24 @@ class TestGenericDataloader:
             loader = GenericDataloader([file])
             # Should reshape to (10, 12) since 3*4 = 12
             assert loader.data.shape == (10, 12)
+
+    def test_single_row_not_reshaped(self):
+        """A single-row multi-dim array is not flattened (load_data 80->exit).
+
+        vstack of one file yields a single row (``len == 1``), so the
+        ``len(self.data_array) > 2`` reshape guard is skipped and the trailing
+        dimensions survive instead of being erroneously collapsed to (1, 12).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_data = np.random.rand(1, 3, 4)
+            file = Path(tmpdir) / 'data.npy'
+            np.save(file, test_data)
+
+            loader = GenericDataloader([file])
+
+            # The >2-row reshape did not run: shape and values are preserved.
+            assert loader.data.shape == (1, 3, 4)
+            assert np.array_equal(loader.data, test_data)
 
 
 class TestPeriodicDataloader:
@@ -289,32 +306,66 @@ class TestAutoKMeans:
             assert len(df) == 10
 
 
-class TestAutoKMeansRun:
-    """Test AutoKMeans.run method (lines 233-237)."""
+class TestAutoKMeansGuards:
+    """Test AutoKMeans guard clauses."""
 
-    @patch('molecular_simulations.analysis.autocluster.silhouette_score')
-    @patch('molecular_simulations.analysis.autocluster.KMeans')
-    def test_run_calls_all_steps(self, mock_kmeans, mock_silhouette):
-        """Test that run() executes the full workflow."""
+    def test_map_centers_without_centers_raises(self):
+        """map_centers_to_frames guards against an absent clustering result.
+
+        When sweep_n_clusters has not produced any centers (``self.centers`` is
+        None -- the state left behind by a sweep that found no valid
+        clustering), map_centers_to_frames raises a clear ValueError rather than
+        iterating over nothing.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
-            test_data = np.random.rand(20, 5)
-            file = Path(tmpdir) / 'data.npy'
-            np.save(file, test_data)
+            np.save(Path(tmpdir) / 'data.npy', np.random.rand(10, 5))
+            auto_km = AutoKMeans(tmpdir)
+            auto_km.centers = None
 
-            mock_kmeans_instance = MagicMock()
-            mock_kmeans_instance.fit_predict.return_value = np.array([0, 1] * 10)
-            mock_kmeans_instance.cluster_centers_ = np.array([[0, 0], [1, 1]])
-            mock_kmeans.return_value = mock_kmeans_instance
-            mock_silhouette.return_value = 0.5
+            with pytest.raises(ValueError, match='sweep_n_clusters'):
+                auto_km.map_centers_to_frames()
 
-            auto_km = AutoKMeans(tmpdir, max_clusters=4, stride=1)
-            auto_km.run()
 
-            # Verify results were saved
-            assert (Path(tmpdir) / 'cluster_centers.json').exists()
-            assert (Path(tmpdir) / 'cluster_assignments.parquet').exists()
-            assert hasattr(auto_km, 'labels')
-            assert hasattr(auto_km, 'cluster_centers')
+class TestAutoKMeansRun:
+    """Test AutoKMeans.run end-to-end against real sklearn (no mocks)."""
+
+    def test_run_end_to_end(self, tmp_path):
+        """run() reduces, clusters, maps centers and writes real outputs."""
+        # Two well-separated 5D blobs stored as two "replica" files. PCA + KMeans
+        # over a silhouette sweep should recover exactly two clusters.
+        rng = np.random.default_rng(0)
+        blob0 = rng.normal(0.0, 0.1, (10, 5))
+        blob1 = rng.normal(5.0, 0.1, (10, 5))
+        np.save(tmp_path / 'rep0.npy', blob0)
+        np.save(tmp_path / 'rep1.npy', blob1)
+
+        auto_km = AutoKMeans(str(tmp_path), max_clusters=5, stride=1, random_state=42)
+        auto_km.run()
+
+        # Real cluster results were assigned.
+        assert auto_km.labels is not None
+        assert auto_km.centers is not None
+        assert len(auto_km.labels) == 20
+        # The two clean blobs are best described by 2 clusters.
+        assert len(np.unique(auto_km.labels)) == 2
+
+        # Centers were mapped to real (replica, frame) coordinates.
+        assert len(auto_km.cluster_centers) == 2
+        for value in auto_km.cluster_centers.values():
+            assert isinstance(value, tuple) and len(value) == 2
+            rep, frame = value
+            assert 0 <= rep < 2
+            assert 0 <= frame < 10
+
+        # Output files were written to disk.
+        assert (tmp_path / 'cluster_centers.json').exists()
+        assignments = tmp_path / 'cluster_assignments.parquet'
+        assert assignments.exists()
+
+        df = pl.read_parquet(assignments)
+        assert set(df.columns) == {'system', 'frame', 'cluster'}
+        assert len(df) == 20
+        assert set(df['cluster'].to_list()) == set(np.unique(auto_km.labels).tolist())
 
 
 class TestAutoKMeansSaveLabelsNonUniform:

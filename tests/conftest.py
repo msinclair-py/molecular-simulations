@@ -400,6 +400,73 @@ def real_amber_explicit_files(tmp_path: Path) -> dict:
     return files
 
 
+@pytest.fixture
+def real_amber_titratable_files(tmp_path: Path) -> dict:
+    """Provide a real AMBER system containing titratable residues.
+
+    Unlike :func:`real_amber_system_files` (Ace-Ala-Nme, which has no titratable
+    residues), this is a capped Ace-Lys-Asp-Nme tetrapeptide generated with tleap
+    (``leaprc.protein.ff19SB``). The OpenMM topology has residues
+    ``[ACE, LYS, ASP, NME]`` at indices 0-3 (46 atoms) and MDAnalysis identifies
+    the same protein residues, so ``ConstantPHEnsemble.build_dicts`` finds LYS at
+    index 1 and ASP at index 2 (ACE/NME are excluded as termini). The files are
+    copied into a per-test ``tmp_path`` and named ``system.prmtop`` /
+    ``system.inpcrd`` so callers that hardcode those names (build_dicts) work
+    directly.
+
+    Returns:
+        Dictionary with ``prmtop``, ``inpcrd``, ``pdb`` and ``path`` (the temp
+        directory). ``prmtop``/``inpcrd`` are the ``system.*`` copies.
+    """
+    import shutil
+
+    src = get_test_data_dir() / 'amber'
+    shutil.copy(src / 'lys_asp.prmtop', tmp_path / 'system.prmtop')
+    shutil.copy(src / 'lys_asp.inpcrd', tmp_path / 'system.inpcrd')
+    shutil.copy(src / 'lys_asp.pdb', tmp_path / 'lys_asp.pdb')
+
+    return {
+        'prmtop': tmp_path / 'system.prmtop',
+        'inpcrd': tmp_path / 'system.inpcrd',
+        'pdb': tmp_path / 'lys_asp.pdb',
+        'path': tmp_path,
+    }
+
+
+@pytest.fixture
+def real_amber_titratable_solvated_files(tmp_path: Path) -> dict:
+    """Provide a real, SOLVATED titratable AMBER system for full ConstantPH runs.
+
+    Unlike :func:`real_amber_titratable_files` (the same Ace-Lys-Asp-Nme peptide
+    in vacuum, used for the lightweight ``build_dicts`` residue-identification
+    logic), this is that peptide solvated in a ~3.5 nm TIP3P box (2620 atoms,
+    net-neutral, generated with tleap ``leaprc.protein.ff19SB`` +
+    ``leaprc.water.tip3p``). It carries periodic box vectors, so the explicit
+    PME system that ``ConstantPH.__init__`` builds (nonbondedCutoff 0.9 nm) is
+    valid, and ParmEd can strip the water/ions down to the 46-atom implicit
+    system. This lets the WHOLE ``ConstantPH.__init__`` pipeline run for real in
+    CI with no AmberTools at runtime (the fixture was pre-built with tleap).
+
+    Titratable residues are LYS (index 1) and ASP (index 2); ACE/NME are the
+    excluded termini.
+
+    Returns:
+        Dictionary with ``prmtop``, ``inpcrd`` (copied to ``system.*``) and
+        ``path`` (the temp directory).
+    """
+    import shutil
+
+    src = get_test_data_dir() / 'amber'
+    shutil.copy(src / 'lys_asp_solv.prmtop', tmp_path / 'system.prmtop')
+    shutil.copy(src / 'lys_asp_solv.inpcrd', tmp_path / 'system.inpcrd')
+
+    return {
+        'prmtop': tmp_path / 'system.prmtop',
+        'inpcrd': tmp_path / 'system.inpcrd',
+        'path': tmp_path,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Ligand/SDF Fixtures
 # ---------------------------------------------------------------------------
@@ -475,3 +542,89 @@ def skip_without_rdkit(real_rdkit_available):
     """Skip test if RDKit is not available."""
     if not real_rdkit_available:
         pytest.skip('RDKit not available')
+
+
+# ---------------------------------------------------------------------------
+# Stub AmberTools (no real binaries required)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_amberhome(tmp_path: Path, monkeypatch) -> Path:
+    """Provide a fake ``AMBERHOME`` whose ``bin/`` holds stub executables.
+
+    The build classes (:class:`ImplicitSolvent`, :class:`ExplicitSolvent`)
+    locate ``tleap``/``cpptraj`` under ``AMBERHOME/bin`` and invoke them through
+    real ``subprocess.run`` calls. These stubs are genuine executables -- not
+    mocks -- so the build code's REAL input-file generation and command
+    construction run end to end without an AmberTools install. They simply do
+    not produce valid topology/coordinate output, so tests that need real AMBER
+    output stay gated behind :func:`skip_without_amber`.
+
+    Each stub records what it received so tests can read it back:
+
+    * ``tleap`` copies the file passed via ``-f`` to ``AMBERHOME/tleap_input.txt``
+    * ``cpptraj`` writes the stdin it is piped to ``AMBERHOME/cpptraj_input.txt``
+    * ``pdb4amber`` writes its argv to ``AMBERHOME/pdb4amber_args.txt``
+
+    Returns:
+        Path to the fake ``AMBERHOME`` directory.
+    """
+    home = tmp_path / 'amber'
+    bindir = home / 'bin'
+    bindir.mkdir(parents=True)
+
+    stubs = {
+        'tleap': (
+            '#!/bin/sh\n'
+            f'out="{home}/tleap_input.txt"\n'
+            'while [ $# -gt 0 ]; do\n'
+            '  case "$1" in\n'
+            '    -f) shift; cp "$1" "$out" ;;\n'
+            '  esac\n'
+            '  shift\n'
+            'done\n'
+            'exit 0\n'
+        ),
+        'cpptraj': (f'#!/bin/sh\ncat > "{home}/cpptraj_input.txt"\nexit 0\n'),
+        'pdb4amber': (f'#!/bin/sh\necho "$@" > "{home}/pdb4amber_args.txt"\nexit 0\n'),
+    }
+    for name, script in stubs.items():
+        exe = bindir / name
+        exe.write_text(script)
+        exe.chmod(0o755)
+
+    monkeypatch.setenv('AMBERHOME', str(home))
+    return home
+
+
+# ---------------------------------------------------------------------------
+# Parsl Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def local_parsl_config(tmp_path):
+    """A real, lightweight Parsl Config backed by an in-process thread pool.
+
+    ThreadPoolExecutor needs no worker processes, ports, or scheduler, so a real
+    DataFlowKernel can be loaded and cleaned up inside a test -- letting code
+    that submits Parsl apps actually run and return real futures instead of
+    being mocked. The fixture clears any leftover global Parsl state on teardown
+    so loading Parsl in one test cannot leak into the next.
+    """
+    import parsl
+    from parsl.config import Config
+    from parsl.executors import ThreadPoolExecutor
+
+    config = Config(
+        run_dir=str(tmp_path / 'runinfo'),
+        executors=[ThreadPoolExecutor(max_threads=2, label='local_threads')],
+    )
+    yield config
+
+    # Ensure a clean global Parsl state regardless of how the test exited.
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        parsl.clear()

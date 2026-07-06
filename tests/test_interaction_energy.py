@@ -1,13 +1,11 @@
 """
 Unit tests for analysis/interaction_energy.py module
 
-This module contains both unit tests (with minimal mocks) and integration tests.
-Tests use real OpenMM when available, with conditional skips for environments
-without OpenMM installed.
+All tests run real OpenMM code on the CPU platform, with conditional skips for
+environments without OpenMM installed. No mocks or patches are used.
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -188,7 +186,7 @@ class TestInteractionEnergyAbstractIntegration:
 
 
 # ============================================================================
-# Unit tests with minimal mocking
+# Real unit tests against the two-chain salt-bridge PDB
 # ============================================================================
 
 
@@ -311,32 +309,60 @@ class TestStaticInteractionEnergy:
         assert result[1, 0] == -10.0
 
     def test_energy_static_method(self):
-        """Test energy static method sets the scaling parameters.
+        """Test energy static method sets the scaling parameters on a real
+        Context and returns a real potential energy.
 
-        Uses a mock Context: a real Context requires the fully assembled
-        custom-force system, which is exercised end-to-end in
-        test_compute_real_interaction_energy below.
+        Builds a tiny two-particle System whose NonbondedForce carries the
+        four scale global parameters, runs it on the real CPU platform, and
+        verifies energy() actually pushes the requested scale values onto the
+        context and reads back a finite potential energy.
         """
+        from openmm import Context, NonbondedForce, Platform, System, VerletIntegrator
+        from openmm.unit import (
+            kilojoules_per_mole,
+            nanometer,
+            picosecond,
+        )
+
         from molecular_simulations.analysis.interaction_energy import (
             StaticInteractionEnergy,
         )
 
-        mock_context = MagicMock()
-        mock_energy = MagicMock()
-        mock_energy.getPotentialEnergy.return_value = 100.0
-        mock_context.getState.return_value = mock_energy
+        system = System()
+        system.addParticle(1.0)
+        system.addParticle(1.0)
+        nb = NonbondedForce()
+        nb.addParticle(1.0, 0.3, 0.5)
+        nb.addParticle(-1.0, 0.3, 0.5)
+        for name in (
+            'solute_coulomb_scale',
+            'solute_lj_scale',
+            'solvent_coulomb_scale',
+            'solvent_lj_scale',
+        ):
+            nb.addGlobalParameter(name, 1)
+        nb.setForceGroup(0)
+        system.addForce(nb)
+
+        integrator = VerletIntegrator(0.001 * picosecond)
+        context = Context(system, integrator, Platform.getPlatformByName('CPU'))
+        context.setPositions([[0.0, 0.0, 0.0], [0.4, 0.0, 0.0]] * nanometer)
 
         result = StaticInteractionEnergy.energy(
-            mock_context,
+            context,
             solute_coulomb_scale=1,
             solute_lj_scale=0,
             solvent_coulomb_scale=1,
             solvent_lj_scale=0,
         )
 
-        mock_context.setParameter.assert_any_call('solute_coulomb_scale', 1)
-        mock_context.setParameter.assert_any_call('solute_lj_scale', 0)
-        assert result == 100.0
+        # The static method really set the parameters on the live context.
+        assert context.getParameter('solute_coulomb_scale') == 1
+        assert context.getParameter('solute_lj_scale') == 0
+        assert context.getParameter('solvent_coulomb_scale') == 1
+        assert context.getParameter('solvent_lj_scale') == 0
+        # And it returned a real, finite potential energy.
+        assert np.isfinite(result.value_in_unit(kilojoules_per_mole))
 
     def test_fix_pdb(self, two_chain_pdb):
         """Test fix_pdb runs PDBFixer and returns a usable topology."""
@@ -368,54 +394,59 @@ class TestStaticInteractionEnergy:
 
 
 class TestInteractionEnergyFrame:
-    """Test suite for InteractionEnergyFrame class"""
+    """Real InteractionEnergyFrame tests against the two-chain PDB."""
 
-    @patch('molecular_simulations.analysis.interaction_energy.Platform')
-    def test_interaction_energy_frame_init(self, mock_platform):
-        """Test InteractionEnergyFrame initialization"""
+    @staticmethod
+    def _real_system_and_top(pdb):
+        from openmm.app import ForceField, PDBFile
+
+        parsed = PDBFile(str(pdb))
+        ff = ForceField('amber14-all.xml', 'implicit/gbn2.xml')
+        system = ff.createSystem(
+            parsed.topology, soluteDielectric=1.0, solventDielectric=80.0
+        )
+        return system, parsed.topology
+
+    def test_interaction_energy_frame_init(self, two_chain_pdb):
+        """Test InteractionEnergyFrame stores a real system, topology, params."""
         from molecular_simulations.analysis.interaction_energy import (
             InteractionEnergyFrame,
         )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        mock_system = MagicMock()
-        mock_topology = MagicMock()
+        system, topology = self._real_system_and_top(two_chain_pdb)
 
         ief = InteractionEnergyFrame(
-            system=mock_system,
-            top=mock_topology,
-            chain='C',
+            system=system,
+            top=topology,
+            chain='B',
             platform='CPU',
             first_residue=5,
             last_residue=15,
         )
 
-        assert ief.system == mock_system
-        assert ief.top == mock_topology
-        assert ief.chain == 'C'
+        assert ief.system is system
+        assert ief.top is topology
+        assert ief.chain == 'B'
         assert ief.first == 5
         assert ief.last == 15
 
-    @patch('molecular_simulations.analysis.interaction_energy.Platform')
-    def test_interaction_energy_frame_get_system(self, mock_platform):
-        """Test InteractionEnergyFrame get_system method"""
+    def test_interaction_energy_frame_get_system(self, two_chain_pdb):
+        """Test get_system returns the pre-built system and sets the selection."""
         from molecular_simulations.analysis.interaction_energy import (
             InteractionEnergyFrame,
         )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        system, topology = self._real_system_and_top(two_chain_pdb)
 
-        mock_system = MagicMock()
-        mock_topology = MagicMock()
-        mock_topology.atoms.return_value = []
-
-        ief = InteractionEnergyFrame(system=mock_system, top=mock_topology)
+        ief = InteractionEnergyFrame(
+            system=system, top=topology, chain='A', platform='CPU'
+        )
 
         result = ief.get_system()
 
-        assert result == mock_system
-        assert hasattr(ief, 'selection')
+        assert result is system
+        # Chain A is the first 34 atoms of the real two-chain topology.
+        assert ief.selection == list(range(34))
 
 
 class TestDynamicInteractionEnergy:
@@ -507,94 +538,67 @@ class TestInteractionEnergyAbstract:
 
 
 class TestDynamicInteractionEnergyAdditional:
-    """Additional tests for DynamicInteractionEnergy class."""
+    """Additional real tests for DynamicInteractionEnergy class."""
 
-    def test_setup_pbar(self):
-        """Test setup_pbar creates progress bar."""
-        with (
-            patch(
-                'molecular_simulations.analysis.interaction_energy.Platform'
-            ) as mock_platform,
-            patch(
-                'molecular_simulations.analysis.interaction_energy.tqdm'
-            ) as mock_tqdm,
-        ):
-            mock_platform.getPlatformByName.return_value = MagicMock()
+    def test_setup_pbar(self, two_chain_trajectory):
+        """Test setup_pbar creates a real tqdm bar sized to the trajectory."""
+        from molecular_simulations.analysis.interaction_energy import (
+            DynamicInteractionEnergy,
+        )
 
-            from molecular_simulations.analysis.interaction_energy import (
-                DynamicInteractionEnergy,
-            )
+        die = DynamicInteractionEnergy(
+            top=str(two_chain_trajectory['top']),
+            traj=str(two_chain_trajectory['traj']),
+            chain='A',
+            platform='CPU',
+        )
 
-            die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
-            die.coordinates = np.zeros((100, 500, 3))
+        die.setup_pbar()
 
-            die.setup_pbar()
+        # Real trajectory has 5 frames -> the real progress bar totals 5.
+        assert die.pbar.total == 5
+        die.pbar.close()
 
-            mock_tqdm.assert_called_once_with(total=100, position=0, leave=False)
+    def test_compute_energies_no_progress_bar(self, two_chain_trajectory):
+        """Test compute_energies honours stride with the real per-frame engine."""
+        from molecular_simulations.analysis.interaction_energy import (
+            DynamicInteractionEnergy,
+        )
 
-    def test_compute_energies_no_progress_bar(self):
-        """Test compute_energies without progress bar."""
-        with patch(
-            'molecular_simulations.analysis.interaction_energy.Platform'
-        ) as mock_platform:
-            mock_platform.getPlatformByName.return_value = MagicMock()
+        die = DynamicInteractionEnergy(
+            top=str(two_chain_trajectory['top']),
+            traj=str(two_chain_trajectory['traj']),
+            stride=2,
+            chain='A',
+            platform='CPU',
+            progress_bar=False,
+        )
 
-            from molecular_simulations.analysis.interaction_energy import (
-                DynamicInteractionEnergy,
-            )
+        die.compute_energies()
 
-            die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
-            die.coordinates = np.zeros((10, 500, 3))
-            die.stride = 2
-            die.progress = False
+        # 5 frames with stride 2 -> 2 computed energies, all finite.
+        assert die.energies.shape == (2, 2)
+        assert np.isfinite(die.energies).all()
 
-            mock_ie = MagicMock()
-            mock_ie.lj = -10.0
-            mock_ie.coulomb = -20.0
-            die.IE = mock_ie
+    def test_compute_energies_with_progress_bar(self, two_chain_trajectory):
+        """Test compute_energies with the real tqdm progress bar enabled."""
+        from molecular_simulations.analysis.interaction_energy import (
+            DynamicInteractionEnergy,
+        )
 
-            die.compute_energies()
+        die = DynamicInteractionEnergy(
+            top=str(two_chain_trajectory['top']),
+            traj=str(two_chain_trajectory['traj']),
+            stride=1,
+            chain='A',
+            platform='CPU',
+            progress_bar=True,
+        )
 
-            # With stride=2 and 10 frames, should compute 5 energies
-            assert die.energies.shape == (5, 2)
-            assert mock_ie.compute.call_count == 5
-            # Check that energies were filled
-            assert np.all(die.energies[:, 0] == -10.0)
-            assert np.all(die.energies[:, 1] == -20.0)
+        die.compute_energies()
 
-    def test_compute_energies_with_progress_bar(self):
-        """Test compute_energies with progress bar enabled."""
-        with (
-            patch(
-                'molecular_simulations.analysis.interaction_energy.Platform'
-            ) as mock_platform,
-            patch(
-                'molecular_simulations.analysis.interaction_energy.tqdm'
-            ) as mock_tqdm,
-        ):
-            mock_platform.getPlatformByName.return_value = MagicMock()
-            mock_pbar = MagicMock()
-            mock_tqdm.return_value = mock_pbar
-
-            from molecular_simulations.analysis.interaction_energy import (
-                DynamicInteractionEnergy,
-            )
-
-            die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
-            die.coordinates = np.zeros((10, 500, 3))
-            die.stride = 1
-            die.progress = True
-
-            mock_ie = MagicMock()
-            mock_ie.lj = -5.0
-            mock_ie.coulomb = -15.0
-            die.IE = mock_ie
-
-            die.compute_energies()
-
-            assert die.energies.shape == (10, 2)
-            assert mock_pbar.update.call_count == 10
-            mock_pbar.close.assert_called_once()
+        assert die.energies.shape == (5, 2)
+        assert np.isfinite(die.energies).all()
 
     def test_load_traj(self, two_chain_trajectory):
         """Test load_traj loads real trajectory coordinates with mdtraj."""
@@ -651,307 +655,106 @@ class TestDynamicInteractionEnergyBuildSystem:
             die.build_system(Path('test.gro'))
 
 
-class TestDynamicInteractionEnergySetupPbar:
-    """Test suite for DynamicInteractionEnergy.setup_pbar method."""
-
-    def test_setup_pbar_creates_progress_bar(self):
-        """Test setup_pbar creates a tqdm progress bar."""
-        with (
-            patch(
-                'molecular_simulations.analysis.interaction_energy.Platform'
-            ) as mock_platform,
-            patch(
-                'molecular_simulations.analysis.interaction_energy.tqdm'
-            ) as mock_tqdm,
-        ):
-            mock_platform.getPlatformByName.return_value = MagicMock()
-
-            from molecular_simulations.analysis.interaction_energy import (
-                DynamicInteractionEnergy,
-            )
-
-            die = DynamicInteractionEnergy.__new__(DynamicInteractionEnergy)
-            die.coordinates = np.random.rand(100, 50, 3)
-
-            die.setup_pbar()
-
-            mock_tqdm.assert_called_once_with(total=100, position=0, leave=False)
-
-
-class TestInteractionEnergyFrameGetSystem:
-    """Test suite for InteractionEnergyFrame.get_system method."""
-
-    def test_get_system_returns_existing_system(self):
-        """Test get_system returns the pre-built system."""
-        with patch(
-            'molecular_simulations.analysis.interaction_energy.Platform'
-        ) as mock_platform:
-            mock_platform.getPlatformByName.return_value = MagicMock()
-
-            from molecular_simulations.analysis.interaction_energy import (
-                InteractionEnergyFrame,
-            )
-
-            mock_system = MagicMock()
-            mock_top = MagicMock()
-            mock_top.atoms.return_value = []
-
-            ie = InteractionEnergyFrame(
-                system=mock_system, top=mock_top, chain='A', platform='CPU'
-            )
-
-            result = ie.get_system()
-            assert result is mock_system
-
-
-class TestStaticInteractionEnergyInteractions:
-    """Test suite for StaticInteractionEnergy.interactions property."""
-
-    def test_interactions_property(self):
-        """Test interactions returns stacked LJ and Coulomb."""
-        with patch(
-            'molecular_simulations.analysis.interaction_energy.Platform'
-        ) as mock_platform:
-            mock_platform.getPlatformByName.return_value = MagicMock()
-
-            from molecular_simulations.analysis.interaction_energy import (
-                StaticInteractionEnergy,
-            )
-
-            ie = StaticInteractionEnergy.__new__(StaticInteractionEnergy)
-            ie.lj = -5.0
-            ie.coulomb = -10.0
-
-            result = ie.interactions
-            assert result.shape == (2, 1)
-            assert np.isclose(result[0, 0], -5.0)
-            assert np.isclose(result[1, 0], -10.0)
-
-
-class _MockQuantity:
-    """Helper for mocking OpenMM Quantity arithmetic in tests."""
-
-    def __init__(self, value):
-        self._value = value
-
-    def __sub__(self, other):
-        return _MockQuantity(self._value - other._value)
-
-    def value_in_unit(self, unit):
-        return self._value
-
-
 class TestStaticInteractionEnergyGetSystem:
-    """Tests for StaticInteractionEnergy.get_system (lines 128-148)."""
+    """Real StaticInteractionEnergy.get_system tests, including the
+    ValueError -> fix_pdb fallback triggered by a real (hydrogen-stripped)
+    input rather than a mocked exception.
+    """
 
-    @patch('molecular_simulations.analysis.interaction_energy.ForceField')
-    @patch('molecular_simulations.analysis.interaction_energy.PDBFile')
-    @patch('molecular_simulations.analysis.interaction_energy.Platform')
-    def test_get_system_success(self, mock_platform, mock_pdb_cls, mock_ff_cls):
-        """Test get_system builds system on first try."""
+    def test_get_system_success(self, two_chain_pdb):
+        """get_system builds a real implicit-solvent System on the first try."""
+        from openmm import System
+
         from molecular_simulations.analysis.interaction_energy import (
             StaticInteractionEnergy,
         )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), chain='A', platform='CPU')
+        system = sie.get_system()
 
-        mock_pdb = MagicMock()
-        mock_pdb.positions = [[0, 0, 0]]
-        mock_pdb.topology = MagicMock()
-        mock_pdb_cls.return_value = mock_pdb
+        assert isinstance(system, System)
+        assert system.getNumParticles() == 58
+        # get_system stores the positions and computes the chain-A selection.
+        assert len(sie.positions) == 58
+        assert sie.selection == list(range(34))
 
-        mock_ff = MagicMock()
-        mock_system = MagicMock()
-        mock_ff.createSystem.return_value = mock_system
-        mock_ff_cls.return_value = mock_ff
+    def test_get_system_value_error_fallback(self, two_chain_pdb, tmp_path):
+        """get_system recovers from a real ValueError via fix_pdb.
 
-        sie = StaticInteractionEnergy.__new__(StaticInteractionEnergy)
-        sie.pdb = 'test.pdb'
-        sie.chain = 'A'
-        sie.first = None
-        sie.last = None
-        sie.platform = MagicMock()
+        A hydrogen-stripped copy of the complete structure makes the first
+        ``forcefield.createSystem`` raise ValueError ('missing H atoms');
+        the source then re-runs through PDBFixer, which re-adds the hydrogens,
+        so a real, complete 58-particle System is returned.
+        """
+        from openmm.app import Modeller, PDBFile
 
-        # Mock get_selection so it doesn't interfere
-        with patch.object(sie, 'get_selection'):
-            result = sie.get_system()
-
-        assert result is mock_system
-        assert sie.positions == [[0, 0, 0]]
-        mock_ff_cls.assert_called_once_with('amber14-all.xml', 'implicit/gbn2.xml')
-        mock_ff.createSystem.assert_called_once()
-
-    @patch('molecular_simulations.analysis.interaction_energy.ForceField')
-    @patch('molecular_simulations.analysis.interaction_energy.PDBFile')
-    @patch('molecular_simulations.analysis.interaction_energy.Platform')
-    def test_get_system_value_error_fallback(
-        self, mock_platform, mock_pdb_cls, mock_ff_cls
-    ):
-        """Test get_system falls back to fix_pdb on ValueError."""
         from molecular_simulations.analysis.interaction_energy import (
             StaticInteractionEnergy,
         )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        parsed = PDBFile(str(two_chain_pdb))
+        modeller = Modeller(parsed.topology, parsed.positions)
+        hydrogens = [
+            a
+            for a in modeller.topology.atoms()
+            if a.element is not None and a.element.symbol == 'H'
+        ]
+        modeller.delete(hydrogens)
+        stripped = tmp_path / 'stripped.pdb'
+        with open(stripped, 'w') as fh:
+            PDBFile.writeFile(modeller.topology, modeller.positions, fh)
 
-        mock_pdb = MagicMock()
-        mock_pdb.positions = [[0, 0, 0]]
-        mock_pdb.topology = MagicMock()
-        mock_pdb_cls.return_value = mock_pdb
+        # Sanity: the stripped structure really is missing its hydrogens.
+        assert modeller.topology.getNumAtoms() == 27
 
-        mock_ff = MagicMock()
-        mock_system = MagicMock()
-        # First call raises ValueError, second succeeds
-        mock_ff.createSystem.side_effect = [ValueError('bad topology'), mock_system]
-        mock_ff_cls.return_value = mock_ff
+        sie = StaticInteractionEnergy(pdb=str(stripped), chain='A', platform='CPU')
+        system = sie.get_system()
 
-        sie = StaticInteractionEnergy.__new__(StaticInteractionEnergy)
-        sie.pdb = 'test.pdb'
-        sie.chain = 'A'
-        sie.first = None
-        sie.last = None
-        sie.platform = MagicMock()
-
-        fixed_positions = [[1, 1, 1]]
-        fixed_topology = MagicMock()
-
-        with (
-            patch.object(
-                sie, 'fix_pdb', return_value=(fixed_positions, fixed_topology)
-            ),
-            patch.object(sie, 'get_selection'),
-        ):
-            result = sie.get_system()
-
-        assert result is mock_system
-        assert sie.positions == fixed_positions
-        assert mock_ff.createSystem.call_count == 2
+        # fix_pdb re-added the hydrogens -> full 58-particle system restored.
+        assert system.getNumParticles() == 58
+        assert len(sie.positions) == 58
 
 
 class TestStaticInteractionEnergyCompute:
-    """Tests for StaticInteractionEnergy.compute (lines 160-215)."""
+    """Real StaticInteractionEnergy.compute tests on the two-chain PDB."""
 
-    @patch('molecular_simulations.analysis.interaction_energy.Context')
-    @patch('molecular_simulations.analysis.interaction_energy.VerletIntegrator')
-    @patch('molecular_simulations.analysis.interaction_energy.Platform')
-    def test_compute_full(self, mock_platform, mock_integrator_cls, mock_context_cls):
-        """Test compute runs full interaction energy calculation."""
-        from openmm import NonbondedForce
+    def test_compute_full(self, two_chain_pdb):
+        """compute fills real, finite LJ and Coulomb interaction energies."""
+        from molecular_simulations.analysis.interaction_energy import (
+            StaticInteractionEnergy,
+        )
 
-        import molecular_simulations.analysis.interaction_energy as ie_mod
+        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), chain='A', platform='CPU')
+        sie.compute()
 
-        # Inject NonbondedForce into module namespace (missing import in source)
-        ie_mod.NonbondedForce = NonbondedForce
+        assert np.isfinite(sie.lj)
+        assert np.isfinite(sie.coulomb)
+        # The Lys-Asp salt bridge across the interface is attractive.
+        assert sie.coulomb < 0.0
+        assert sie.interactions.shape == (2, 1)
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        # Create mock NonbondedForce that passes isinstance check
-        mock_nb_force = MagicMock(spec=NonbondedForce)
-        mock_nb_force.getNumParticles.return_value = 3
-        mock_nb_force.getParticleParameters.side_effect = [
-            (1.0, 0.3, 0.1),
-            (0.5, 0.3, 0.1),
-            (-1.5, 0.3, 0.1),
-        ]
-        mock_nb_force.getNumExceptions.return_value = 1
-        mock_nb_force.getExceptionParameters.return_value = (0, 1, 0.5, 0.3, 0.1)
-
-        # Other non-NB force
-        mock_other_force = MagicMock()
-
-        mock_system = MagicMock()
-        mock_system.getForces.return_value = [mock_nb_force, mock_other_force]
-
-        # Mock Context
-        mock_context = MagicMock()
-        mock_context_cls.return_value = mock_context
-
-        # Energy calls return MockQuantity
-        mock_state = MagicMock()
-        mock_state.getPotentialEnergy.return_value = _MockQuantity(100.0)
-        mock_context.getState.return_value = mock_state
+    def test_compute_with_explicit_positions(self, two_chain_pdb):
+        """compute uses explicitly provided positions for a real calculation."""
+        from openmm.app import PDBFile
 
         from molecular_simulations.analysis.interaction_energy import (
             StaticInteractionEnergy,
         )
 
-        sie = StaticInteractionEnergy.__new__(StaticInteractionEnergy)
-        sie.pdb = 'test.pdb'
-        sie.chain = 'A'
-        sie.platform = MagicMock()
-        sie.first = None
-        sie.last = None
-        sie.selection = [0, 1]
-        sie.positions = [[0, 0, 0], [1, 1, 1], [2, 2, 2]]
+        sie = StaticInteractionEnergy(pdb=str(two_chain_pdb), chain='A', platform='CPU')
 
-        with patch.object(sie, 'get_system', return_value=mock_system):
-            sie.compute()
+        # Feed the real PDB coordinates explicitly; the result must match a
+        # default compute() that reads positions from the PDB itself.
+        explicit_positions = PDBFile(str(two_chain_pdb)).positions
+        sie.compute(positions=explicit_positions)
+        lj_explicit, coulomb_explicit = sie.lj, sie.coulomb
 
-        # Check that energies were computed
-        assert sie.lj is not None
-        assert sie.coulomb is not None
-        # 6 energy calls: total_coulomb, solute_coulomb, solvent_coulomb,
-        #                 total_lj, solute_lj, solvent_lj
-        assert mock_context.getState.call_count == 6
-        # Other force should be set to group 2
-        mock_other_force.setForceGroup.assert_called_with(2)
+        sie.compute()
 
-    @patch('molecular_simulations.analysis.interaction_energy.Context')
-    @patch('molecular_simulations.analysis.interaction_energy.VerletIntegrator')
-    @patch('molecular_simulations.analysis.interaction_energy.Platform')
-    def test_compute_with_explicit_positions(
-        self, mock_platform, mock_integrator_cls, mock_context_cls
-    ):
-        """Test compute with explicitly provided positions."""
-        from openmm import NonbondedForce
-
-        import molecular_simulations.analysis.interaction_energy as ie_mod
-
-        ie_mod.NonbondedForce = NonbondedForce
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        mock_nb_force = MagicMock(spec=NonbondedForce)
-        mock_nb_force.getNumParticles.return_value = 2
-        mock_nb_force.getParticleParameters.side_effect = [
-            (1.0, 0.3, 0.1),
-            (-1.0, 0.3, 0.1),
-        ]
-        mock_nb_force.getNumExceptions.return_value = 0
-
-        mock_system = MagicMock()
-        mock_system.getForces.return_value = [mock_nb_force]
-
-        mock_context = MagicMock()
-        mock_context_cls.return_value = mock_context
-
-        mock_state = MagicMock()
-        mock_state.getPotentialEnergy.return_value = _MockQuantity(50.0)
-        mock_context.getState.return_value = mock_state
-
-        from molecular_simulations.analysis.interaction_energy import (
-            StaticInteractionEnergy,
-        )
-
-        sie = StaticInteractionEnergy.__new__(StaticInteractionEnergy)
-        sie.pdb = 'test.pdb'
-        sie.chain = 'A'
-        sie.platform = MagicMock()
-        sie.first = None
-        sie.last = None
-        sie.selection = [0]
-        sie.positions = [[0, 0, 0], [1, 1, 1]]
-
-        explicit_positions = [[2, 2, 2], [3, 3, 3]]
-
-        with patch.object(sie, 'get_system', return_value=mock_system):
-            sie.compute(positions=explicit_positions)
-
-        # Should use explicit positions
-        mock_context.setPositions.assert_called_once_with(explicit_positions)
-        # All energy calls return 50.0, so: total - solute - solvent = 50 - 50 - 50 = -50
-        assert sie.coulomb == -50.0
-        assert sie.lj == -50.0
+        assert np.isfinite(lj_explicit)
+        assert np.isfinite(coulomb_explicit)
+        assert np.isclose(lj_explicit, sie.lj)
+        assert np.isclose(coulomb_explicit, sie.coulomb)
 
 
 if __name__ == '__main__':

@@ -7,7 +7,6 @@ used for free energy simulations.
 
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -26,6 +25,21 @@ def _has_opencl() -> bool:
         from openmm import Platform
 
         Platform.getPlatformByName('OpenCL')
+        return True
+    except Exception:
+        return False
+
+
+def _has_cuda() -> bool:
+    """Return True if a CUDA OpenMM platform is registered.
+
+    CI has no GPU, so the real-CUDA precision test must skip there rather
+    than fall back to mocking the Simulator engine.
+    """
+    try:
+        from openmm import Platform
+
+        Platform.getPlatformByName('CUDA')
         return True
     except Exception:
         return False
@@ -309,15 +323,15 @@ class TestEVBProperties:
 class TestEVBParslManagement:
     """Test suite for EVB Parsl initialization and shutdown."""
 
-    def test_initialize_loads_parsl(self, alanine_dipeptide_pdb) -> None:
-        """Test that initialize() loads the Parsl configuration."""
-        import molecular_simulations.simulate.free_energy as fe_module
+    def test_initialize_loads_parsl(
+        self, alanine_dipeptide_pdb, local_parsl_config
+    ) -> None:
+        """initialize() loads a real Parsl DataFlowKernel from the config."""
+        import parsl
+
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config = MagicMock()
-            mock_dfk = MagicMock()
-
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
@@ -325,29 +339,29 @@ class TestEVBParslManagement:
                 acceptor_atom='index 1',
                 reactive_atom='index 2',
                 reaction_coordinate=[-0.2, 0.2, 0.1],
-                parsl_config=mock_config,
+                parsl_config=local_parsl_config,
                 log_path=Path(tmpdir) / 'logs',
             )
 
             assert evb.dfk is None
 
-            # Patch parsl.load on the module
-            with patch.object(
-                fe_module.parsl, 'load', return_value=mock_dfk
-            ) as mock_load:
-                evb.initialize()
-                mock_load.assert_called_once_with(mock_config)
-                assert evb.dfk is mock_dfk
+            evb.initialize()
+            try:
+                # A real DataFlowKernel is now loaded and is the process-wide one.
+                assert evb.dfk is parsl.dfk()
+                assert evb._owns_parsl is True
+            finally:
+                evb.shutdown()
 
-    def test_shutdown_cleans_up_parsl(self, alanine_dipeptide_pdb) -> None:
-        """Test that shutdown() properly cleans up Parsl resources."""
-        import molecular_simulations.simulate.free_energy as fe_module
+    def test_shutdown_cleans_up_parsl(
+        self, alanine_dipeptide_pdb, local_parsl_config
+    ) -> None:
+        """shutdown() tears down the real DataFlowKernel it loaded."""
+        import parsl
+
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config = MagicMock()
-            mock_dfk = MagicMock()
-
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
@@ -355,27 +369,29 @@ class TestEVBParslManagement:
                 acceptor_atom='index 1',
                 reactive_atom='index 2',
                 reaction_coordinate=[-0.2, 0.2, 0.1],
-                parsl_config=mock_config,
+                parsl_config=local_parsl_config,
                 log_path=Path(tmpdir) / 'logs',
             )
 
-            with patch.object(fe_module.parsl, 'load', return_value=mock_dfk):
-                evb.initialize()
+            evb.initialize()
+            evb.shutdown()
 
-            with patch.object(fe_module.parsl, 'clear') as mock_clear:
-                evb.shutdown()
-                mock_dfk.cleanup.assert_called_once()
-                mock_clear.assert_called()
+            assert evb.dfk is None
+            assert evb._owns_parsl is False
+            # The global kernel is gone, so a fresh load() would be required.
+            from parsl.errors import NoDataFlowKernelError
+
+            with pytest.raises(NoDataFlowKernelError):
+                parsl.dfk()
                 assert evb.dfk is None
 
-    def test_shutdown_when_not_initialized(self, alanine_dipeptide_pdb) -> None:
-        """Test that shutdown() handles case when dfk is None."""
-        import molecular_simulations.simulate.free_energy as fe_module
+    def test_shutdown_when_not_initialized(
+        self, alanine_dipeptide_pdb, local_parsl_config
+    ) -> None:
+        """shutdown() is a no-op (no raise) when nothing was ever loaded."""
         from molecular_simulations.simulate.free_energy import EVB
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            mock_config = MagicMock()
-
             evb = EVB(
                 topology=alanine_dipeptide_pdb,
                 coordinates=alanine_dipeptide_pdb,
@@ -383,16 +399,14 @@ class TestEVBParslManagement:
                 acceptor_atom='index 1',
                 reactive_atom='index 2',
                 reaction_coordinate=[-0.2, 0.2, 0.1],
-                parsl_config=mock_config,
+                parsl_config=local_parsl_config,
                 log_path=Path(tmpdir) / 'logs',
             )
 
-            # Should not raise even when dfk is None
-            # parsl.clear() should NOT be called since dfk is None
-            with patch.object(fe_module.parsl, 'clear') as mock_clear:
-                evb.shutdown()
-                mock_clear.assert_not_called()
-                assert evb.dfk is None
+            # Never initialized: shutdown must not raise and must leave dfk None.
+            evb.shutdown()
+            assert evb.dfk is None
+            assert evb._owns_parsl is False
 
 
 class TestEVBCalculationInit:
@@ -441,51 +455,46 @@ class TestEVBCalculationInit:
         assert evb_calc.umbrella == umbrella
         assert evb_calc.morse_bond == morse_bond
 
-    def test_evb_calculation_cuda_precision(self) -> None:
-        """Test EVBCalculation sets mixed precision for CUDA platform."""
-        import molecular_simulations.simulate.free_energy as fe_module
+    @pytest.mark.skipif(
+        not _has_cuda(), reason='CUDA platform not available in this OpenMM build'
+    )
+    def test_evb_calculation_cuda_precision(self, real_amber_system_files) -> None:
+        """EVBCalculation sets mixed precision for the real CUDA platform."""
         from molecular_simulations.simulate.free_energy import EVBCalculation
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            topology = path / 'system.prmtop'
-            topology.write_text('mock topology')
-            coord_file = path / 'system.inpcrd'
-            coord_file.write_text('mock coordinates')
-            out_path = path / 'output'
-            rc_file = path / 'rc.log'
+        topology = real_amber_system_files['prmtop']
+        coord_file = real_amber_system_files['inpcrd']
+        out_path = real_amber_system_files['path'] / 'output'
+        rc_file = real_amber_system_files['path'] / 'rc.log'
 
-            umbrella = {
-                'atom_i': 0,
-                'atom_j': 1,
-                'atom_k': 2,
-                'k': 160000.0,
-                'k_path': 100.0,
-                'rc0': 0.1,
-            }
-            morse_bond = {
-                'atom_i': 0,
-                'atom_j': 2,
-                'D_e': 392.46,
-                'alpha': 13.275,
-                'r0': 0.1,
-            }
+        umbrella = {
+            'atom_i': 0,
+            'atom_j': 1,
+            'atom_k': 2,
+            'k': 160000.0,
+            'k_path': 100.0,
+            'rc0': 0.1,
+        }
+        morse_bond = {
+            'atom_i': 0,
+            'atom_j': 2,
+            'D_e': 392.46,
+            'alpha': 13.275,
+            'r0': 0.1,
+        }
 
-            mock_simulator = MagicMock()
-            mock_simulator.properties = {'Precision': 'mixed'}
-            with patch.object(fe_module, 'Simulator', return_value=mock_simulator):
-                evb_calc = EVBCalculation(
-                    topology=topology,
-                    coord_file=coord_file,
-                    out_path=out_path,
-                    rc_file=rc_file,
-                    umbrella=umbrella,
-                    morse_bond=morse_bond,
-                    platform='CUDA',
-                )
+        evb_calc = EVBCalculation(
+            topology=topology,
+            coord_file=coord_file,
+            out_path=out_path,
+            rc_file=rc_file,
+            umbrella=umbrella,
+            morse_bond=morse_bond,
+            platform='CUDA',
+        )
 
-                # Should set mixed precision
-                assert evb_calc.sim_engine.properties == {'Precision': 'mixed'}
+        # CUDA (like OpenCL) uses mixed precision.
+        assert evb_calc.sim_engine.properties == {'Precision': 'mixed'}
 
     def test_evb_calculation_cpu_no_precision(self, real_amber_system_files) -> None:
         """Test EVBCalculation does not set precision for CPU platform."""
@@ -814,6 +823,73 @@ class TestEVBPath:
             # EVB path should be parent of topology / 'evb'
             expected_path = alanine_dipeptide_pdb.parent / 'evb'
             assert evb.path == expected_path
+
+
+class TestEVBAnalyzerSaveMetadata:
+    """EVBAnalyzer.save_metadata writes a real, re-readable TOML file."""
+
+    def test_save_metadata_default_path(self, tmp_path) -> None:
+        try:
+            import tomllib
+        except ModuleNotFoundError:
+            import tomli as tomllib
+
+        from molecular_simulations.simulate.free_energy import EVBAnalyzer
+
+        analyzer = EVBAnalyzer(
+            log_path=tmp_path,
+            log_prefix='reactant',
+            k_umbrella=160000.0,
+            rc0_values=[0.0, 0.5, 1.0],
+        )
+
+        out = analyzer.save_metadata()
+
+        assert out == tmp_path / 'evb_metadata.toml'
+        assert out.exists()
+
+        # Round-trips through the standard TOML reader with real values.
+        with open(out, 'rb') as f:
+            meta = tomllib.load(f)
+
+        evb = meta['evb']
+        assert evb['log_path'] == str(tmp_path)
+        assert evb['log_prefix'] == 'reactant'
+        assert evb['k_umbrella'] == 160000.0
+        assert evb['rc0_values'] == [0.0, 0.5, 1.0]
+        # output_path defaults to log_path, so it is intentionally omitted.
+        assert 'output_path' not in evb
+
+    def test_save_metadata_custom_output_path(self, tmp_path) -> None:
+        try:
+            import tomllib
+        except ModuleNotFoundError:
+            import tomli as tomllib
+
+        from molecular_simulations.simulate.free_energy import EVBAnalyzer
+
+        out_dir = tmp_path / 'results'
+        out_dir.mkdir()
+        analyzer = EVBAnalyzer(
+            log_path=tmp_path,
+            log_prefix='product',
+            k_umbrella=1600.0,
+            rc0_values=[-0.2, 0.2],
+            output_path=out_dir,
+        )
+
+        # Write to an explicit, caller-supplied destination.
+        dest = tmp_path / 'meta.toml'
+        out = analyzer.save_metadata(output_path=dest)
+
+        assert out == dest
+        with open(dest, 'rb') as f:
+            evb = tomllib.load(f)['evb']
+
+        assert evb['log_prefix'] == 'product'
+        assert evb['rc0_values'] == [-0.2, 0.2]
+        # output_path differs from log_path, so it is recorded.
+        assert evb['output_path'] == str(out_dir)
 
 
 if __name__ == '__main__':

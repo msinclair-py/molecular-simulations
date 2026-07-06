@@ -482,6 +482,11 @@ class Simulator:
         integrator.setTemperature(T * kelvin)  # ty: ignore[unsupported-operator]
         n_steps = 1000
         length = self.heat_steps // n_steps
+        if length == 0:
+            # Fewer than n_steps heating steps requested: nothing to ramp, and
+            # computing the per-increment temperature step would divide by zero.
+            return simulation, integrator
+
         tstep = (self.temperature - T) / length
         for i in range(length):
             simulation.step(n_steps)

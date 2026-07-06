@@ -52,7 +52,11 @@ def trim_trajectory(
         else:
             align_idx = selection.select_atoms(align_sel).ix
 
-        positions = kabsch_align(positions, positions[0], align_idx)
+        # rust_simulation_tools.kabsch_align requires float64 coordinates and
+        # int64 indices; feed it those exact dtypes (the aligned result comes
+        # back float64, which MDAnalysis's Writer accepts).
+        coords = positions.astype(np.float64)
+        positions = kabsch_align(coords, coords[0], align_idx.astype(np.int64))
 
     if rewrap:
         pass

@@ -33,7 +33,7 @@ dependencies = [
     'pydantic',
     'python-json-logger>=3',
     'pyyaml',
-    'rust-simulation-tools',
+    'rust-simulation-tools>=0.2.5',
     'scikit-learn',
     'seaborn'
 ]

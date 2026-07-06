@@ -22,9 +22,35 @@ from pathlib import Path
 
 import pytest
 
-from molecular_simulations.build.build_amber import ExplicitSolvent, ImplicitSolvent
+from molecular_simulations.build.build_amber import (
+    ConstantPHSolvent,
+    ExplicitSolvent,
+    ImplicitSolvent,
+)
 
 PDB_TEXT = 'ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n'
+
+# A few titratable residues with distinct resids for renaming tests. Columns are
+# real PDB columns so both the byte-slice rewrite and MDAnalysis can read them.
+TITRATABLE_PDB_TEXT = (
+    'ATOM      1  N   ASP A   1       0.000   0.000   0.000  1.00  0.00           N  \n'
+    'ATOM      2  CA  ASP A   1       1.000   0.000   0.000  1.00  0.00           C  \n'
+    'ATOM      3  N   GLU A   2       2.000   0.000   0.000  1.00  0.00           N  \n'
+    'ATOM      4  CA  GLU A   2       3.000   0.000   0.000  1.00  0.00           C  \n'
+    'ATOM      5  N   HIS A   3       4.000   0.000   0.000  1.00  0.00           N  \n'
+    'ATOM      6  CA  HIS A   3       5.000   0.000   0.000  1.00  0.00           C  \n'
+    'ATOM      7  N   LYS A   4       6.000   0.000   0.000  1.00  0.00           N  \n'
+    'ATOM      8  CA  LYS A   4       7.000   0.000   0.000  1.00  0.00           C  \n'
+)
+
+
+def _resnames(pdb_path: Path) -> list[str]:
+    """Return the residue name of every ATOM line, in file order."""
+    return [
+        line[17:20].strip()
+        for line in Path(pdb_path).read_text().splitlines()
+        if line.startswith(('ATOM', 'HETATM'))
+    ]
 
 
 def _write_pdb(directory: Path, text: str = PDB_TEXT) -> Path:
@@ -305,6 +331,118 @@ class TestRealAmberBuild:
 
         assert builder.out.with_suffix('.prmtop').exists()
         assert builder.out.with_suffix('.inpcrd').exists()
+
+
+class TestConstantPHSolvent:
+    """Titratable-residue protonation logic for ConstantPHSolvent (no binary)."""
+
+    def _builder(self, tmp_path, monkeypatch, text, **kwargs):
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = tmp_path / 'prepared.pdb'
+        pdb.write_text(text)
+        builder = ConstantPHSolvent(path=tmp_path, pdb=str(pdb), **kwargs)
+        # protonate_titratable operates on the prepared (H-free) structure.
+        builder.pdb = str(pdb)
+        return builder
+
+    def test_sets_mbondi3_radii(self, tmp_path, monkeypatch):
+        builder = self._builder(tmp_path, monkeypatch, PDB_TEXT)
+        assert builder.pbradii == 'mbondi3'
+
+    def test_protonate_renames_all_titratable_by_default(self, tmp_path, monkeypatch):
+        builder = self._builder(tmp_path, monkeypatch, TITRATABLE_PDB_TEXT)
+
+        builder.protonate_titratable()
+
+        # ASP->ASH, GLU->GLH, HIS->HIP; LYS already protonated, left as-is.
+        assert _resnames(builder.pdb) == [
+            'ASH',
+            'ASH',
+            'GLH',
+            'GLH',
+            'HIP',
+            'HIP',
+            'LYS',
+            'LYS',
+        ]
+        assert builder.pdb.endswith('protein_protonated.pdb')
+        assert set(builder.protonated_residues) == {
+            'ASP1->ASH',
+            'GLU2->GLH',
+            'HIS3->HIP',
+        }
+
+    def test_protonate_preserves_other_columns(self, tmp_path, monkeypatch):
+        builder = self._builder(tmp_path, monkeypatch, TITRATABLE_PDB_TEXT)
+
+        builder.protonate_titratable()
+
+        # Only the 3-char residue-name field changes; coordinates/serials intact.
+        for original, rewritten in zip(
+            TITRATABLE_PDB_TEXT.splitlines(),
+            Path(builder.pdb).read_text().splitlines(),
+            strict=True,
+        ):
+            assert original[:17] == rewritten[:17]  # record, serial, atom name
+            assert original[20:] == rewritten[20:]  # chain, resid, coords, element
+
+    def test_protonate_respects_selection(self, tmp_path, monkeypatch):
+        builder = self._builder(
+            tmp_path, monkeypatch, TITRATABLE_PDB_TEXT, titratable_sel='resid 2'
+        )
+
+        builder.protonate_titratable()
+
+        # Only the selected GLU (resid 2) is protonated; ASP/HIS keep their names.
+        assert _resnames(builder.pdb) == [
+            'ASP',
+            'ASP',
+            'GLH',
+            'GLH',
+            'HIS',
+            'HIS',
+            'LYS',
+            'LYS',
+        ]
+        assert builder.protonated_residues == ['GLU2->GLH']
+
+    def test_assemble_system_writes_mbondi3(self, tmp_path, fake_amberhome):
+        pdb = _write_pdb(tmp_path)
+        builder = ConstantPHSolvent(path=tmp_path, pdb=str(pdb), debug=True)
+
+        builder.assemble_system(dim=60.0, num_ions=15)
+
+        content = (tmp_path / 'tleap.in').read_text()
+        assert 'set default pbradii mbondi3' in content
+
+
+class TestConstantPHSolventRealBuild:
+    """Skip-gated: ConstantPHSolvent builds a real protonated titratable system."""
+
+    def test_build_produces_protonated_asp(
+        self, tmp_path, two_chain_pdb, skip_without_amber
+    ):
+        home = _real_amberhome()
+        builder = ConstantPHSolvent(
+            path=tmp_path, pdb=str(two_chain_pdb), padding=10.0, amberhome=home
+        )
+        builder.build()
+
+        prmtop = builder.out.with_suffix('.prmtop')
+        assert prmtop.exists()
+        assert builder.out.with_suffix('.inpcrd').exists()
+        assert any(
+            tag.startswith('ASP') and tag.endswith('ASH')
+            for tag in builder.protonated_residues
+        )
+
+        # The built Asp (now ASH) must carry its labile HD2 as a real particle.
+        import parmed as pmd
+
+        parm = pmd.load_file(str(prmtop))
+        ash = [r for r in parm.residues if r.name == 'ASH']
+        assert ash, 'expected at least one ASH residue in the built system'
+        assert all(any(a.name == 'HD2' for a in r.atoms) for r in ash)
 
 
 if __name__ == '__main__':

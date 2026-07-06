@@ -301,7 +301,55 @@ class ConstantPH:
         print('Mapping protonation states to explicit system...')
         self._mapStatesToExplicitSystem()
 
+        # Fail loudly if the input was not built with titratable sites protonated
+        self._validateProtonatedInput()
+
         print('ConstantPHAmber initialization complete.')
+
+    def _validateProtonatedInput(self):
+        """Verify every titratable residue was built in its protonated form.
+
+        Constant pH represents a deprotonated state by zeroing the labile
+        proton's charge (a "ghost" hydrogen), so that proton must exist as a
+        real particle in the AMBER topology. tleap builds Asp/Glu deprotonated
+        and His singly protonated by default, which omits those protons; such a
+        system silently loses the proton (its parameters are dropped during
+        mapping) and cannot titrate correctly.
+
+        This detects that case by comparing the number of hydrogens actually
+        present in each titratable residue against the hydrogen count of its
+        fully protonated variant, and raises with actionable guidance.
+
+        Raises:
+            ValueError: If any titrated residue is missing its labile proton(s).
+        """
+        explicitResidues = list(self.explicitTopology.residues())
+        problems = []
+        for resIndex, titration in self.titrations.items():
+            protonatedState = titration.implicitStates[titration.protonatedIndex]
+            expectedH = protonatedState.numHydrogens
+            residue = explicitResidues[resIndex]
+            actualH = sum(
+                1 for atom in residue.atoms() if atom.element == element.hydrogen
+            )
+            if actualH < expectedH:
+                protonatedVariant = titration.variants[titration.protonatedIndex]
+                problems.append(
+                    f'  residue {resIndex} (built as {residue.name}) has {actualH} '
+                    f'hydrogens but its protonated variant {protonatedVariant} '
+                    f'requires {expectedH}; the labile proton is not a real particle'
+                )
+
+        if problems:
+            raise ValueError(
+                'Titratable residues are missing labile protons -- the input '
+                'system was not built in the fully protonated form required for '
+                'constant pH:\n'
+                + '\n'.join(problems)
+                + '\n\nRebuild the system with these residues protonated (ASP->ASH, '
+                'GLU->GLH, HIS->HIP), e.g. with '
+                'molecular_simulations.build.build_amber.ConstantPHSolvent.'
+            )
 
     def _buildImplicitSystemWithParmEd(self):
         """

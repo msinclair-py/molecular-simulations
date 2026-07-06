@@ -1,4 +1,3 @@
-# ruff: noqa: W293
 """AMBER system building module.
 
 This module provides classes for building molecular systems using AmberTools.
@@ -14,6 +13,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import ClassVar
 
 PathLike = str | Path
 OptPath = str | Path | None
@@ -371,19 +371,23 @@ class ExplicitSolvent(ImplicitSolvent):
         out_top = self.out.with_suffix('.prmtop')
         out_coor = self.out.with_suffix('.inpcrd')
 
+        pbradii = getattr(self, 'pbradii', None)
+        pbradii_line = f'set default pbradii {pbradii}' if pbradii else ''
+
         tleap_complex = f"""{tleap_ffs}
         PROT = loadpdb {self.pdb}
         {self.disulfides}
-        
+
         setbox PROT centers
         set PROT box {{{dim} {dim} {dim}}}
         solvatebox PROT {self.water_box} {{0 0 0}}
-        
+
         addions PROT Na+ 0
         addions PROT Cl- 0
-        
+
         addIonsRand PROT Na+ {num_ions} Cl- {num_ions}
-        
+
+        {pbradii_line}
         savepdb PROT {out_pdb}
         saveamberparm PROT {out_top} {out_coor}
         quit
@@ -445,3 +449,135 @@ class ExplicitSolvent(ImplicitSolvent):
             Number of each ion type (Na+ and Cl-) needed for 150mM.
         """
         return round(volume * 10e-6 * 9.03)
+
+
+class ConstantPHSolvent(ExplicitSolvent):
+    """Build an explicit-solvent AMBER system ready for constant-pH simulation.
+
+    Constant-pH here uses discrete protonation states with *ghost* hydrogens: a
+    deprotonated state is represented by zeroing the labile proton's charge, so
+    every titratable proton must exist as a real particle in the topology. tleap
+    builds residues in their default protonation (Asp/Glu deprotonated, His
+    singly protonated), which omits exactly those protons. This subclass renames
+    the selected titratable residues to their fully protonated variant before
+    tleap so the resulting prmtop carries the protonated superset:
+
+        ASP -> ASH, GLU -> GLH, HIS/HID/HIE -> HIP
+
+    Lys, Cys and Tyr are already built protonated by tleap and are left as-is
+    (LYS/CYS/TYR). Their neutral variants (LYN/CYM/TYD) are reached by the ghost
+    mechanism at run time, exactly like the renamed residues.
+
+    The titration variant lists themselves are unchanged -- only the *starting*
+    (fully protonated) topology differs. Whatever subset you build protonated
+    must match the residues you actually titrate (see
+    ``ConstantPHEnsemble.build_dicts`` / ``variant_sel``); ``ConstantPH`` will
+    raise if a titrated residue is missing its labile proton.
+
+    Args:
+        path: Directory path for output files.
+        pdb: Path to input PDB file.
+        titratable_sel: Optional MDAnalysis selection string restricting which
+            residues are protonated. If None (default), every standard titratable
+            residue (Asp/Glu/His) is protonated. Residues outside the selection
+            keep their default protonation.
+        **kwargs: Forwarded to :class:`ExplicitSolvent` (padding, disulfides,
+            force-field switches, amberhome, debug, ...).
+
+    Example:
+        >>> builder = ConstantPHSolvent(path='./build', pdb='protein.pdb')
+        >>> builder.build()  # system.prmtop has ASH/GLH/HIP protons present
+    """
+
+    #: Map from a residue's default name to its fully protonated variant.
+    PROTONATED_FORM: ClassVar[dict[str, str]] = {
+        'ASP': 'ASH',
+        'GLU': 'GLH',
+        'HIS': 'HIP',
+        'HID': 'HIP',
+        'HIE': 'HIP',
+    }
+
+    def __init__(
+        self,
+        path: PathLike,
+        pdb: PathLike,
+        titratable_sel: str | None = None,
+        **kwargs,
+    ):
+        """Initialize the ConstantPHSolvent builder."""
+        super().__init__(path=path, pdb=pdb, **kwargs)
+        self.titratable_sel = titratable_sel
+        # Constant pH evaluates GB (GBn2/OBC2) implicit solvent at run time, so
+        # the topology must carry mbondi3 GB radii; the default (mbondi) leaves
+        # some radii outside GBn2's valid neck-lookup range.
+        self.pbradii = 'mbondi3'
+
+    def build(self) -> None:
+        """Orchestrate the constant-pH-ready explicit solvent system build.
+
+        Identical to :meth:`ExplicitSolvent.build` but inserts a residue-renaming
+        step, after the structure is prepared for leap and before tleap assembles
+        the system, so titratable residues are built in their protonated form.
+        """
+        self.prep_pdb()
+        self.protonate_titratable()
+        dim = self.get_pdb_extent()
+        num_ions = self.get_ion_numbers(dim**3)
+        self.assemble_system(dim, num_ions)
+        self.clean_up_directory()
+
+    def protonate_titratable(self) -> None:
+        """Rename titratable residues to their protonated variant in the PDB.
+
+        Rewrites only the residue-name column of the (hydrogen-free) prepared PDB
+        for residues in :attr:`PROTONATED_FORM`, so all subsequent columns and
+        coordinates are preserved byte-for-byte. When ``titratable_sel`` is set,
+        only residues whose resid is matched by that selection are renamed.
+        """
+        targets = self._selected_resids()
+
+        prepared = Path(self.pdb)
+        protonated = prepared.with_name('protein_protonated.pdb')
+
+        with open(prepared) as fh:
+            lines = fh.readlines()
+
+        renamed: list[str] = []
+        out_lines = []
+        for line in lines:
+            if line.startswith(('ATOM', 'HETATM')):
+                resname = line[17:20].strip()
+                new = self.PROTONATED_FORM.get(resname)
+                if new is not None:
+                    resid = line[22:26].strip()
+                    if targets is None or (resid.isdigit() and int(resid) in targets):
+                        # Residue name occupies PDB columns 18-20 (index 17:20),
+                        # right-justified in a 3-wide field.
+                        line = line[:17] + f'{new:>3}' + line[20:]
+                        tag = f'{resname}{resid}->{new}'
+                        if tag not in renamed:
+                            renamed.append(tag)
+            out_lines.append(line)
+
+        with open(protonated, 'w') as fh:
+            fh.writelines(out_lines)
+
+        self.protonated_residues = renamed
+        self.pdb = str(protonated)
+
+    def _selected_resids(self) -> set[int] | None:
+        """Resolve ``titratable_sel`` to a set of resids, or None for all.
+
+        Returns:
+            Set of integer resids to protonate, or None to protonate every
+            titratable residue in the structure.
+        """
+        if self.titratable_sel is None:
+            return None
+
+        import MDAnalysis as mda
+
+        u = mda.Universe(str(self.pdb))
+        selected = u.select_atoms(self.titratable_sel)
+        return {int(r) for r in selected.residues.resids}

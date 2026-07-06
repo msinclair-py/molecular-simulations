@@ -3936,9 +3936,10 @@ def _build_solvated_cph(files):
 
     Mirrors how ``run_cph_sim`` assembles the constructor arguments (explicit PME
     args, implicit non-periodic args, real Langevin integrators, LYS/ASP variants
-    at indices 1/2). The committed ``lys_asp_solv`` fixture was pre-built with
-    tleap, so this whole pipeline runs in CI with no AmberTools at runtime -- only
-    OpenMM + ParmEd + amber14-all.xml, all available.
+    at indices 1/2). The committed ``lys_ash_solv`` fixture was pre-built with
+    ConstantPHSolvent (fully protonated: Asp as ASH, Lys as LYS), so this whole
+    pipeline runs in CI with no AmberTools at runtime -- only OpenMM + ParmEd +
+    amber14-all.xml, all available.
     """
     from openmm import LangevinIntegrator, Platform
     from openmm.app import PME, CutoffNonPeriodic, HBonds
@@ -4000,8 +4001,8 @@ def real_solvated_cph():
 
     src = Path(__file__).parent / 'data' / 'amber'
     files = {
-        'prmtop': str(src / 'lys_asp_solv.prmtop'),
-        'inpcrd': str(src / 'lys_asp_solv.inpcrd'),
+        'prmtop': str(src / 'lys_ash_solv.prmtop'),
+        'inpcrd': str(src / 'lys_ash_solv.inpcrd'),
     }
     return _build_solvated_cph(files)
 
@@ -4023,10 +4024,10 @@ class TestConstantPHRealInitPipeline:
         assert titrations[2].variants == ['ASP', 'ASH']
 
     def test_implicit_system_is_solvent_stripped(self, real_solvated_cph):
-        """ParmEd strips water/ions: implicit system is the 46-atom peptide."""
-        # 2620-atom solvated explicit system, 46-atom (Ace-Lys-Asp-Nme) implicit.
-        assert real_solvated_cph.explicitSystem.getNumParticles() == 2620
-        assert real_solvated_cph.implicitSystem.getNumParticles() == 46
+        """ParmEd strips water/ions: implicit system is the 47-atom peptide."""
+        # 2716-atom solvated explicit system, 47-atom (Ace-Lys-Ash-Nme) implicit.
+        assert real_solvated_cph.explicitSystem.getNumParticles() == 2716
+        assert real_solvated_cph.implicitSystem.getNumParticles() == 47
 
     def test_protonation_states_have_expected_hydrogen_counts(self, real_solvated_cph):
         """The built protonation states carry the real +1-proton differences."""
@@ -4041,7 +4042,7 @@ class TestConstantPHRealInitPipeline:
     def test_atom_index_mapping_covers_implicit_system(self, real_solvated_cph):
         """implicitAtomIndex maps every implicit atom into the explicit system."""
         idx = real_solvated_cph.implicitAtomIndex
-        assert len(idx) == 46
+        assert len(idx) == 47
         # Every mapped index is a valid explicit-system particle.
         assert idx.max() < real_solvated_cph.explicitSystem.getNumParticles()
         assert idx.min() >= 0
@@ -4132,6 +4133,24 @@ class TestConstantPHRealInitPipeline:
         # The labile HZ3 proton is a zero-charge ghost in LYN, real charge in LYS.
         assert abs(charge(gb0['HZ3'])) < 1e-9
         assert abs(charge(gb1['HZ3'])) > 1e-3
+
+    def test_guard_raises_on_deprotonated_input(self):
+        """ConstantPH refuses a system whose titratable site lacks its proton.
+
+        The committed ``lys_asp_solv`` fixture was built with Asp deprotonated
+        (no HD2 particle), which cannot titrate correctly. Constructing a
+        ConstantPH that titrates Asp there must fail loudly with actionable
+        guidance rather than silently producing wrong results.
+        """
+        from pathlib import Path
+
+        src = Path(__file__).parent / 'data' / 'amber'
+        files = {
+            'prmtop': str(src / 'lys_asp_solv.prmtop'),
+            'inpcrd': str(src / 'lys_asp_solv.inpcrd'),
+        }
+        with pytest.raises(ValueError, match='missing labile protons'):
+            _build_solvated_cph(files)
 
 
 if __name__ == '__main__':

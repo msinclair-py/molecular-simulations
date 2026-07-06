@@ -439,15 +439,18 @@ def real_amber_titratable_solvated_files(tmp_path: Path) -> dict:
 
     Unlike :func:`real_amber_titratable_files` (the same Ace-Lys-Asp-Nme peptide
     in vacuum, used for the lightweight ``build_dicts`` residue-identification
-    logic), this is that peptide solvated in a ~3.5 nm TIP3P box (2620 atoms,
-    net-neutral, generated with tleap ``leaprc.protein.ff19SB`` +
-    ``leaprc.water.tip3p``). It carries periodic box vectors, so the explicit
-    PME system that ``ConstantPH.__init__`` builds (nonbondedCutoff 0.9 nm) is
-    valid, and ParmEd can strip the water/ions down to the 46-atom implicit
-    system. This lets the WHOLE ``ConstantPH.__init__`` pipeline run for real in
-    CI with no AmberTools at runtime (the fixture was pre-built with tleap).
+    logic), this is that peptide solvated in an OPC box (2716 atoms, net-neutral,
+    generated with ``ConstantPHSolvent`` -- ``leaprc.protein.ff19SB`` +
+    ``leaprc.water.opc``, mbondi3 radii). It is built in the fully protonated
+    form required for constant pH (Asp as ASH, Lys as LYS), so every labile
+    proton is a real particle and ``ConstantPH``'s protonation guard passes. It
+    carries periodic box vectors, so the explicit PME system that
+    ``ConstantPH.__init__`` builds (nonbondedCutoff 0.9 nm) is valid, and ParmEd
+    can strip the water/ions down to the 47-atom implicit system. This lets the
+    WHOLE ``ConstantPH.__init__`` pipeline run for real in CI with no AmberTools
+    at runtime (the fixture was pre-built with tleap).
 
-    Titratable residues are LYS (index 1) and ASP (index 2); ACE/NME are the
+    Titratable residues are LYS (index 1) and ASH (index 2); ACE/NME are the
     excluded termini.
 
     Returns:
@@ -457,8 +460,8 @@ def real_amber_titratable_solvated_files(tmp_path: Path) -> dict:
     import shutil
 
     src = get_test_data_dir() / 'amber'
-    shutil.copy(src / 'lys_asp_solv.prmtop', tmp_path / 'system.prmtop')
-    shutil.copy(src / 'lys_asp_solv.inpcrd', tmp_path / 'system.inpcrd')
+    shutil.copy(src / 'lys_ash_solv.prmtop', tmp_path / 'system.prmtop')
+    shutil.copy(src / 'lys_ash_solv.inpcrd', tmp_path / 'system.inpcrd')
 
     return {
         'prmtop': tmp_path / 'system.prmtop',

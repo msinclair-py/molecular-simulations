@@ -57,7 +57,7 @@ class PPInteractions:
         plot: Whether to generate and save plots. Defaults to True.
 
     Example:
-        >>> ppi = PPInteractions("complex.prmtop", "traj.dcd", "results.json")
+        >>> ppi = PPInteractions('complex.prmtop', 'traj.dcd', 'results.json')
         >>> ppi.run()
     """
 
@@ -164,10 +164,12 @@ class PPInteractions:
         """Compute the positional covariance matrix between selections.
 
         Loops over all C-alpha atoms and computes the positional
-        covariance using the functional form:
+        covariance using the functional form::
+
             C = <(R1 - <R1>)(R2 - <R2>)^T>
 
-        where each element corresponds to the ensemble average movement:
+        where each element corresponds to the ensemble average movement::
+
             C_ij = <deltaR_i * deltaR_j>
 
         The magnitude indicates correlation strength and the sign
@@ -239,7 +241,9 @@ class PPInteractions:
 
         self.mapping = mapping
 
-    def interpret_covariance(self, cov_mat: np.ndarray) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    def interpret_covariance(
+        self, cov_mat: np.ndarray
+    ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
         """Identify residue pairs with positive or negative correlations.
 
         Args:
@@ -346,7 +350,12 @@ class PPInteractions:
         neg = ['ASP', 'GLU']
         name1 = res1.resnames[0]
         name2 = res2.resnames[0]
-        if name1 not in pos + neg or name2 not in pos + neg or (name1 in pos and name2 in pos) or (name1 in neg and name2 in neg):
+        if (
+            name1 not in pos + neg
+            or name2 not in pos + neg
+            or (name1 in pos and name2 in pos)
+            or (name1 in neg and name2 in neg)
+        ):
             return 0.0
 
         atom_names = ['NZ', 'NH1', 'NH2', 'OD1', 'OD2', 'OE1', 'OE2']
@@ -516,6 +525,10 @@ class PPInteractions:
         """
         df = self.parse_results(results)
 
+        # Nothing met the covariance/interaction thresholds; no plots to make.
+        if df.is_empty():
+            return
+
         plot = Path('plots')
         plot.mkdir(exist_ok=True)
         for cov_type in ['positive', 'negative']:
@@ -526,7 +539,7 @@ class PPInteractions:
 
                 if not data.is_empty():
                     name = f'{cov_type.capitalize()}_Covariance_'
-                    name += f"{'_'.join(int_type.split(' '))}.png"
+                    name += f'{"_".join(int_type.split(" "))}.png'
 
                     self.make_plot(data, int_type, plot / name)
 

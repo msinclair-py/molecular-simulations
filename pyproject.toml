@@ -4,7 +4,7 @@ build-backend = 'hatchling.build'
 
 [project]
 name = 'molecular_simulations'
-version = '0.4.3'
+version = '0.4.4'
 authors = [
   { name='Matt Sinclair', email='msinclair@anl.gov' },
 ]
@@ -25,6 +25,7 @@ dependencies = [
     'mdtraj',
     'natsort',
     'numba',
+    'numpy>=2.0',
     'openmm>=8.0',
     'parmed',
     'parsl>=2024.1.29',
@@ -32,7 +33,7 @@ dependencies = [
     'pydantic',
     'python-json-logger>=3',
     'pyyaml',
-    'rust-simulation-tools',
+    'rust-simulation-tools>=0.2.5',
     'scikit-learn',
     'seaborn'
 ]
@@ -46,18 +47,21 @@ ligand = [
     'openbabel',
     'rdkit'
 ]
-docutils = [
+docs = [
     'sphinx',
     'sphinx-rtd-theme',
     'sphinx-wagtail-theme',
+    'sphinx-autodoc-typehints',
+    'myst-parser',
     'docutils'
 ]
 dev = [
     'pytest>=7.0',
-    'pytest-cov>=4.0',
-    'numpy>=1.22',
-    'ruff>=0.11',
-    'ty>=0.0.1a7',
+    'coverage[toml]>=7.0',
+    'numpy>=2.0',
+    'ruff>=0.15',
+    'pre-commit>=3.5',
+    'gemmi',
 ]
 
 [tool.hatch.metadata]
@@ -109,11 +113,35 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # re-exports in __init__ are intentional
+# Nested `with patch(...)` blocks are idiomatic and readable in tests.
+"tests/**" = ["SIM117"]
 
 [tool.ruff.lint.isort]
 known-first-party = ['molecular_simulations']
 
 [tool.ruff.format]
 docstring-code-format = true
+quote-style = 'single'  # preserve the project's existing single-quote style
+
+[tool.coverage.run]
+source = ['src/molecular_simulations']
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+# Exclude code that is not meant to be reached by the unit suite so the metric
+# reflects real, testable code rather than rewarding dead lines.
+exclude_lines = [
+    'pragma: no cover',
+    'if __name__ == .__main__.:',
+    'raise NotImplementedError',
+    'raise AssertionError',
+    '@(abc\.)?abstractmethod',
+    'if TYPE_CHECKING:',
+]
+# Abstract-method bodies are just a bare ``...`` or ``pass``; drop them too.
+exclude_also = [
+    '^\s*\.\.\.\s*$',
+]
 
 [tool.ty]

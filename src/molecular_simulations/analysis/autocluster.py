@@ -46,7 +46,7 @@ class GenericDataloader:
         data_files: List of paths to input data files (.npy format).
 
     Example:
-        >>> loader = GenericDataloader(["data1.npy", "data2.npy"])
+        >>> loader = GenericDataloader(['data1.npy', 'data2.npy'])
         >>> print(loader.data.shape)
     """
 
@@ -65,7 +65,9 @@ class GenericDataloader:
         """Load and concatenate data from all files into one array.
 
         Lumps data into one large array by vertical stacking. If the
-        resulting array has more than 2 dimensions, it is reshaped to 2D.
+        stacked array has more than 2 rows along its first axis, it is
+        flattened to 2D by collapsing all trailing axes into a single
+        dimension.
         """
         data_list: list[np.ndarray] = []
         self.shapes = []
@@ -119,7 +121,7 @@ class PeriodicDataloader(GenericDataloader):
             periodic data (e.g., dihedral angles).
 
     Example:
-        >>> loader = PeriodicDataloader(["dihedrals.npy"])
+        >>> loader = PeriodicDataloader(['dihedrals.npy'])
         >>> # Original 10 features become 20 features
     """
 
@@ -203,7 +205,7 @@ class AutoKMeans:
             Defaults to {'n_components': 2}.
 
     Example:
-        >>> clusterer = AutoKMeans("data/", max_clusters=15)
+        >>> clusterer = AutoKMeans('data/', max_clusters=15)
         >>> clusterer.run()
         >>> print(clusterer.cluster_centers)
     """
@@ -216,7 +218,8 @@ class AutoKMeans:
         max_clusters: int = 10,
         stride: int = 1,
         reduction_algorithm: str = 'PCA',
-        reduction_kws: dict[str, Any] = {'n_components': 2}, # noqa: B006
+        reduction_kws: dict[str, Any] = {'n_components': 2},  # noqa: B006
+        random_state: int | None = 42,
     ):
         """Initialize the automatic clustering workflow.
 
@@ -228,6 +231,8 @@ class AutoKMeans:
             stride: Step size for cluster number sweep.
             reduction_algorithm: Dimensionality reduction method.
             reduction_kws: Arguments for the reduction algorithm.
+            random_state: Seed for KMeans for reproducible clustering. Defaults
+                to 42; pass None for non-deterministic initialization.
         """
         self.data_dir = Path(data_directory)
         self.dataloader: DataloaderProtocol = dataloader(
@@ -238,6 +243,7 @@ class AutoKMeans:
 
         self.n_clusters = max_clusters
         self.stride = stride
+        self.random_state = random_state
 
         self.decomposition = Decomposition(reduction_algorithm, **reduction_kws)
 
@@ -281,7 +287,7 @@ class AutoKMeans:
             leave=False,
             desc='Sweeping `n_clusters`',
         ):
-            clusterer = KMeans(n_clusters=n)
+            clusterer = KMeans(n_clusters=n, random_state=self.random_state)
             labels = clusterer.fit_predict(self.reduced)
             average_score = silhouette_score(self.reduced, labels)
 
@@ -368,7 +374,7 @@ class Decomposition:
             decomposer constructor.
 
     Example:
-        >>> decomp = Decomposition("PCA", n_components=3)
+        >>> decomp = Decomposition('PCA', n_components=3)
         >>> reduced_data = decomp.fit_transform(data)
     """
 

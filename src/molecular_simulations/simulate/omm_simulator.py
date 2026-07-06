@@ -2,7 +2,7 @@
 """OpenMM molecular dynamics simulation module.
 
 This module provides classes for running molecular dynamics simulations using
-OpenMM with AMBER or CHARMM force fields. It supports both explicit and implicit
+OpenMM with the AMBER force field. It supports both explicit and implicit
 solvent simulations, with built-in equilibration protocols and production MD.
 
 Classes:
@@ -12,7 +12,6 @@ Classes:
     Minimizer: Simple energy minimization utility.
 """
 
-import logging
 import os
 from copy import deepcopy
 from io import TextIOWrapper
@@ -33,14 +32,10 @@ from openmm.app import (
     PME,
     AmberInpcrdFile,
     AmberPrmtopFile,
-    CharmmParameterSet,
-    CharmmPsfFile,
     CheckpointReporter,
     DCDReporter,
     ForceField,
     GBn2,
-    GromacsGroFile,
-    GromacsTopFile,
     HBonds,
     NoCutoff,
     PDBFile,
@@ -62,8 +57,6 @@ from openmm.unit import (
 PathLike = Path | str
 OptPath = Path | str | None
 
-logger = logging.getLogger(__name__)
-
 
 class Simulator:
     """Class for performing OpenMM simulations on AMBER FF inputs.
@@ -80,13 +73,17 @@ class Simulator:
             'system.inpcrd'.
         out_path: Optional output path for simulation outputs. If not
             provided, uses the same path as inputs.
-        ff: Force field to use, either 'amber' or 'charmm'.
+        ff: Force field to use. Only 'amber' is supported.
         heat_steps: Number of heating timesteps. Defaults to 100,000 (200 ps
             at 2 fs timestep).
         equil_steps: Number of equilibration timesteps. Defaults to 1,250,000
             (2.5 ns at 2 fs timestep).
         prod_steps: Number of production timesteps. Defaults to 250,000,000
             (1 µs at 4 fs timestep).
+        prod_dt_in_ps: Production integration timestep in picoseconds. Defaults
+            to 0.004.
+        hydrogen_mass_repartitioning: Hydrogen mass in amu used for hydrogen
+            mass repartitioning. Defaults to 1.5.
         n_equil_cycles: Number of unrestrained equilibration cycles after
             restraint relaxation. Defaults to 3.
         temperature: Simulation temperature in Kelvin. Defaults to 300.0.
@@ -99,8 +96,6 @@ class Simulator:
         device_ids: List of GPU device IDs to use. Defaults to [0].
         force_constant: Harmonic restraint force constant in kcal/mol*Å².
             Defaults to 10.0.
-        params: Optional list of CHARMM parameter files for loading from
-            psf/pdb file using CHARMM36m forcefield.
         membrane: Whether this is a membrane system requiring anisotropic
             pressure coupling. Defaults to False.
 
@@ -140,7 +135,6 @@ class Simulator:
         platform: str = 'CUDA',
         device_ids: list[int] = [0],
         force_constant: float = 10.0,
-        params: str | list[str] | None = None,
         membrane: bool = False,
     ):
         self.path = Path(path)  # enforce path object
@@ -157,7 +151,6 @@ class Simulator:
         self.temperature = temperature
 
         self.ff = ff.lower()
-        self.params = params  # for charmm parameter sets
         self.setup_barostat(membrane)
 
         p = Path(out_path) if out_path is not None else self.path
@@ -248,25 +241,18 @@ class Simulator:
             self.barostat_args.update({'temperature': self.temperature * kelvin})  # ty: ignore[unsupported-operator]
 
     def load_system(self) -> System:
-        """Load the molecular system based on force field type.
-
-        Dispatches to the appropriate file loader based on the specified
-        force field (AMBER or CHARMM).
+        """Load the molecular system from AMBER inputs.
 
         Returns:
-            OpenMM System object configured with the appropriate force field.
+            OpenMM System object configured with the AMBER force field.
 
         Raises:
-            AttributeError: If an invalid force field type is specified.
+            AttributeError: If an unsupported force field type is specified.
         """
-        if self.ff == 'amber':
-            system = self.load_amber_files()
-        elif self.ff == 'charmm':
-            system = self.load_charmm_files()
-        else:
-            raise AttributeError(
-                'self.ff must be a valid MD forcefield [amber, charmm]!'
-            )
+        if self.ff != 'amber':
+            raise AttributeError("self.ff must be 'amber'!")
+
+        system = self.load_amber_files()
 
         if not hasattr(self, 'indices'):
             self.indices = self.get_restraint_indices()
@@ -298,42 +284,9 @@ class Simulator:
 
         return system
 
-    def load_charmm_files(self) -> System:
-        """Build an OpenMM system from CHARMM psf/pdb files.
-
-        Uses PME for electrostatics with a 1.2 nm non-bonded cutoff.
-
-        Returns:
-            OpenMM System configured for CHARMM force field.
-        """
-        if not hasattr(self, 'coordinate'):
-            self.coordinate = PDBFile(str(self.coor_file))
-            self.topology = CharmmPsfFile(
-                str(self.top_file),
-                periodicBoxVectors=self.coordinate.topology.getPeriodicBoxVectors(),
-            )
-        if not hasattr(self, 'parameter_set') and self.params is not None:
-            self.parameter_set = CharmmParameterSet(*self.params)
-
-        if self.params is None:
-            self.forcefield = ForceField('charmm36_2024.xml', 'charmm36/water.xml')
-            system = self.forcefield.createSystem(
-                self.coordinate.topology,  # ty: ignore[unresolved-attribute]
-                nonbondedMethod=PME,
-                nonbondedCutoff=1.2 * nanometer,
-                constraints=HBonds,
-            )
-        else:
-            system = self.topology.createSystem(
-                self.parameter_set,
-                nonbondedMethod=PME,  # ty: ignore[parameter-already-assigned]
-                nonbondedCutoff=1.2 * nanometer,
-                constraints=HBonds,
-            )
-
-        return system
-
-    def setup_sim(self, system: System, dt: float) -> tuple[Simulation, LangevinMiddleIntegrator]:
+    def setup_sim(
+        self, system: System, dt: float
+    ) -> tuple[Simulation, LangevinMiddleIntegrator]:
         """Build OpenMM Simulation and Integrator objects.
 
         Creates a LangevinMiddleIntegrator with the specified timestep and
@@ -347,7 +300,9 @@ class Simulator:
             Tuple containing (Simulation, LangevinMiddleIntegrator) objects.
         """
         integrator = LangevinMiddleIntegrator(
-            self.temperature * kelvin, 1 / picosecond, dt * picoseconds  # ty: ignore[unsupported-operator]
+            self.temperature * kelvin,
+            1 / picosecond,
+            dt * picoseconds,  # ty: ignore[unsupported-operator]
         )
         simulation = Simulation(
             self.topology.topology,
@@ -371,21 +326,13 @@ class Simulator:
 
         skip_eq = all([f.exists() for f in [self.eq_state, self.eq_chkpt, self.eq_log]])
         if not skip_eq:
-            logger.info('No restart detected, will begin equilibration.')
             self.equilibrate()
-            logger.info(
-                f'Equilibration finished, running {self.prod_steps} steps of production MD.'
-            )
 
         if self.restart.exists():
-            logger.info('Checkpoint file detected, resuming simulation.')
             self.check_num_steps_left()
-            logger.info(f'Will run {self.prod_steps} steps of production MD.')
             self.production(chkpt=str(self.restart), restart=True)
         else:
             self.production(chkpt=str(self.eq_chkpt), restart=False)
-
-        logger.info('Production MD run complete.')
 
     def equilibrate(self) -> Simulation:
         """Run the equilibration protocol.
@@ -535,6 +482,11 @@ class Simulator:
         integrator.setTemperature(T * kelvin)  # ty: ignore[unsupported-operator]
         n_steps = 1000
         length = self.heat_steps // n_steps
+        if length == 0:
+            # Fewer than n_steps heating steps requested: nothing to ramp, and
+            # computing the per-increment temperature step would divide by zero.
+            return simulation, integrator
+
         tstep = (self.temperature - T) / length
         for i in range(length):
             simulation.step(n_steps)
@@ -723,7 +675,7 @@ class ImplicitSimulator(Simulator):
         coor_name: Optional coordinate file name. If not provided, assumes
             'system.inpcrd'.
         out_path: Optional output path for simulation outputs.
-        ff: Force field to use, either 'amber' or 'charmm'.
+        ff: Force field to use. Only 'amber' is supported.
         equil_steps: Number of equilibration timesteps. Defaults to 1,250,000.
         prod_steps: Number of production timesteps. Defaults to 250,000,000.
         n_equil_cycles: Number of unrestrained equilibration cycles.
@@ -974,7 +926,7 @@ class CustomForcesSimulator(Simulator):
 class Minimizer:
     """Simple energy minimization utility for molecular structures.
 
-    Supports AMBER, GROMACS, and PDB input formats. Performs energy
+    Supports AMBER and PDB input formats. Performs energy
     minimization and writes out the minimized structure as a PDB file.
 
     Args:
@@ -1007,12 +959,15 @@ class Minimizer:
         self.path = Path(topology).parent
         self.out = self.path / out
         self.platform = Platform.getPlatformByName(platform)
-        self.properties = {'Precision': 'mixed'}
 
-        if device_ids is not None:
-            self.properties.update(
-                {'DeviceIndex': ','.join([str(x) for x in device_ids])}
-            )
+        # The CPU/Reference platforms do not accept a 'Precision' property; only
+        # the GPU platforms do.
+        if platform in ('CPU', 'Reference'):
+            self.properties = {}
+        else:
+            self.properties = {'Precision': 'mixed'}
+            if device_ids is not None:
+                self.properties['DeviceIndex'] = ','.join(str(x) for x in device_ids)
 
     def minimize(self) -> None:
         """Perform energy minimization and save structure.
@@ -1022,7 +977,9 @@ class Minimizer:
         """
         system = self.load_files()
         integrator = LangevinMiddleIntegrator(
-            300 * kelvin, 1 / picosecond, 0.001 * picoseconds  # ty: ignore[unsupported-operator]
+            300 * kelvin,
+            1 / picosecond,
+            0.001 * picoseconds,  # ty: ignore[unsupported-operator]
         )
         simulation = Simulation(
             self.topology, system, integrator, self.platform, self.properties
@@ -1048,16 +1005,15 @@ class Minimizer:
         Raises:
             FileNotFoundError: If no valid input files are found.
         """
-        if self.topology.suffix in ['.prmtop', '.parm7']:
-            system = self.load_amber()
-        elif self.topology.suffix == '.top':
-            system = self.load_gromacs()
-        elif self.topology.suffix == '.pdb':
-            system = self.load_pdb()
-        else:
-            raise FileNotFoundError(
-                f'No viable simulation input files foundat path: {self.path}!'
-            )
+        match self.topology.suffix:
+            case '.prmtop':
+                system = self.load_amber()
+            case '.pdb':
+                system = self.load_pdb()
+            case _:
+                raise FileNotFoundError(
+                    f'No viable simulation input files foundat path: {self.path}!'
+                )
 
         return system
 
@@ -1075,23 +1031,6 @@ class Minimizer:
         system = self.topology.createSystem(
             nonbondedMethod=NoCutoff, constraints=HBonds
         )
-
-        return system
-
-    def load_gromacs(self) -> System:
-        """Load GROMACS input files into OpenMM System.
-
-        Note:
-            This method is untested and may require adjustments.
-
-        Returns:
-            OpenMM System object from GROMACS files.
-        """
-        gro = next(iter(self.path.glob('*.gro')))
-        self.coordinates = GromacsGroFile(str(gro))
-        self.topology = GromacsTopFile(str(self.topology), includeDir='/usr/local/gromacs/share/gromacs/top')
-
-        system = self.topology.createSystem(nonbondedMethod=NoCutoff, constraints=HBonds)
 
         return system
 

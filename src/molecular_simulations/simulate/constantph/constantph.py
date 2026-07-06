@@ -80,8 +80,7 @@ class ResidueTitration:
 
 
 class ConstantPH:
-    """
-    Constant pH simulation using AMBER topology files directly.
+    """Constant pH simulation using AMBER topology files directly.
 
     This class enables constant pH molecular dynamics while preserving all force
     field parameters from AMBER prmtop files, including custom ligand parameters
@@ -94,42 +93,34 @@ class ConstantPH:
     4. Only water and ions are stripped from the implicit system
     5. Use OpenMM ForceField only for building protonation state parameters
 
-    Parameters
-    ----------
-    prmtop_file : str or Path
-        Path to AMBER prmtop file
-    inpcrd_file : str or Path
-        Path to AMBER inpcrd file
-    pH : float or list
-        The pH value(s) for simulation. If a list, simulated tempering is used.
-    residueVariants : dict
-        Maps residue indices to lists of variant names.
-        Example: {10: ['ASP', 'ASH'], 15: ['GLU', 'GLH']}
-    referenceEnergies : dict
-        Maps residue indices to lists of reference energies (kJ/mol).
-        Example: {10: [0.0, 5.2], 15: [0.0, 4.8]}
-    relaxationSteps : int
-        Steps to relax solvent after accepting a protonation state change.
-    explicitArgs : dict
-        Arguments for createSystem() for explicit solvent.
-    implicitArgs : dict
-        Arguments for ParmEd createSystem() for implicit solvent.
-        Supports: implicitSolvent (OBC2, GBn2), solventDielectric, soluteDielectric
-    integrator : openmm.Integrator
-        Integrator for the main simulation.
-    relaxationIntegrator : openmm.Integrator
-        Integrator for solvent relaxation (frozen solute).
-    implicitForceField : openmm.app.ForceField, optional
-        ForceField for building protonation state parameters (protein only).
-        Defaults to amber14 + GBn2.
-    gbModel : str, optional
-        GB model for implicit solvent: 'OBC2' or 'GBn2'. Default: 'GBn2'
-    weights : list, optional
-        Simulated tempering weights. None = auto-determine via Wang-Landau.
-    platform : openmm.Platform, optional
-        Platform for simulation. None = auto-select.
-    properties : dict, optional
-        Platform-specific properties.
+    Args:
+        prmtop_file: Path (str or Path) to AMBER prmtop file.
+        inpcrd_file: Path (str or Path) to AMBER inpcrd file.
+        pH: The pH value(s) for simulation. If a list, simulated tempering is
+            used.
+        residueVariants: Maps residue indices to lists of variant names.
+            Example: {10: ['ASP', 'ASH'], 15: ['GLU', 'GLH']}.
+        referenceEnergies: Maps residue indices to lists of reference energies
+            (kJ/mol). Example: {10: [0.0, 5.2], 15: [0.0, 4.8]}.
+        relaxationSteps: Steps to relax solvent after accepting a protonation
+            state change.
+        explicitArgs: Arguments for createSystem() for explicit solvent.
+        implicitArgs: Arguments for ParmEd createSystem() for implicit solvent.
+            Supports: implicitSolvent (OBC2, GBn2), solventDielectric,
+            soluteDielectric.
+        integrator: Integrator for the main simulation.
+        relaxationIntegrator: Integrator for solvent relaxation (frozen solute).
+        implicitForceField: ForceField for building protonation state
+            parameters (protein only). Defaults to amber14 + GBn2.
+        excludeResidues: Deprecated and no longer used; lipids and ligands are
+            now always included in MC evaluations and only water and ions are
+            stripped. Defaults to None.
+        gbModel: GB model for implicit solvent: 'OBC2' or 'GBn2'. Defaults to
+            'GBn2'.
+        weights: Simulated tempering weights. None = auto-determine via
+            Wang-Landau. Defaults to None.
+        platform: Platform for simulation. None = auto-select. Defaults to None.
+        properties: Platform-specific properties. Defaults to None.
     """
 
     # Standard residues that can be parameterized by OpenMM ForceField
@@ -334,10 +325,16 @@ class ConstantPH:
         for residue in parm.residues:
             # Check if residue is water or ion
             is_water_ion = residue.name in self.WATER_ION_NAMES
-            if not is_water_ion: # noqa: SIM102
+            if not is_water_ion:  # noqa: SIM102
                 # Also check for single-atom ions by element
-                if (len(residue.atoms) == 1 and
-                    residue.atoms[0].element in [11, 17, 19, 35, 37, 55]): # Na, Cl, K, Br, Rb, Cs
+                if len(residue.atoms) == 1 and residue.atoms[0].element in [
+                    11,
+                    17,
+                    19,
+                    35,
+                    37,
+                    55,
+                ]:  # Na, Cl, K, Br, Rb, Cs
                     is_water_ion = True
 
             if not is_water_ion:
@@ -726,7 +723,7 @@ class ConstantPH:
                         originalParams = protonatedExceptionParams[key]
                         stateExceptionParams[key] = (
                             0.0 * elementary_charge**2,
-                            *originalParams[1:]
+                            *originalParams[1:],
                         )
                 state.exceptionParameters[implicitNBForceIdx] = stateExceptionParams
 
@@ -1031,7 +1028,10 @@ class ConstantPH:
                     if key not in stateExceptionParams:
                         # Zero out the charge product for this exception
                         originalParams = protonatedExceptionParams[key]
-                        stateExceptionParams[key] = (0.0 * elementary_charge**2, *originalParams[1:])
+                        stateExceptionParams[key] = (
+                            0.0 * elementary_charge**2,
+                            *originalParams[1:],
+                        )
 
                 # Update the state's parameters
                 state.particleParameters[explicitNBForceIdx] = stateParams
@@ -1045,7 +1045,9 @@ class ConstantPH:
         for force in system.getForces():
             if isinstance(force, NonbondedForce):
                 for i in range(force.getNumExceptions()):
-                    p1, p2, _chargeProd, _sigma, _epsilon = force.getExceptionParameters(i)
+                    p1, p2, _chargeProd, _sigma, _epsilon = (
+                        force.getExceptionParameters(i)
+                    )
                     atom1 = atoms[p1]
                     atom2 = atoms[p2]
                     if atom1.residue == atom2.residue:
@@ -1062,7 +1064,9 @@ class ConstantPH:
         for force in system.getForces():
             if isinstance(force, NonbondedForce):
                 for i in range(force.getNumExceptions()):
-                    p1, p2, chargeProd, _sigma, _epsilon = force.getExceptionParameters(i)
+                    p1, p2, chargeProd, _sigma, _epsilon = force.getExceptionParameters(
+                        i
+                    )
                     atom1 = atoms[p1]
                     atom2 = atoms[p2]
                     if (
@@ -1165,15 +1169,11 @@ class ConstantPH:
             return True
 
     def attemptMCStep(self, temperature, debug=False):
-        """
-        Attempt Monte Carlo moves to change protonation states.
+        """Attempt Monte Carlo moves to change protonation states.
 
-        Parameters
-        ----------
-        temperature : float or Quantity
-            Simulation temperature
-        debug : bool
-            If True, print debugging information about MC moves
+        Args:
+            temperature: Simulation temperature (float or Quantity).
+            debug: If True, print debugging information about MC moves.
         """
         # Copy positions to implicit context
         state = self.simulation.context.getState(getPositions=True, getParameters=True)
@@ -1286,7 +1286,7 @@ class ConstantPH:
                         f'dE={dE:.2f} kJ/mol, '
                         f'dRef={dRef:.2f} kJ/mol, '
                         f'w={float(w):.3f}, '
-                        f"accept={'yes' if w <= 0 else f'prob={np.exp(-float(w)):.4f}'}"
+                        f'accept={"yes" if w <= 0 else f"prob={np.exp(-float(w)):.4f}"}'
                     )
 
             if w > 0.0 and np.exp(-w) < np.random.random():
@@ -1470,9 +1470,14 @@ class ConstantPH:
 
                 for i in titration1.explicitHydrogenIndices:
                     for j in titration2.explicitHydrogenIndices:
-                        if (i < len(explicitPositions) and
-                            j < len(explicitPositions) and
-                            periodicDistance(explicitPositions[i], explicitPositions[j]) < 0.2):
+                        if (
+                            i < len(explicitPositions)
+                            and j < len(explicitPositions)
+                            and periodicDistance(
+                                explicitPositions[i], explicitPositions[j]
+                            )
+                            < 0.2
+                        ):
                             isNeighbor = True
 
                 if isNeighbor:

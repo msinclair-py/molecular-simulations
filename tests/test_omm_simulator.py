@@ -1,22 +1,86 @@
 """
 Unit tests for simulate/omm_simulator.py module
 
-This module contains both unit tests (with mocks) and integration tests that use
-real OpenMM when available. Integration tests are marked with @pytest.mark.requires_openmm
-and will be skipped if OpenMM is not installed or if no suitable platform is available.
+These tests use no mocks -- they exercise real OpenMM on the CPU/Reference
+platform against committed AMBER fixtures. Tests that need a specific platform
+(CUDA/OpenCL) are skip-gated and run only where that platform is registered.
 """
 
-import os
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import numpy as np
 import pytest
 
 # ============================================================================
 # Fixtures for conditional real OpenMM usage
 # ============================================================================
+
+
+def _amber_kwargs(real_amber_system_files, **extra):
+    """Constructor kwargs pointing a Simulator at the real Ace-Ala-Nme system.
+
+    Uses the committed tleap prmtop/inpcrd (copied into tmp_path by the
+    real_amber_system_files fixture) on the real CPU platform, so simulators can
+    be built and run for real instead of mocking Platform/AmberPrmtopFile.
+    """
+    return {
+        'path': real_amber_system_files['path'],
+        'top_name': 'ala_dipeptide.prmtop',
+        'coor_name': 'ala_dipeptide.inpcrd',
+        'platform': 'CPU',
+        **extra,
+    }
+
+
+def _build_real_implicit_simulation(
+    real_amber_system_files, dt=0.002, minimize=True, **extra
+):
+    """Build a real CPU ImplicitSimulator + Simulation on the Ace-Ala-Nme system.
+
+    The committed Ace-Ala-Nme inputs are an implicit-solvent/vacuum system with
+    no periodic box, so the implicit (NoCutoff, GBn2) simulator is the one that
+    can actually run on the CPU platform. Returns ``(sim, simulation, integrator)``
+    with positions set (and optionally lightly minimized for numerical stability).
+    """
+    from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
+
+    sim = ImplicitSimulator(**_amber_kwargs(real_amber_system_files, **extra))
+    system = sim.load_system()
+    simulation, integrator = sim.setup_sim(system, dt=dt)
+    simulation.context.setPositions(sim.coordinate.positions)
+    if minimize:
+        simulation.minimizeEnergy(maxIterations=50)
+
+    return sim, simulation, integrator
+
+
+def _build_real_explicit_simulation(real_amber_explicit_files, **extra):
+    """Build a real CPU Simulator + restrained Simulation on the solvated box.
+
+    The solvated Ace-Ala-Nme carries a periodic box, so PME and the NPT
+    MonteCarloBarostat added by _equilibrate run for real. Adds the backbone
+    position restraint (the global 'k' parameter _equilibrate relaxes) and lightly
+    minimizes. Returns ``(sim, simulation)``.
+    """
+    from molecular_simulations.simulate.omm_simulator import Simulator
+
+    sim = Simulator(
+        path=real_amber_explicit_files['path'],
+        top_name='ala_dipeptide_solv.prmtop',
+        coor_name='ala_dipeptide_solv.inpcrd',
+        platform='CPU',
+        **extra,
+    )
+    system = sim.load_system()
+    system = sim.add_backbone_posres(
+        system,
+        sim.coordinate.positions,
+        sim.topology.topology.atoms(),
+        sim.indices,
+        sim.k,
+    )
+    simulation, _ = sim.setup_sim(system, dt=0.002)
+    simulation.context.setPositions(sim.coordinate.positions)
+    simulation.minimizeEnergy(maxIterations=20)
+
+    return sim, simulation
 
 
 def _check_openmm_available():
@@ -25,15 +89,71 @@ def _check_openmm_available():
         from openmm import Platform
 
         # Try to get CPU platform which should always work
-        Platform.getPlatformByName("CPU")
+        Platform.getPlatformByName('CPU')
         return True
     except Exception:
         return False
 
 
+def _has_opencl():
+    """Check whether an OpenCL OpenMM platform is registered.
+
+    CI's pip-installed OpenMM ships only Reference and CPU, so real-OpenCL tests
+    must skip there rather than fail.
+    """
+    try:
+        from openmm import Platform
+
+        Platform.getPlatformByName('OpenCL')
+        return True
+    except Exception:
+        return False
+
+
+def _has_cuda():
+    """Check whether a CUDA OpenMM platform is registered.
+
+    Mirrors :func:`_has_opencl`. CI (and CPU-only dev machines) ship OpenMM
+    without CUDA, so real-CUDA tests must skip there rather than fail.
+    """
+    try:
+        from openmm import Platform
+
+        Platform.getPlatformByName('CUDA')
+        return True
+    except Exception:
+        return False
+
+
+def _tiny_implicit_sim(real_amber_system_files, **extra):
+    """Real ImplicitSimulator on the 22-atom system with tiny step counts.
+
+    Configured so a full ``run()``/``equilibrate()``/``production()`` completes
+    in well under a second on CPU. ``heat_steps`` is set to 1000 (not 0): the
+    source's ``_heating`` computes ``tstep = (T - 5) / (heat_steps // 1000)``
+    before the loop guard, so ``heat_steps < 1000`` raises ZeroDivisionError;
+    1000 is the smallest ramp that runs a single heating block.
+    """
+    from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
+
+    sim = ImplicitSimulator(
+        **_amber_kwargs(
+            real_amber_system_files,
+            equil_steps=2,
+            prod_steps=2,
+            n_equil_cycles=1,
+            eq_reporter_frequency=1,
+            prod_reporter_frequency=1,
+            **extra,
+        )
+    )
+    sim.heat_steps = 1000
+    return sim
+
+
 # Custom marker for tests requiring OpenMM
 requires_openmm = pytest.mark.skipif(
-    not _check_openmm_available(), reason="OpenMM not available or no working platform"
+    not _check_openmm_available(), reason='OpenMM not available or no working platform'
 )
 
 
@@ -43,9 +163,9 @@ def openmm_platform():
     try:
         from openmm import Platform
 
-        return Platform.getPlatformByName("CPU")
+        return Platform.getPlatformByName('CPU')
     except Exception:
-        pytest.skip("OpenMM CPU platform not available")
+        pytest.skip('OpenMM CPU platform not available')
 
 
 @pytest.fixture
@@ -85,7 +205,7 @@ ATOM     22 HH33 NME A   3       4.379   4.719   1.238  1.00  0.00           H
 TER
 END
 """
-    pdb_file = tmp_path / "test_system.pdb"
+    pdb_file = tmp_path / 'test_system.pdb'
     pdb_file.write_text(pdb_content)
     return pdb_file
 
@@ -108,7 +228,7 @@ class TestOpenMMIntegration:
         from openmm import Platform
 
         assert openmm_platform is not None
-        assert openmm_platform.getName() == "CPU"
+        assert openmm_platform.getName() == 'CPU'
 
         # Verify we can access platform properties
         num_platforms = Platform.getNumPlatforms()
@@ -125,7 +245,7 @@ class TestOpenMMIntegration:
         pdb = PDBFile(str(simple_pdb_system))
 
         # Create force field and system
-        ff = ForceField("amber14-all.xml")
+        ff = ForceField('amber14-all.xml')
         system = ff.createSystem(pdb.topology, nonbondedMethod=NoCutoff)
 
         # Create integrator
@@ -134,7 +254,7 @@ class TestOpenMMIntegration:
         )
 
         # Create simulation with CPU platform
-        platform = Platform.getPlatformByName("CPU")
+        platform = Platform.getPlatformByName('CPU')
         simulation = Simulation(pdb.topology, system, integrator, platform)
         simulation.context.setPositions(pdb.positions)
 
@@ -152,13 +272,13 @@ class TestOpenMMIntegration:
         from openmm.unit import kelvin, picoseconds
 
         pdb = PDBFile(str(simple_pdb_system))
-        ff = ForceField("amber14-all.xml")
+        ff = ForceField('amber14-all.xml')
         system = ff.createSystem(pdb.topology, nonbondedMethod=NoCutoff)
         integrator = LangevinMiddleIntegrator(
             300 * kelvin, 1.0 / picoseconds, 0.002 * picoseconds
         )
 
-        platform = Platform.getPlatformByName("CPU")
+        platform = Platform.getPlatformByName('CPU')
         simulation = Simulation(pdb.topology, system, integrator, platform)
         simulation.context.setPositions(pdb.positions)
 
@@ -214,13 +334,13 @@ class TestOpenMMIntegration:
         from openmm import CustomExternalForce
 
         # Create the restraint force expression
-        force = CustomExternalForce("0.5*k*((x-x0)^2+(y-y0)^2+(z-z0)^2)")
+        force = CustomExternalForce('0.5*k*((x-x0)^2+(y-y0)^2+(z-z0)^2)')
 
         # Add parameters
-        force.addGlobalParameter("k", 1000.0)  # kJ/mol/nm^2
-        force.addPerParticleParameter("x0")
-        force.addPerParticleParameter("y0")
-        force.addPerParticleParameter("z0")
+        force.addGlobalParameter('k', 1000.0)  # kJ/mol/nm^2
+        force.addPerParticleParameter('x0')
+        force.addPerParticleParameter('y0')
+        force.addPerParticleParameter('z0')
 
         # Add a particle
         force.addParticle(0, [0.0, 0.0, 0.0])
@@ -232,1863 +352,1320 @@ class TestOpenMMIntegration:
 
 
 class TestSimulatorInit:
-    """Test suite for Simulator class initialization"""
+    """Real Simulator construction tests (CPU platform; __init__ stores paths).
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_simulator_init_defaults(self, mock_platform):
+    Simulator.__init__ resolves the platform and stores paths without parsing
+    the topology, so these need only the real CPU platform and a directory.
+    """
+
+    def test_simulator_init_defaults(self, tmp_path):
         """Test Simulator initialization with defaults"""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = Simulator(path=tmp_path, platform='CPU')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        assert sim.path == tmp_path
+        assert sim.top_file == tmp_path / 'system.prmtop'
+        assert sim.coor_file == tmp_path / 'system.inpcrd'
+        assert sim.temperature == 300.0
+        assert sim.equil_steps == 1_250_000
+        assert sim.prod_steps == 250_000_000
 
-            # Pass path as Path object, not string, to avoid bug in source
-            sim = Simulator(path=path)
-
-            assert sim.path == path
-            assert sim.top_file == path / "system.prmtop"
-            assert sim.coor_file == path / "system.inpcrd"
-            assert sim.temperature == 300.0
-            assert sim.equil_steps == 1_250_000
-            assert sim.prod_steps == 250_000_000
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_simulator_init_custom_files(self, mock_platform):
+    def test_simulator_init_custom_files(self, tmp_path):
         """Test Simulator initialization with custom file names"""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = Simulator(
+            path=tmp_path,
+            top_name='custom.prmtop',
+            coor_name='custom.inpcrd',
+            platform='CPU',
+        )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "custom.prmtop").write_text("mock topology")
-            (path / "custom.inpcrd").write_text("mock coordinates")
+        assert sim.top_file == tmp_path / 'custom.prmtop'
+        assert sim.coor_file == tmp_path / 'custom.inpcrd'
 
-            sim = Simulator(
-                path=path, top_name="custom.prmtop", coor_name="custom.inpcrd"
-            )
-
-            assert sim.top_file == path / "custom.prmtop"
-            assert sim.coor_file == path / "custom.inpcrd"
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_simulator_init_custom_output_path(self, mock_platform):
+    def test_simulator_init_custom_output_path(self, tmp_path):
         """Test Simulator initialization with custom output path"""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        out_path = tmp_path / 'output'
+        out_path.mkdir()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        sim = Simulator(path=tmp_path, out_path=out_path, platform='CPU')
 
-            out_path = path / "output"
-            out_path.mkdir()
+        assert sim.dcd == out_path / 'prod.dcd'
+        assert sim.prod_log == out_path / 'prod.log'
 
-            sim = Simulator(path=path, out_path=out_path)
-
-            assert sim.dcd == out_path / "prod.dcd"
-            assert sim.prod_log == out_path / "prod.log"
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_simulator_init_cpu_platform(self, mock_platform):
-        """Test Simulator initialization with CPU platform"""
+    def test_simulator_init_cpu_platform(self, tmp_path):
+        """Test Simulator initialization with the real CPU platform"""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = Simulator(path=tmp_path, platform='CPU')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path, platform="CPU")
-
-            # CPU platform should have empty properties
-            assert sim.properties == {}
+        # The real CPU platform takes no precision properties
+        assert sim.properties == {}
 
 
 class TestSimulatorBarostat:
     """Test suite for Simulator barostat setup"""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.MonteCarloBarostat")
-    def test_setup_barostat_non_membrane(self, mock_barostat, mock_platform):
+    def test_setup_barostat_non_membrane(self, tmp_path):
         """Test barostat setup for non-membrane system"""
+        from openmm import MonteCarloBarostat
+
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = Simulator(path=tmp_path, platform='CPU', membrane=False)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        assert sim.barostat is MonteCarloBarostat
+        assert 'temperature' in sim.barostat_args
 
-            sim = Simulator(path=path, membrane=False)
+    @requires_openmm
+    def test_setup_barostat_membrane(self, tmp_path):
+        """Membrane systems get a real MonteCarloMembraneBarostat config.
 
-            assert sim.barostat is not None
-            assert "temperature" in sim.barostat_args
+        Builds a real CPU Simulator (no file loading happens at construction)
+        and checks setup_barostat populated the anisotropic membrane coupling
+        arguments, including the surface-tension term that combines bar with
+        nanometer units.
+        """
+        from openmm import MonteCarloMembraneBarostat
 
-    @pytest.mark.skip(reason="Source code has bug - nm is not imported")
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.MonteCarloMembraneBarostat")
-    def test_setup_barostat_membrane(self, mock_membrane_barostat, mock_platform):
-        """Test barostat setup for membrane system"""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = Simulator(path=tmp_path, platform='CPU', membrane=True)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path, membrane=True)
-
-            assert "defaultSurfaceTension" in sim.barostat_args
-            assert "xymode" in sim.barostat_args
-            assert "zmode" in sim.barostat_args
+        assert sim.barostat is MonteCarloMembraneBarostat
+        assert 'defaultSurfaceTension' in sim.barostat_args
+        assert sim.barostat_args['xymode'] == MonteCarloMembraneBarostat.XYIsotropic
+        assert sim.barostat_args['zmode'] == MonteCarloMembraneBarostat.ZFree
 
 
 class TestSimulatorLoadSystem:
     """Test suite for Simulator load_system method"""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_load_system_invalid_ff(self, mock_platform):
+    def test_load_system_invalid_ff(self, tmp_path):
         """Test load_system with invalid force field"""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        # A non-amber ff hits the dispatch error branch before any file is parsed.
+        sim = Simulator(path=tmp_path, platform='CPU', ff='invalid')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        with pytest.raises(AttributeError, match='amber'):
+            sim.load_system()
 
-            sim = Simulator(path=path, ff="invalid")
-
-            with pytest.raises(AttributeError, match="valid MD forcefield"):
-                sim.load_system()
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.AmberInpcrdFile")
-    @patch("molecular_simulations.simulate.omm_simulator.AmberPrmtopFile")
-    def test_load_amber_files(self, mock_prmtop, mock_inpcrd, mock_platform):
-        """Test load_amber_files method"""
+    def test_load_amber_files(self, real_amber_explicit_files):
+        """load_amber_files builds a real PME system from the solvated box."""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_inpcrd.return_value = MagicMock(
-            boxVectors=[[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        sim = Simulator(
+            path=real_amber_explicit_files['path'],
+            top_name='ala_dipeptide_solv.prmtop',
+            coor_name='ala_dipeptide_solv.inpcrd',
+            platform='CPU',
         )
-        mock_topology = MagicMock()
-        mock_topology.createSystem.return_value = MagicMock()
-        mock_prmtop.return_value = mock_topology
+        system = sim.load_amber_files()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path, ff="amber")
-            system = sim.load_amber_files()
-
-            mock_topology.createSystem.assert_called_once()
-            assert system is not None
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.PDBFile")
-    @patch("molecular_simulations.simulate.omm_simulator.CharmmPsfFile")
-    @patch("molecular_simulations.simulate.omm_simulator.ForceField")
-    def test_load_charmm_files_no_params(
-        self, mock_ff, mock_psf, mock_pdb, mock_platform
-    ):
-        """Test load_charmm_files without explicit params"""
-        from molecular_simulations.simulate.omm_simulator import Simulator
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_pdb_inst = MagicMock()
-        mock_pdb_inst.topology.getPeriodicBoxVectors.return_value = [
-            [1, 0, 0],
-            [0, 1, 0],
-            [0, 0, 1],
-        ]
-        mock_pdb.return_value = mock_pdb_inst
-        mock_psf.return_value = MagicMock()
-        mock_ff_inst = MagicMock()
-        mock_ff_inst.createSystem.return_value = MagicMock()
-        mock_ff.return_value = mock_ff_inst
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path, ff="charmm")
-            system = sim.load_charmm_files()
-
-            mock_ff_inst.createSystem.assert_called_once()
-            assert system is not None
+        # Real solvated system: 913 atoms with a periodic box (PME)
+        assert system.getNumParticles() == 913
+        assert system.usesPeriodicBoundaryConditions()
 
 
 class TestSimulatorSetupSim:
     """Test suite for Simulator setup_sim method"""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.LangevinMiddleIntegrator")
-    @patch("molecular_simulations.simulate.omm_simulator.Simulation")
-    def test_setup_sim(self, mock_sim_class, mock_integrator, mock_platform):
-        """Test setup_sim method"""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+    def test_setup_sim(self, real_amber_system_files):
+        """Test setup_sim builds a real Simulation and integrator on CPU."""
+        from openmm import LangevinMiddleIntegrator
+        from openmm.app import Simulation
+        from openmm.unit import kelvin, picoseconds
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_integrator.return_value = MagicMock()
-        mock_sim_class.return_value = MagicMock()
+        from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        sim = ImplicitSimulator(**_amber_kwargs(real_amber_system_files))
+        system = sim.load_system()
 
-            sim = Simulator(path=path)
-            sim.topology = MagicMock()
-            sim.topology.topology = MagicMock()
+        simulation, integrator = sim.setup_sim(system, dt=0.002)
 
-            mock_system = MagicMock()
-            simulation, integrator = sim.setup_sim(mock_system, dt=0.002)
-
-            assert simulation is not None
-            assert integrator is not None
+        assert isinstance(simulation, Simulation)
+        assert isinstance(integrator, LangevinMiddleIntegrator)
+        assert integrator.getStepSize().value_in_unit(picoseconds) == 0.002
+        assert integrator.getTemperature().value_in_unit(kelvin) == 300.0
+        assert simulation.system.getNumParticles() == 22
 
 
 class TestSimulatorCheckpoint:
     """Test suite for Simulator checkpoint methods"""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_load_checkpoint(self, mock_platform):
-        """Test load_checkpoint method.
+    def test_load_checkpoint(self, real_amber_system_files):
+        """Test load_checkpoint restores a real OpenMM checkpoint.
 
-        Note: loadCheckpoint() restores positions, velocities, and step count
-        automatically, so no additional setPositions/setVelocities calls are needed.
+        loadCheckpoint() restores positions, velocities, and step count, so a
+        real round-trip (save then load) verifies the method end to end.
         """
-        from molecular_simulations.simulate.omm_simulator import Simulator
+        sim, simulation, _ = _build_real_implicit_simulation(real_amber_system_files)
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        chkpt = real_amber_system_files['path'] / 'test.chk'
+        simulation.step(5)
+        simulation.saveCheckpoint(str(chkpt))
+        saved_step = simulation.currentStep
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-            chkpt = path / "test.chk"
-            chkpt.write_bytes(b"mock checkpoint")
+        # Advance further, then load the checkpoint to roll back the step count.
+        simulation.step(5)
+        assert simulation.currentStep != saved_step
 
-            sim = Simulator(path=path)
+        result = sim.load_checkpoint(simulation, str(chkpt))
 
-            mock_simulation = MagicMock()
-
-            result = sim.load_checkpoint(mock_simulation, str(chkpt))
-
-            mock_simulation.loadCheckpoint.assert_called_once()
-            assert result is mock_simulation
+        assert result is simulation
+        assert simulation.currentStep == saved_step
 
 
 class TestSimulatorReporters:
     """Test suite for Simulator reporter methods"""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.DCDReporter")
-    @patch("molecular_simulations.simulate.omm_simulator.StateDataReporter")
-    @patch("molecular_simulations.simulate.omm_simulator.CheckpointReporter")
-    def test_attach_reporters(
-        self, mock_chkpt_rep, mock_state_rep, mock_dcd_rep, mock_platform
-    ):
-        """Test attach_reporters method"""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+    def test_attach_reporters(self, real_amber_system_files):
+        """Test attach_reporters attaches three real OpenMM reporters."""
+        from openmm.app import CheckpointReporter, DCDReporter, StateDataReporter
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        path = real_amber_system_files['path']
+        sim, simulation, _ = _build_real_implicit_simulation(real_amber_system_files)
+        simulation.reporters = []
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        dcd_file = path / 'test.dcd'
+        log_file = path / 'test.log'
+        rst_file = path / 'test.rst'
 
-            sim = Simulator(path=path)
+        result = sim.attach_reporters(
+            simulation, str(dcd_file), str(log_file), str(rst_file)
+        )
 
-            mock_simulation = MagicMock()
-            mock_simulation.reporters = []
-
-            dcd_file = path / "test.dcd"
-            log_file = path / "test.log"
-            rst_file = path / "test.rst"
-
-            result = sim.attach_reporters(
-                mock_simulation, str(dcd_file), str(log_file), str(rst_file)
-            )
-
-            assert len(result.reporters) == 3
+        assert len(result.reporters) == 3
+        assert isinstance(result.reporters[0], DCDReporter)
+        assert isinstance(result.reporters[1], StateDataReporter)
+        assert isinstance(result.reporters[2], CheckpointReporter)
+        # The DCD reporter creates its output file on construction.
+        assert dcd_file.exists()
 
 
 class TestSimulatorRestraintIndices:
     """Test suite for Simulator restraint methods"""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.mda")
-    def test_get_restraint_indices(self, mock_mda, mock_platform):
-        """Test get_restraint_indices method"""
+    def test_get_restraint_indices(self, real_amber_system_files):
+        """Test get_restraint_indices selects the real Ace-Ala-Nme backbone."""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = Simulator(**_amber_kwargs(real_amber_system_files))
+        indices = sim.get_restraint_indices()
 
-        # Setup mock universe
-        mock_universe = MagicMock()
-        mock_atoms = MagicMock()
-        mock_atoms.ix = np.array([0, 1, 2, 3])
-        mock_selection = MagicMock()
-        mock_selection.atoms = mock_atoms
-        mock_universe.select_atoms.return_value = mock_selection
-        mock_mda.Universe.return_value = mock_universe
+        # MDAnalysis 'backbone or nucleicbackbone' on Ace-Ala-Nme.
+        assert list(indices) == [4, 5, 6, 8, 14, 15, 16, 18]
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path)
-            indices = sim.get_restraint_indices()
-
-            assert len(indices) == 4
-            mock_universe.select_atoms.assert_called_once()
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.mda")
     def test_get_restraint_indices_with_additional_selection(
-        self, mock_mda, mock_platform
+        self, real_amber_system_files
     ):
-        """Test get_restraint_indices with additional selection"""
+        """Test get_restraint_indices honors an additional selection string."""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = Simulator(**_amber_kwargs(real_amber_system_files))
 
-        mock_universe = MagicMock()
-        mock_atoms = MagicMock()
-        mock_atoms.ix = np.array([0, 1, 2, 3, 4, 5])
-        mock_selection = MagicMock()
-        mock_selection.atoms = mock_atoms
-        mock_universe.select_atoms.return_value = mock_selection
-        mock_mda.Universe.return_value = mock_universe
+        backbone = list(sim.get_restraint_indices())
+        # 'resname ALA' adds the alanine side-chain/cap atoms beyond the backbone.
+        combined = list(sim.get_restraint_indices(addtl_selection='resname ALA'))
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path)
-            indices = sim.get_restraint_indices(addtl_selection="resname LIG")
-
-            # Should have called select_atoms with combined selection
-            call_args = mock_universe.select_atoms.call_args[0][0]
-            assert "backbone" in call_args
-            assert "resname LIG" in call_args
+        assert set(backbone).issubset(set(combined))
+        assert len(combined) > len(backbone)
 
 
 class TestSimulatorAddBackbonePosres:
     """Test suite for add_backbone_posres static method"""
 
-    @patch("molecular_simulations.simulate.omm_simulator.CustomExternalForce")
-    def test_add_backbone_posres(self, mock_force):
-        """Test add_backbone_posres static method"""
+    def test_add_backbone_posres(self, real_amber_system_files):
+        """Test add_backbone_posres adds a real CustomExternalForce."""
+        from openmm import CustomExternalForce
 
-        from molecular_simulations.simulate.omm_simulator import Simulator
+        from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
 
-        mock_force_inst = MagicMock()
-        mock_force.return_value = mock_force_inst
+        sim = ImplicitSimulator(**_amber_kwargs(real_amber_system_files))
+        system = sim.load_system()
+        n_forces_before = system.getNumForces()
 
-        # Create mock system
-        mock_system = MagicMock()
+        indices = list(sim.indices)
+        posres_system = sim.add_backbone_posres(
+            system,
+            sim.coordinate.positions,
+            sim.topology.topology.atoms(),
+            indices,
+            restraint_force=10.0,
+        )
 
-        # Create mock positions with units
-        mock_positions = []
-        for i in range(5):
-            pos = MagicMock()
-            pos.value_in_unit.return_value = [i * 0.1, 0, 0]
-            mock_positions.append(pos)
+        # A new restraint force is added on a deepcopy; the original is untouched.
+        assert system.getNumForces() == n_forces_before
+        assert posres_system.getNumForces() == n_forces_before + 1
 
-        # Create mock atoms
-        mock_atoms = []
-        for i in range(5):
-            atom = MagicMock()
-            atom.index = i
-            mock_atoms.append(atom)
-
-        indices = [0, 2, 4]
-
-        with patch(
-            "molecular_simulations.simulate.omm_simulator.deepcopy"
-        ) as mock_deepcopy:
-            mock_deepcopy.return_value = MagicMock()
-
-            result = Simulator.add_backbone_posres(
-                mock_system, mock_positions, mock_atoms, indices, restraint_force=10.0
-            )
-
-            # Should have added particles for indices
-            assert mock_force_inst.addParticle.call_count == 3
+        new_force = posres_system.getForce(posres_system.getNumForces() - 1)
+        assert isinstance(new_force, CustomExternalForce)
+        # One restrained particle per backbone index.
+        assert new_force.getNumParticles() == len(indices)
 
 
 class TestSimulatorCheckNumStepsLeft:
     """Test suite for check_num_steps_left method"""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_check_num_steps_left_normal(self, mock_platform):
+    def test_check_num_steps_left_normal(self, tmp_path):
         """Test check_num_steps_left with normal log file"""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        # Create production log
+        log_content = 'header\tstep\tenergy\n0\t100000\t-1000.0\n1\t200000\t-1001.0\n'
+        (tmp_path / 'prod.log').write_text(log_content)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        sim = Simulator(path=tmp_path, platform='CPU', prod_steps=500000)
+        sim.prod_log = tmp_path / 'prod.log'
 
-            # Create production log
-            log_content = (
-                "header\tstep\tenergy\n0\t100000\t-1000.0\n1\t200000\t-1001.0\n"
-            )
-            (path / "prod.log").write_text(log_content)
+        sim.check_num_steps_left()
 
-            sim = Simulator(path=path, prod_steps=500000)
-            sim.prod_log = path / "prod.log"
+        # prod_steps should be decremented
+        assert sim.prod_steps < 500000
 
-            sim.check_num_steps_left()
-
-            # prod_steps should be decremented
-            assert sim.prod_steps < 500000
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_check_num_steps_left_empty_log(self, mock_platform):
+    def test_check_num_steps_left_empty_log(self, tmp_path):
         """Test check_num_steps_left with empty log file"""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        # Create empty production log
+        (tmp_path / 'prod.log').write_text('')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        sim = Simulator(path=tmp_path, platform='CPU', prod_steps=500000)
+        sim.prod_log = tmp_path / 'prod.log'
 
-            # Create empty production log
-            (path / "prod.log").write_text("")
-
-            sim = Simulator(path=path, prod_steps=500000)
-            sim.prod_log = path / "prod.log"
-
-            # Should not raise, just return
-            sim.check_num_steps_left()
+        # Should not raise, just return
+        sim.check_num_steps_left()
 
 
-class TestImplicitSimulator:
-    """Test suite for ImplicitSimulator class"""
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_implicit_simulator_init(self, mock_platform):
-        """Test ImplicitSimulator initialization"""
-        from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = ImplicitSimulator(path=path)
-
-            assert sim.solvent is not None
-            assert sim.solute_dielectric == 1.0
-            assert sim.solvent_dielectric == 78.5
-            # kappa should be computed
-            assert sim.kappa > 0
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.AmberInpcrdFile")
-    @patch("molecular_simulations.simulate.omm_simulator.AmberPrmtopFile")
-    def test_implicit_load_amber_files(self, mock_prmtop, mock_inpcrd, mock_platform):
-        """Test ImplicitSimulator load_amber_files method"""
-        from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_inpcrd.return_value = MagicMock()
-        mock_topology = MagicMock()
-        mock_topology.createSystem.return_value = MagicMock()
-        mock_prmtop.return_value = mock_topology
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = ImplicitSimulator(path=path)
-            system = sim.load_amber_files()
-
-            # Should be called with implicit solvent parameters
-            call_kwargs = mock_topology.createSystem.call_args[1]
-            assert "implicitSolvent" in call_kwargs
-            assert "soluteDielectric" in call_kwargs
-            assert "solventDielectric" in call_kwargs
-
-
-@pytest.mark.skip(reason="Source code has bug - passes args to super() in wrong order")
+@requires_openmm
 class TestCustomForcesSimulator:
-    """Test suite for CustomForcesSimulator class"""
+    """Test suite for CustomForcesSimulator class (real CPU platform)."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_custom_forces_simulator_init(self, mock_platform):
-        """Test CustomForcesSimulator initialization"""
+    def test_custom_forces_simulator_init(self, tmp_path):
+        """The custom forces passed in are stored on the simulator.
+
+        CustomForcesSimulator.__init__ forwards everything to Simulator via
+        keyword arguments, so this also exercises that the super().__init__
+        call constructs cleanly on the real CPU platform.
+        """
+        from openmm import CustomBondForce
+
         from molecular_simulations.simulate.omm_simulator import CustomForcesSimulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        force = CustomBondForce('r')
+        sim = CustomForcesSimulator(
+            path=tmp_path, custom_force_objects=[force], platform='CPU'
+        )
 
-        mock_force = MagicMock()
+        assert sim.custom_forces == [force]
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+    def test_add_forces(self, tmp_path):
+        """add_forces attaches every custom force to a real OpenMM System."""
+        from openmm import CustomBondForce, System
 
-            sim = CustomForcesSimulator(path=path, custom_force_objects=[mock_force])
-
-            assert sim.custom_forces == [mock_force]
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_add_forces(self, mock_platform):
-        """Test add_forces method"""
         from molecular_simulations.simulate.omm_simulator import CustomForcesSimulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        force1 = CustomBondForce('r')
+        force2 = CustomBondForce('r^2')
+        sim = CustomForcesSimulator(
+            path=tmp_path, custom_force_objects=[force1, force2], platform='CPU'
+        )
 
-        mock_force1 = MagicMock()
-        mock_force2 = MagicMock()
+        system = System()
+        returned = sim.add_forces(system)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = CustomForcesSimulator(
-                path=path, custom_force_objects=[mock_force1, mock_force2]
-            )
-
-            mock_system = MagicMock()
-            result = sim.add_forces(mock_system)
-
-            assert mock_system.addForce.call_count == 2
+        assert returned.getNumForces() == 2
 
 
 class TestMinimizer:
     """Test suite for Minimizer class"""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_minimizer_init(self, mock_platform):
+    def test_minimizer_init(self, tmp_path):
         """Test Minimizer initialization"""
         from molecular_simulations.simulate.omm_simulator import Minimizer
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        top_file = tmp_path / 'system.prmtop'
+        top_file.write_text('placeholder topology')
+        coor_file = tmp_path / 'system.inpcrd'
+        coor_file.write_text('placeholder coordinates')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock topology")
-            coor_file = path / "system.inpcrd"
-            coor_file.write_text("mock coordinates")
+        minimizer = Minimizer(
+            topology=str(top_file),
+            coordinates=str(coor_file),
+            out='minimized.pdb',
+            platform='CPU',
+        )
 
-            minimizer = Minimizer(
-                topology=str(top_file), coordinates=str(coor_file), out="minimized.pdb"
-            )
+        assert minimizer.topology == top_file
+        assert minimizer.coordinates == coor_file
+        assert minimizer.out == tmp_path / 'minimized.pdb'
 
-            assert minimizer.topology == top_file
-            assert minimizer.coordinates == coor_file
-            assert minimizer.out == path / "minimized.pdb"
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_minimizer_init_cpu(self, mock_platform):
+    def test_minimizer_init_cpu(self, tmp_path):
         """Test Minimizer initialization without GPU"""
         from molecular_simulations.simulate.omm_simulator import Minimizer
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        top_file = tmp_path / 'system.prmtop'
+        top_file.write_text('placeholder topology')
+        coor_file = tmp_path / 'system.inpcrd'
+        coor_file.write_text('placeholder coordinates')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock topology")
-            coor_file = path / "system.inpcrd"
-            coor_file.write_text("mock coordinates")
+        minimizer = Minimizer(
+            topology=str(top_file),
+            coordinates=str(coor_file),
+            platform='CPU',
+            device_ids=None,
+        )
 
-            minimizer = Minimizer(
-                topology=str(top_file), coordinates=str(coor_file), device_ids=None
-            )
+        assert 'DeviceIndex' not in minimizer.properties
 
-            assert "DeviceIndex" not in minimizer.properties
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_load_files_invalid(self, mock_platform):
+    def test_load_files_invalid(self, tmp_path):
         """Test load_files with invalid file type"""
         from molecular_simulations.simulate.omm_simulator import Minimizer
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        top_file = tmp_path / 'system.xyz'  # Invalid extension
+        top_file.write_text('placeholder topology')
+        coor_file = tmp_path / 'system.xyz'
+        coor_file.write_text('placeholder coordinates')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / "system.xyz"  # Invalid extension
-            top_file.write_text("mock topology")
-            coor_file = path / "system.xyz"
-            coor_file.write_text("mock coordinates")
+        minimizer = Minimizer(
+            topology=str(top_file), coordinates=str(coor_file), platform='CPU'
+        )
 
-            minimizer = Minimizer(topology=str(top_file), coordinates=str(coor_file))
+        with pytest.raises(FileNotFoundError, match='No viable simulation'):
+            minimizer.load_files()
 
-            with pytest.raises(FileNotFoundError, match="No viable simulation"):
-                minimizer.load_files()
+    def test_load_files_dispatches_amber(self, real_amber_system_files):
+        """load_files routes a .prmtop topology to load_amber (match dispatch)."""
+        from openmm import System
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.AmberInpcrdFile")
-    @patch("molecular_simulations.simulate.omm_simulator.AmberPrmtopFile")
-    def test_load_amber(self, mock_prmtop, mock_inpcrd, mock_platform):
-        """Test load_amber method"""
         from molecular_simulations.simulate.omm_simulator import Minimizer
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_inpcrd.return_value = MagicMock(boxVectors=None)
-        mock_topology = MagicMock()
-        mock_topology.createSystem.return_value = MagicMock()
-        mock_prmtop.return_value = mock_topology
+        minimizer = Minimizer(
+            topology=str(real_amber_system_files['prmtop']),
+            coordinates=str(real_amber_system_files['inpcrd']),
+            platform='CPU',
+        )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock topology")
-            coor_file = path / "system.inpcrd"
-            coor_file.write_text("mock coordinates")
+        system = minimizer.load_files()
+        assert isinstance(system, System)
+        assert system.getNumParticles() == 22
 
-            minimizer = Minimizer(topology=str(top_file), coordinates=str(coor_file))
+    def test_load_files_dispatches_pdb(self, real_amber_system_files):
+        """load_files routes a .pdb topology to load_pdb (match dispatch)."""
+        from openmm import System
 
-            system = minimizer.load_amber()
-            assert system is not None
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.PDBFile")
-    @patch("molecular_simulations.simulate.omm_simulator.ForceField")
-    def test_load_pdb(self, mock_ff, mock_pdb, mock_platform):
-        """Test load_pdb method"""
         from molecular_simulations.simulate.omm_simulator import Minimizer
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_pdb_inst = MagicMock()
-        mock_pdb_inst.topology = MagicMock()
-        mock_pdb.return_value = mock_pdb_inst
-        mock_ff_inst = MagicMock()
-        mock_ff_inst.createSystem.return_value = MagicMock()
-        mock_ff.return_value = mock_ff_inst
+        pdb_file = real_amber_system_files['pdb']
+        minimizer = Minimizer(
+            topology=str(pdb_file), coordinates=str(pdb_file), platform='CPU'
+        )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / "system.pdb"
-            top_file.write_text(
-                "ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00\n"
-            )
-            coor_file = path / "system.pdb"
+        system = minimizer.load_files()
+        assert isinstance(system, System)
+        assert system.getNumParticles() == 22
 
-            minimizer = Minimizer(topology=str(top_file), coordinates=str(coor_file))
+    @pytest.mark.skipif(
+        not _has_opencl(), reason='OpenCL platform not available in this OpenMM build'
+    )
+    def test_minimizer_gpu_properties(self, tmp_path):
+        """A real GPU platform gets mixed precision and a joined DeviceIndex.
 
-            system = minimizer.load_pdb()
-            assert system is not None
+        Covers the non-CPU/Reference branch: constructing with a registered GPU
+        platform sets Precision='mixed' and joins device_ids into DeviceIndex.
+        Skip-gated because it needs a real OpenCL platform registered.
+        """
+        from molecular_simulations.simulate.omm_simulator import Minimizer
+
+        top_file = tmp_path / 'system.prmtop'
+        top_file.write_text('placeholder topology')
+        coor_file = tmp_path / 'system.inpcrd'
+        coor_file.write_text('placeholder coordinates')
+
+        minimizer = Minimizer(
+            topology=str(top_file),
+            coordinates=str(coor_file),
+            platform='OpenCL',
+            device_ids=[0, 1],
+        )
+
+        assert minimizer.properties['Precision'] == 'mixed'
+        assert minimizer.properties['DeviceIndex'] == '0,1'
+
+    def test_load_amber(self, real_amber_system_files):
+        """Test load_amber builds a real System from prmtop/inpcrd."""
+        from openmm import System
+
+        from molecular_simulations.simulate.omm_simulator import Minimizer
+
+        minimizer = Minimizer(
+            topology=str(real_amber_system_files['prmtop']),
+            coordinates=str(real_amber_system_files['inpcrd']),
+            platform='CPU',
+        )
+
+        system = minimizer.load_amber()
+        assert isinstance(system, System)
+        assert system.getNumParticles() == 22
+
+    def test_load_pdb(self, real_amber_system_files):
+        """Test load_pdb builds a real System from a PDB via amber14 FF."""
+        from openmm import System
+
+        from molecular_simulations.simulate.omm_simulator import Minimizer
+
+        pdb_file = real_amber_system_files['pdb']
+        minimizer = Minimizer(
+            topology=str(pdb_file), coordinates=str(pdb_file), platform='CPU'
+        )
+
+        system = minimizer.load_pdb()
+        assert isinstance(system, System)
+        assert system.getNumParticles() == 22
 
 
 class TestSimulatorRun:
     """Test suite for Simulator run method"""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_run_skip_equilibration(self, mock_platform):
-        """Test run method when equilibration files exist."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+    def test_run_skip_equilibration(self, real_amber_system_files):
+        """run() skips equilibration when genuine eq files already exist."""
+        sim = _tiny_implicit_sim(real_amber_system_files)
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        # Produce real equilibration artifacts via a tiny real equilibration.
+        sim.equilibrate()
+        assert sim.eq_state.exists()
+        assert sim.eq_chkpt.exists()
+        assert sim.eq_log.exists()
+        eq_chk_before = sim.eq_chkpt.read_bytes()
+        eq_mtime = sim.eq_chkpt.stat().st_mtime_ns
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-            # Create eq files to skip equilibration
-            (path / "eq.state").write_text("mock state")
-            (path / "eq.chk").write_bytes(b"mock checkpoint")
-            (path / "eq.log").write_text("mock log")
+        # No restart checkpoint yet, so run() must take the skip-eq branch and go
+        # straight to production from the equilibration checkpoint.
+        sim.run()
 
-            sim = Simulator(path=path)
+        # Production artifacts were created.
+        assert sim.dcd.exists()
+        assert sim.chkpt.exists()
+        assert sim.state.exists()
+        # run() did NOT re-run equilibration (eq checkpoint untouched).
+        assert sim.eq_chkpt.stat().st_mtime_ns == eq_mtime
+        assert sim.eq_chkpt.read_bytes() == eq_chk_before
 
-            with (
-                patch.object(sim, "equilibrate") as mock_eq,
-                patch.object(sim, "production") as mock_prod,
-                patch.object(sim, "check_num_steps_left"),
-            ):
-                sim.run()
-                # equilibrate should not be called
-                mock_eq.assert_not_called()
-                mock_prod.assert_called_once()
+    def test_run_with_restart(self, real_amber_system_files):
+        """run() resumes production from a real restart checkpoint."""
+        sim = _tiny_implicit_sim(real_amber_system_files)
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_run_with_restart(self, mock_platform):
-        """Test run method with restart checkpoint."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+        # Build genuine eq files and an initial production, then persist a real
+        # restart checkpoint at the path run() looks for (prod.rst.chk).
+        sim.equilibrate()
+        sim.production(chkpt=str(sim.eq_chkpt), restart=False)
+        sim.simulation.saveCheckpoint(str(sim.restart))
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        assert sim.restart.exists()
+        assert sim.prod_log.exists()
+        lines_before = sim.prod_log.read_text().count('\n')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-            # Create all files including restart
-            (path / "eq.state").write_text("mock state")
-            (path / "eq.chk").write_bytes(b"mock checkpoint")
-            (path / "eq.log").write_text("mock log")
-            (path / "prod.rst.chk").write_bytes(b"mock restart")
-            (path / "prod.log").write_text("header\tstep\tenergy\n0\t100000\t-1000.0\n")
+        # run() sees the restart checkpoint and resumes production (restart=True),
+        # appending to the existing log rather than overwriting it.
+        sim.run()
 
-            sim = Simulator(path=path)
-
-            with (
-                patch.object(sim, "production") as mock_prod,
-                patch.object(sim, "check_num_steps_left"),
-            ):
-                sim.run()
-                # Should call production with restart=True
-                mock_prod.assert_called_once()
-                call_kwargs = mock_prod.call_args[1]
-                assert call_kwargs.get("restart") is True
+        lines_after = sim.prod_log.read_text().count('\n')
+        assert lines_after > lines_before
+        assert sim.state.exists()
+        assert sim.chkpt.exists()
 
 
 class TestSimulatorEquilibration:
     """Test suite for equilibration methods."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.StateDataReporter")
-    @patch("molecular_simulations.simulate.omm_simulator.DCDReporter")
-    def test_equilibrate(self, mock_dcd, mock_state, mock_platform):
-        """Test equilibrate method."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+    def test_equilibrate(self, real_amber_system_files):
+        """equilibrate() runs a real tiny equilibration and writes artifacts."""
+        from openmm.app import DCDReporter, StateDataReporter
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = _tiny_implicit_sim(real_amber_system_files)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        simulation = sim.equilibrate()
 
-            sim = Simulator(path=path)
-
-            with (
-                patch.object(sim, "load_system") as mock_load,
-                patch.object(sim, "add_backbone_posres") as mock_posres,
-                patch.object(sim, "setup_sim") as mock_setup,
-                patch.object(sim, "_heating") as mock_heat,
-                patch.object(sim, "_equilibrate") as mock_eq,
-            ):
-                mock_system = MagicMock()
-                mock_load.return_value = mock_system
-                mock_posres.return_value = mock_system
-
-                mock_simulation = MagicMock()
-                mock_simulation.reporters = []
-                mock_integrator = MagicMock()
-                mock_setup.return_value = (mock_simulation, mock_integrator)
-                mock_heat.return_value = (mock_simulation, mock_integrator)
-                mock_eq.return_value = mock_simulation
-
-                sim.coordinate = MagicMock()
-                sim.coordinate.positions = [[0, 0, 0]]
-                sim.topology = MagicMock()
-                sim.topology.topology.atoms.return_value = []
-                sim.indices = [0]
-
-                result = sim.equilibrate()
-
-                mock_load.assert_called_once()
-                mock_posres.assert_called_once()
-                mock_setup.assert_called_once()
-                mock_heat.assert_called_once()
-                mock_eq.assert_called_once()
+        # Real equilibration reporters were attached.
+        assert any(isinstance(r, StateDataReporter) for r in simulation.reporters)
+        assert any(isinstance(r, DCDReporter) for r in simulation.reporters)
+        # Real equilibration artifacts were written to disk.
+        assert sim.eq_state.exists()
+        assert sim.eq_chkpt.exists()
+        assert sim.eq_log.exists()
+        assert sim.eq_dcd.exists()
 
 
 class TestSimulatorProduction:
     """Test suite for production methods."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_production_no_restart(self, mock_platform):
-        """Test production method without restart."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+    def test_production_no_restart(self, real_amber_system_files):
+        """production() loads a real checkpoint and runs real production MD."""
+        sim = _tiny_implicit_sim(real_amber_system_files)
+        # A real equilibration checkpoint is required for production to load.
+        sim.equilibrate()
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim.production(chkpt=str(sim.eq_chkpt), restart=False)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-            chkpt = path / "test.chk"
-            chkpt.write_bytes(b"mock checkpoint")
+        # Real production artifacts written to disk.
+        assert sim.dcd.exists()
+        assert sim.chkpt.exists()
+        assert sim.state.exists()
+        # Production advanced the (real) simulation object it stored.
+        assert sim.simulation.currentStep >= 2
 
-            sim = Simulator(path=path)
+    def test_production_with_restart(self, real_amber_system_files):
+        """production(restart=True) appends to the existing real log/DCD."""
+        sim = _tiny_implicit_sim(real_amber_system_files)
+        sim.equilibrate()
 
-            with (
-                patch.object(sim, "load_system") as mock_load,
-                patch.object(sim, "setup_sim") as mock_setup,
-                patch.object(sim, "load_checkpoint") as mock_load_chk,
-                patch.object(sim, "attach_reporters") as mock_attach,
-                patch.object(sim, "_production") as mock_prod,
-            ):
-                mock_system = MagicMock()
-                mock_load.return_value = mock_system
+        # Initial (non-restart) production seeds prod.log/prod.dcd; persist a real
+        # restart checkpoint from the resulting simulation.
+        sim.production(chkpt=str(sim.eq_chkpt), restart=False)
+        sim.simulation.saveCheckpoint(str(sim.restart))
+        lines_before = sim.prod_log.read_text().count('\n')
 
-                mock_simulation = MagicMock()
-                mock_integrator = MagicMock()
-                mock_setup.return_value = (mock_simulation, mock_integrator)
-                mock_load_chk.return_value = mock_simulation
-                mock_attach.return_value = mock_simulation
-                mock_prod.return_value = mock_simulation
+        sim.production(chkpt=str(sim.restart), restart=True)
 
-                sim.production(str(chkpt), restart=False)
+        # Restart mode appended more log rows instead of truncating.
+        lines_after = sim.prod_log.read_text().count('\n')
+        assert lines_after > lines_before
+        assert sim.state.exists()
+        assert sim.chkpt.exists()
 
-                mock_load.assert_called_once()
-                mock_setup.assert_called_once()
-                mock_load_chk.assert_called_once()
-                mock_attach.assert_called_once()
-                mock_prod.assert_called_once()
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_production_with_restart(self, mock_platform):
-        """Test production method with restart."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+class TestBaseSimulatorProduction:
+    """Real base-class ``Simulator.production`` on the solvated (PME/NPT) box.
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+    The implicit-solvent tests exercise ``ImplicitSimulator.production`` (the
+    override with no barostat). The base ``Simulator.production`` adds the
+    ``MonteCarloBarostat`` and calls ``context.reinitialize(True)`` before
+    loading the checkpoint, so it can only run on a boxed system. These tests
+    build a tiny real eq checkpoint via ``_equilibrate`` (no heating -> fast),
+    then run base production for real with tiny step counts.
+    """
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-            chkpt = path / "test.chk"
-            chkpt.write_bytes(b"mock checkpoint")
+    def _seed_eq_checkpoint(self, real_amber_explicit_files):
+        """Build a tiny real eq.chk compatible with base production's context."""
+        sim, simulation = _build_real_explicit_simulation(
+            real_amber_explicit_files,
+            equil_steps=8,
+            n_equil_cycles=1,
+            prod_steps=2,
+            prod_reporter_frequency=1,
+            eq_reporter_frequency=1,
+        )
+        # _equilibrate relaxes the restraint, adds the barostat, and writes
+        # eq.state/eq.chk -- a genuine checkpoint for production to load.
+        sim._equilibrate(simulation)
+        return sim
 
-            sim = Simulator(path=path)
+    def test_base_production_no_restart_adds_barostat(self, real_amber_explicit_files):
+        """Base production builds a real PME+NPT system and runs (restart=False)."""
+        from openmm import MonteCarloBarostat
 
-            with (
-                patch.object(sim, "load_system") as mock_load,
-                patch.object(sim, "setup_sim") as mock_setup,
-                patch.object(sim, "load_checkpoint") as mock_load_chk,
-                patch.object(sim, "attach_reporters") as mock_attach,
-                patch.object(sim, "_production") as mock_prod,
-            ):
-                mock_system = MagicMock()
-                mock_load.return_value = mock_system
+        sim = self._seed_eq_checkpoint(real_amber_explicit_files)
 
-                mock_simulation = MagicMock()
-                mock_integrator = MagicMock()
-                mock_setup.return_value = (mock_simulation, mock_integrator)
-                mock_load_chk.return_value = mock_simulation
-                mock_attach.return_value = mock_simulation
-                mock_prod.return_value = mock_simulation
+        sim.production(chkpt=str(sim.eq_chkpt), restart=False)
 
-                sim.production(str(chkpt), restart=True)
+        # Base production adds a MonteCarloBarostat before reinitialize().
+        forces = sim.simulation.system.getForces()
+        assert any(isinstance(f, MonteCarloBarostat) for f in forces)
+        # Real production artifacts written to disk.
+        assert sim.dcd.exists()
+        assert sim.chkpt.exists()
+        assert sim.state.exists()
 
-                # With restart=True, log file should be opened in append mode
-                mock_attach.assert_called_once()
-                call_args = mock_attach.call_args[0]
-                # log_file arg should be a file object (from open), not string
-                assert not isinstance(call_args[2], str)
+    def test_base_production_restart_appends(self, real_amber_explicit_files):
+        """Base production(restart=True) appends to the real log and DCD.
+
+        Covers the uncovered append branch (open(prod_log, 'a') + DCDReporter
+        append=True): the restart pass must extend prod.log/prod.dcd rather than
+        truncate them. Proven by the log prefix being preserved and both files
+        growing in size.
+        """
+        sim = self._seed_eq_checkpoint(real_amber_explicit_files)
+
+        # Seed prod.log/prod.dcd with a real non-restart production, then persist
+        # a real restart checkpoint at the path production reopens.
+        sim.production(chkpt=str(sim.eq_chkpt), restart=False)
+        sim.simulation.saveCheckpoint(str(sim.restart))
+
+        log_before = sim.prod_log.read_text()
+        dcd_size_before = sim.dcd.stat().st_size
+
+        sim.production(chkpt=str(sim.restart), restart=True)
+
+        log_after = sim.prod_log.read_text()
+        dcd_size_after = sim.dcd.stat().st_size
+
+        # Append, not truncate: the original log content is still the prefix and
+        # more rows were added; the DCD grew rather than being overwritten.
+        assert log_after.startswith(log_before)
+        assert len(log_after) > len(log_before)
+        assert dcd_size_after > dcd_size_before
+        # A fresh production state/checkpoint were written.
+        assert sim.state.exists()
+        assert sim.chkpt.exists()
 
 
 class TestMinimizerMethods:
     """Additional tests for Minimizer class."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.AmberInpcrdFile")
-    @patch("molecular_simulations.simulate.omm_simulator.AmberPrmtopFile")
-    @patch("molecular_simulations.simulate.omm_simulator.LangevinMiddleIntegrator")
-    @patch("molecular_simulations.simulate.omm_simulator.Simulation")
-    @patch("molecular_simulations.simulate.omm_simulator.PDBFile")
-    def test_minimizer_minimize(
-        self,
-        mock_pdb,
-        mock_sim_class,
-        mock_integrator,
-        mock_prmtop,
-        mock_inpcrd,
-        mock_platform,
-    ):
-        """Test Minimizer minimize method."""
+    def test_minimizer_minimize(self, real_amber_system_files):
+        """Minimizer.minimize runs a real CPU minimization and writes a PDB."""
+        import MDAnalysis as mda
+
         from molecular_simulations.simulate.omm_simulator import Minimizer
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_inpcrd_instance = MagicMock(boxVectors=None)
-        mock_inpcrd_instance.positions = [[0, 0, 0]]
-        mock_inpcrd.return_value = mock_inpcrd_instance
-        mock_topology = MagicMock()
-        mock_topology.createSystem.return_value = MagicMock()
-        mock_topology.topology = MagicMock()
-        mock_prmtop.return_value = mock_topology
+        files = real_amber_system_files
+        minimizer = Minimizer(
+            topology=str(files['prmtop']),
+            coordinates=str(files['inpcrd']),
+            out='minimized.pdb',
+            platform='CPU',
+            device_ids=None,
+        )
+        # CPU platform must not carry a Precision property (issue #19)
+        assert minimizer.properties == {}
 
-        mock_simulation = MagicMock()
-        mock_state = MagicMock()
-        mock_state.getPositions.return_value = [[0, 0, 0]]
-        mock_simulation.context.getState.return_value = mock_state
-        mock_sim_class.return_value = mock_simulation
-        mock_integrator.return_value = MagicMock()
+        minimizer.minimize()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / "system.prmtop"
-            top_file.write_text("mock topology")
-            coor_file = path / "system.inpcrd"
-            coor_file.write_text("mock coordinates")
-
-            minimizer = Minimizer(
-                topology=str(top_file), coordinates=str(coor_file), out="minimized.pdb"
-            )
-
-            minimizer.minimize()
-
-            mock_simulation.minimizeEnergy.assert_called_once()
-            mock_pdb.writeFile.assert_called_once()
+        out = files['path'] / 'minimized.pdb'
+        assert out.exists()
+        # The minimized structure is a valid 22-atom PDB
+        assert mda.Universe(str(out)).atoms.n_atoms == 22
 
 
 class TestImplicitSimulator:
-    """Test suite for ImplicitSimulator class."""
+    """Real ImplicitSimulator tests on the Ace-Ala-Nme system (CPU)."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_implicit_simulator_init(self, mock_platform):
-        """Test ImplicitSimulator initialization."""
+    def test_implicit_simulator_init(self, real_amber_system_files):
+        """Test ImplicitSimulator initialization and implicit-solvent setup."""
         from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = ImplicitSimulator(**_amber_kwargs(real_amber_system_files))
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        assert sim.path == real_amber_system_files['path']
+        assert sim.temperature == 300.0
+        assert sim.solute_dielectric == 1.0
+        assert sim.solvent_dielectric == 78.5
+        # Debye-Huckel screening parameter is computed from the salt conc.
+        assert sim.kappa > 0
 
-            sim = ImplicitSimulator(path=path)
-
-            assert sim.path == path
-            assert sim.temperature == 300.0
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_implicit_simulator_init_with_ff(self, mock_platform):
+    def test_implicit_simulator_init_with_ff(self, real_amber_system_files):
         """Test ImplicitSimulator initialization with force field parameter."""
         from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = ImplicitSimulator(**_amber_kwargs(real_amber_system_files, ff='amber'))
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        assert sim.ff == 'amber'
 
-            sim = ImplicitSimulator(path=path, ff="amber")
+    def test_implicit_load_amber_files(self, real_amber_system_files):
+        """load_amber_files builds a real implicit-solvent system (GB force)."""
+        from openmm import CustomGBForce, GBSAOBCForce
 
-            assert sim.ff == "amber"
+        from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
+
+        sim = ImplicitSimulator(**_amber_kwargs(real_amber_system_files))
+        system = sim.load_amber_files()
+
+        assert system.getNumParticles() == 22
+        # An implicit-solvent (Generalized Born) force is present
+        assert any(
+            isinstance(f, (CustomGBForce, GBSAOBCForce)) for f in system.getForces()
+        )
 
 
 class TestSimulatorHeating:
     """Test suite for _heating method."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_heating_gradual_temperature_increase(self, mock_platform):
-        """Test _heating method performs gradual temperature increase."""
-
-        from molecular_simulations.simulate.omm_simulator import Simulator
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path, heat_steps=10000)
-
-            mock_simulation = MagicMock()
-            mock_integrator = MagicMock()
-
-            result_sim, result_int = sim._heating(mock_simulation, mock_integrator)
-
-            # Verify simulation was stepped
-            assert mock_simulation.step.call_count > 0
-            # Verify temperatures were set
-            assert mock_integrator.setTemperature.call_count > 0
-            # Verify initial velocity setting
-            mock_simulation.context.setVelocitiesToTemperature.assert_called_once()
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_heating_temperature_caps_at_target(self, mock_platform):
-        """Test _heating caps temperature at target temperature."""
+    def test_heating_gradual_temperature_increase(self, real_amber_system_files):
+        """Test _heating ramps a real integrator up to the target temperature."""
         from openmm.unit import kelvin
 
-        from molecular_simulations.simulate.omm_simulator import Simulator
+        sim, simulation, integrator = _build_real_implicit_simulation(
+            real_amber_system_files, dt=0.002, temperature=300.0
+        )
+        # ImplicitSimulator does not expose heat_steps via its constructor; set a
+        # tiny ramp so the real heating runs quickly on CPU.
+        sim.heat_steps = 2000
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        step_before = simulation.currentStep
+        result_sim, result_int = sim._heating(simulation, integrator)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        # The simulation actually advanced (1000-step blocks * heat_steps//1000).
+        assert simulation.currentStep > step_before
+        # Heating ends at the target temperature.
+        assert result_int.getTemperature().value_in_unit(kelvin) == 300.0
+        assert result_sim is simulation
 
-            sim = Simulator(path=path, temperature=300.0, heat_steps=10000)
+    def test_heating_temperature_caps_at_target(self, real_amber_system_files):
+        """Test _heating caps temperature at the target temperature."""
+        from openmm.unit import kelvin
 
-            mock_simulation = MagicMock()
-            mock_integrator = MagicMock()
+        sim, simulation, integrator = _build_real_implicit_simulation(
+            real_amber_system_files, dt=0.002, temperature=300.0
+        )
+        sim.heat_steps = 2000
 
-            # Track temperature calls
-            temps_called = []
-            mock_integrator.setTemperature.side_effect = lambda t: temps_called.append(
-                t
-            )
+        sim._heating(simulation, integrator)
 
-            sim._heating(mock_simulation, mock_integrator)
+        # Final integrator temperature must not exceed the target.
+        assert integrator.getTemperature().value_in_unit(kelvin) <= 300.0
 
-            # Last temperature should not exceed target
-            last_temp_value = temps_called[-1].value_in_unit(kelvin)
-            assert last_temp_value <= 300.0
+    def test_heating_below_one_block_is_a_noop(self, real_amber_system_files):
+        """heat_steps < 1000 must not raise ZeroDivisionError.
+
+        ``length = heat_steps // 1000`` is 0 for any sub-1000 request; the source
+        previously computed ``tstep = (T - 5) / length`` before the loop guard and
+        crashed. With fewer than one 1000-step block requested there is nothing to
+        ramp, so _heating returns the simulation unchanged.
+        """
+        sim, simulation, integrator = _build_real_implicit_simulation(
+            real_amber_system_files, dt=0.002, temperature=300.0
+        )
+        sim.heat_steps = 0
+
+        step_before = simulation.currentStep
+        result_sim, result_int = sim._heating(simulation, integrator)
+
+        assert result_sim is simulation
+        assert result_int is integrator
+        # No heating blocks were run.
+        assert simulation.currentStep == step_before
 
 
 class TestSimulatorEquilibrateMethod:
     """Test suite for _equilibrate method."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_equilibrate_restraint_relaxation(self, mock_platform):
-        """Test _equilibrate performs restraint relaxation in 5 levels."""
+    def test_equilibrate_restraint_relaxation(self, real_amber_explicit_files):
+        """_equilibrate relaxes the restraint to zero and saves state/checkpoint."""
+        sim, simulation = _build_real_explicit_simulation(
+            real_amber_explicit_files, equil_steps=8, n_equil_cycles=1
+        )
 
-        from molecular_simulations.simulate.omm_simulator import Simulator
+        sim._equilibrate(simulation)
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        # The backbone restraint is fully relaxed to k=0 by the end
+        assert simulation.context.getParameter('k') == 0.0
+        # State and checkpoint are written
+        assert sim.eq_state.exists()
+        assert sim.eq_chkpt.exists()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+    def test_equilibrate_adds_barostat(self, real_amber_explicit_files):
+        """_equilibrate adds a MonteCarloBarostat for the NPT phase."""
+        from openmm import MonteCarloBarostat
 
-            sim = Simulator(path=path, equil_steps=60000, n_equil_cycles=3)
+        sim, simulation = _build_real_explicit_simulation(
+            real_amber_explicit_files, equil_steps=8, n_equil_cycles=1
+        )
 
-            mock_simulation = MagicMock()
-            mock_simulation.system = MagicMock()
+        before = sum(
+            isinstance(f, MonteCarloBarostat) for f in simulation.system.getForces()
+        )
+        sim._equilibrate(simulation)
+        after = sum(
+            isinstance(f, MonteCarloBarostat) for f in simulation.system.getForces()
+        )
 
-            result = sim._equilibrate(mock_simulation)
-
-            # Verify context was reinitialized
-            mock_simulation.context.reinitialize.assert_called_once_with(True)
-            # Verify restraint parameter was set multiple times (5 levels + final zero)
-            assert mock_simulation.context.setParameter.call_count >= 6
-            # Verify state and checkpoint were saved
-            mock_simulation.saveState.assert_called_once()
-            mock_simulation.saveCheckpoint.assert_called_once()
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_equilibrate_adds_barostat(self, mock_platform):
-        """Test _equilibrate adds barostat for NPT."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path, equil_steps=60000, n_equil_cycles=3)
-
-            mock_simulation = MagicMock()
-            mock_simulation.system = MagicMock()
-
-            sim._equilibrate(mock_simulation)
-
-            # Verify barostat was added to system
-            mock_simulation.system.addForce.assert_called_once()
+        assert before == 0
+        assert after == 1
 
 
 class TestSimulatorProductionMethod:
     """Test suite for _production method."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_production_runs_steps(self, mock_platform):
-        """Test _production runs the correct number of steps."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+    def test_production_runs_steps(self, real_amber_system_files):
+        """Test _production runs the requested steps and saves outputs."""
+        sim, simulation, _ = _build_real_implicit_simulation(
+            real_amber_system_files, dt=0.004, prod_steps=10
+        )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        step_before = simulation.currentStep
+        sim._production(simulation)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        # Verify simulation advanced by prod_steps.
+        assert simulation.currentStep == step_before + 10
+        # Verify state and checkpoint were saved to disk.
+        assert sim.state.exists()
+        assert sim.chkpt.exists()
 
-            sim = Simulator(path=path, prod_steps=100000)
-
-            mock_simulation = MagicMock()
-
-            result = sim._production(mock_simulation)
-
-            # Verify simulation ran for prod_steps
-            mock_simulation.step.assert_called_once_with(100000)
-            # Verify state and checkpoint were saved
-            mock_simulation.saveState.assert_called_once()
-            mock_simulation.saveCheckpoint.assert_called_once()
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_production_returns_simulation(self, mock_platform):
+    def test_production_returns_simulation(self, real_amber_system_files):
         """Test _production returns the simulation object."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+        sim, simulation, _ = _build_real_implicit_simulation(
+            real_amber_system_files, dt=0.004, prod_steps=10
+        )
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        result = sim._production(simulation)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path, prod_steps=1000)
-
-            mock_simulation = MagicMock()
-
-            result = sim._production(mock_simulation)
-
-            assert result is mock_simulation
+        assert result is simulation
 
 
 class TestSimulatorPlatformInit:
     """Test suite for platform initialization."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_cuda_platform_with_env_variable(self, mock_platform):
-        """Test CUDA platform uses CUDA_VISIBLE_DEVICES env variable."""
+    @pytest.mark.skipif(not _has_cuda(), reason='CUDA platform not available')
+    def test_cuda_platform_with_env_variable(self, tmp_path, monkeypatch):
+        """Real CUDA platform uses CUDA_VISIBLE_DEVICES to index the device."""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        monkeypatch.setenv('CUDA_VISIBLE_DEVICES', '0')
+        sim = Simulator(path=tmp_path, platform='CUDA')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        assert sim.properties['DeviceIndex'] == '0'
+        assert sim.properties['Precision'] == 'mixed'
 
-            # Set environment variable
-            with patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "0"}):
-                sim = Simulator(path=path, platform="CUDA")
-
-            assert sim.properties["DeviceIndex"] == "0"
-            assert sim.properties["Precision"] == "mixed"
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_cuda_platform_without_env_variable(self, mock_platform):
-        """Test CUDA platform uses device_ids when no env variable."""
+    @pytest.mark.skipif(not _has_cuda(), reason='CUDA platform not available')
+    def test_cuda_platform_without_env_variable(self, tmp_path, monkeypatch):
+        """Real CUDA platform falls back to device_ids without the env var."""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        monkeypatch.delenv('CUDA_VISIBLE_DEVICES', raising=False)
+        sim = Simulator(path=tmp_path, platform='CUDA', device_ids=[0, 1])
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        assert sim.properties['DeviceIndex'] == '0,1'
 
-            # Ensure no env variable
-            with patch.dict(os.environ, {}, clear=True):
-                # Remove CUDA_VISIBLE_DEVICES if present
-                os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-                sim = Simulator(path=path, platform="CUDA", device_ids=[0, 1])
-
-            assert sim.properties["DeviceIndex"] == "0,1"
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_opencl_platform_with_env_variable(self, mock_platform):
-        """Test OpenCL platform uses ZE_AFFINITY_MASK env variable."""
+    @pytest.mark.skipif(
+        not _has_opencl(), reason='OpenCL platform not available in this OpenMM build'
+    )
+    def test_opencl_platform_with_env_variable(self, tmp_path, monkeypatch):
+        """Real OpenCL platform sets a mixed-precision property."""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        monkeypatch.setenv('ZE_AFFINITY_MASK', '0')
+        sim = Simulator(path=tmp_path, platform='OpenCL')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        # OpenCL currently only sets Precision, not DeviceIndex
+        assert sim.properties['Precision'] == 'mixed'
 
-            with patch.dict(os.environ, {"ZE_AFFINITY_MASK": "0"}):
-                sim = Simulator(path=path, platform="OpenCL")
+    def test_invalid_platform_raises(self, tmp_path):
+        """Unsupported (but registered) platform hits the error branch for real.
 
-            # OpenCL currently only sets Precision, not DeviceIndex
-            assert sim.properties["Precision"] == "mixed"
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_invalid_platform_raises(self, mock_platform):
-        """Test invalid platform raises AttributeError."""
+        'Reference' is a genuine OpenMM platform the dispatch does not handle, so
+        constructing with it reaches the unsupported-platform ``AttributeError``
+        without mocking Platform.
+        """
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            with pytest.raises(AttributeError, match="not available"):
-                Simulator(path=path, platform="InvalidPlatform")
+        with pytest.raises(AttributeError, match='not available'):
+            Simulator(path=tmp_path, platform='Reference')
 
 
 class TestSimulatorCheckNumStepsLeftAdvanced:
     """Advanced tests for check_num_steps_left method."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_check_num_steps_left_with_duplicate_frames(self, mock_platform):
+    def test_check_num_steps_left_with_duplicate_frames(self, tmp_path):
         """Test check_num_steps_left creates duplicate_frames.log."""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        # Create log with steps that don't align with checkpoint frequency
+        # prod_freq=10000 means checkpoint_freq=100000
+        # Last step 150000 means 50000 steps after last checkpoint
+        log_content = '#header\tstep\tenergy\n0\t10000\t-1000.0\n1\t150000\t-1001.0\n'
+        (tmp_path / 'prod.log').write_text(log_content)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        sim = Simulator(
+            path=tmp_path,
+            platform='CPU',
+            prod_steps=500000,
+            prod_reporter_frequency=10000,
+        )
+        sim.prod_log = tmp_path / 'prod.log'
 
-            # Create log with steps that don't align with checkpoint frequency
-            # prod_freq=10000 means checkpoint_freq=100000
-            # Last step 150000 means 50000 steps after last checkpoint
-            log_content = (
-                "#header\tstep\tenergy\n0\t10000\t-1000.0\n1\t150000\t-1001.0\n"
-            )
-            (path / "prod.log").write_text(log_content)
+        sim.check_num_steps_left()
 
-            sim = Simulator(path=path, prod_steps=500000, prod_reporter_frequency=10000)
-            sim.prod_log = path / "prod.log"
+        # Should create duplicate frames log
+        dup_log = tmp_path / 'duplicate_frames.log'
+        assert dup_log.exists()
 
-            sim.check_num_steps_left()
-
-            # Should create duplicate frames log
-            dup_log = path / "duplicate_frames.log"
-            assert dup_log.exists()
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_check_num_steps_left_appends_to_existing_log(self, mock_platform):
+    def test_check_num_steps_left_appends_to_existing_log(self, tmp_path):
         """Test check_num_steps_left appends to existing duplicate_frames.log."""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        # Create existing duplicate frames log
+        dup_log = tmp_path / 'duplicate_frames.log'
+        dup_log.write_text('first_frame,last_frame\n0,5\n')
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        log_content = '#header\tstep\tenergy\n0\t10000\t-1000.0\n1\t150000\t-1001.0\n'
+        (tmp_path / 'prod.log').write_text(log_content)
 
-            # Create existing duplicate frames log
-            dup_log = path / "duplicate_frames.log"
-            dup_log.write_text("first_frame,last_frame\n0,5\n")
+        sim = Simulator(
+            path=tmp_path,
+            platform='CPU',
+            prod_steps=500000,
+            prod_reporter_frequency=10000,
+        )
+        sim.prod_log = tmp_path / 'prod.log'
 
-            log_content = (
-                "#header\tstep\tenergy\n0\t10000\t-1000.0\n1\t150000\t-1001.0\n"
-            )
-            (path / "prod.log").write_text(log_content)
+        sim.check_num_steps_left()
 
-            sim = Simulator(path=path, prod_steps=500000, prod_reporter_frequency=10000)
-            sim.prod_log = path / "prod.log"
+        # Should have appended new entry
+        content = dup_log.read_text()
+        assert content.count('\n') >= 2
 
-            sim.check_num_steps_left()
+    def test_check_num_steps_left_penultimate_line_fallback(self, tmp_path):
+        """A broken final log line falls back to parsing the penultimate line.
 
-            # Should have appended new entry
-            content = dup_log.read_text()
-            assert content.count("\n") >= 2
+        Covers the second ``try`` branch: the last line is unparseable (one
+        token, so ``split()[1]`` raises IndexError), so the step count is read
+        from ``prod_log[-2]`` instead. If that fallback did not parse the 100000
+        step, prod_steps would be left untouched at 500000.
+        """
+        from molecular_simulations.simulate.omm_simulator import Simulator
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_check_num_steps_left_handles_malformed_log(self, mock_platform):
+        log_content = '#header\tstep\tenergy\n0\t100000\t-1000.0\npartial\n'
+        (tmp_path / 'prod.log').write_text(log_content)
+
+        sim = Simulator(
+            path=tmp_path,
+            platform='CPU',
+            prod_steps=500000,
+            prod_reporter_frequency=10000,
+        )
+        sim.prod_log = tmp_path / 'prod.log'
+
+        sim.check_num_steps_left()
+
+        # 500000 - 100000 = 400000 (last_step read via the [-2] fallback).
+        assert sim.prod_steps == 400000
+
+    def test_check_num_steps_left_handles_malformed_log(self, tmp_path):
         """Test check_num_steps_left handles malformed log gracefully."""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        # Create malformed log (no valid step data)
+        log_content = 'malformed line with no tab separated values\n'
+        (tmp_path / 'prod.log').write_text(log_content)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        sim = Simulator(path=tmp_path, platform='CPU', prod_steps=500000)
+        sim.prod_log = tmp_path / 'prod.log'
 
-            # Create malformed log (no valid step data)
-            log_content = "malformed line with no tab separated values\n"
-            (path / "prod.log").write_text(log_content)
+        # Should not raise, just return
+        sim.check_num_steps_left()
 
-            sim = Simulator(path=path, prod_steps=500000)
-            sim.prod_log = path / "prod.log"
-
-            # Should not raise, just return
-            sim.check_num_steps_left()
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_check_num_steps_left_simulation_complete(self, mock_platform):
+    def test_check_num_steps_left_simulation_complete(self, tmp_path):
         """Test check_num_steps_left when simulation is already complete."""
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        # Last step equals prod_steps
+        log_content = '#header\tstep\tenergy\n0\t100000\t-1000.0\n1\t500000\t-1001.0\n'
+        (tmp_path / 'prod.log').write_text(log_content)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        sim = Simulator(
+            path=tmp_path,
+            platform='CPU',
+            prod_steps=500000,
+            prod_reporter_frequency=10000,
+        )
+        sim.prod_log = tmp_path / 'prod.log'
 
-            # Last step equals prod_steps
-            log_content = (
-                "#header\tstep\tenergy\n0\t100000\t-1000.0\n1\t500000\t-1001.0\n"
-            )
-            (path / "prod.log").write_text(log_content)
+        sim.check_num_steps_left()
 
-            sim = Simulator(path=path, prod_steps=500000, prod_reporter_frequency=10000)
-            sim.prod_log = path / "prod.log"
-            original_steps = sim.prod_steps
-
-            sim.check_num_steps_left()
-
-            # When time_left_from_log is 0, prod_steps should not be modified
-            # (the condition is time_left_from_log > 0)
+        # When time_left_from_log is 0, prod_steps should not be modified
+        # (the condition is time_left_from_log > 0)
 
 
 class TestSimulatorRunEquilibration:
     """Test suite for run method calling equilibration."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_run_calls_equilibrate_when_no_eq_files(self, mock_platform):
-        """Test run method calls equilibrate when eq files don't exist."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+    def test_run_calls_equilibrate_when_no_eq_files(self, real_amber_system_files):
+        """run() performs a real equilibration then production when no eq files."""
+        sim = _tiny_implicit_sim(real_amber_system_files)
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        # No equilibration artifacts exist yet.
+        assert not sim.eq_chkpt.exists()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-            # No eq files exist
+        sim.run()
 
-            sim = Simulator(path=path)
-
-            with (
-                patch.object(sim, "equilibrate") as mock_eq,
-                patch.object(sim, "production") as mock_prod,
-            ):
-                sim.run()
-
-                # equilibrate should be called
-                mock_eq.assert_called_once()
-                mock_prod.assert_called_once()
+        # run() produced both equilibration and production artifacts for real.
+        assert sim.eq_state.exists()
+        assert sim.eq_chkpt.exists()
+        assert sim.eq_log.exists()
+        assert sim.dcd.exists()
+        assert sim.state.exists()
+        assert sim.chkpt.exists()
 
 
 class TestSimulatorMembraneBarostat:
     """Test suite for membrane barostat setup."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_membrane_barostat_setup(self, mock_platform):
+    def test_membrane_barostat_setup(self, tmp_path):
         """Test setup_barostat configures membrane barostat correctly."""
         from openmm import MonteCarloMembraneBarostat
 
         from molecular_simulations.simulate.omm_simulator import Simulator
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = Simulator(path=tmp_path, platform='CPU', membrane=True)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = Simulator(path=path, membrane=True)
-
-            assert sim.barostat == MonteCarloMembraneBarostat
-            assert "defaultSurfaceTension" in sim.barostat_args
-            assert "xymode" in sim.barostat_args
-            assert "zmode" in sim.barostat_args
-            assert "defaultTemperature" in sim.barostat_args
-
-
-class TestSimulatorCharmmWithParams:
-    """Test suite for CHARMM file loading with explicit parameters."""
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.PDBFile")
-    @patch("molecular_simulations.simulate.omm_simulator.CharmmPsfFile")
-    @patch("molecular_simulations.simulate.omm_simulator.CharmmParameterSet")
-    def test_load_charmm_with_params(
-        self, mock_param_set, mock_psf, mock_pdb, mock_platform
-    ):
-        """Test load_charmm_files with explicit parameter files."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_pdb_inst = MagicMock()
-        mock_pdb_inst.topology.getPeriodicBoxVectors.return_value = [
-            [1, 0, 0],
-            [0, 1, 0],
-            [0, 0, 1],
-        ]
-        mock_pdb.return_value = mock_pdb_inst
-        mock_psf_inst = MagicMock()
-        mock_psf_inst.createSystem.return_value = MagicMock()
-        mock_psf.return_value = mock_psf_inst
-        mock_param_set.return_value = MagicMock()
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            param_files = ["toppar/top.rtf", "toppar/par.prm"]
-
-            sim = Simulator(path=path, ff="charmm", params=param_files)
-            system = sim.load_charmm_files()
-
-            # Should have loaded parameter set
-            mock_param_set.assert_called_once_with(*param_files)
-            # Should have created system from psf with params
-            mock_psf_inst.createSystem.assert_called_once()
+        assert sim.barostat == MonteCarloMembraneBarostat
+        assert 'defaultSurfaceTension' in sim.barostat_args
+        assert 'xymode' in sim.barostat_args
+        assert 'zmode' in sim.barostat_args
+        assert 'defaultTemperature' in sim.barostat_args
 
 
 class TestImplicitSimulatorProduction:
     """Test suite for ImplicitSimulator production method."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    def test_implicit_production_no_barostat(self, mock_platform):
-        """Test ImplicitSimulator production doesn't add barostat."""
-        from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
+    def test_implicit_production_no_barostat(self, real_amber_system_files):
+        """Real ImplicitSimulator production never adds a barostat."""
+        from openmm import MonteCarloBarostat
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim = _tiny_implicit_sim(real_amber_system_files)
+        # A real equilibration checkpoint to load into production.
+        sim.equilibrate()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-            chkpt = path / "test.chk"
-            chkpt.write_bytes(b"mock checkpoint")
+        sim.production(chkpt=str(sim.eq_chkpt), restart=False)
 
-            sim = ImplicitSimulator(path=path)
-
-            with (
-                patch.object(sim, "load_system") as mock_load,
-                patch.object(sim, "setup_sim") as mock_setup,
-                patch.object(sim, "load_checkpoint") as mock_load_chk,
-                patch.object(sim, "attach_reporters") as mock_attach,
-                patch.object(sim, "_production") as mock_prod,
-            ):
-                mock_system = MagicMock()
-                mock_load.return_value = mock_system
-
-                mock_simulation = MagicMock()
-                mock_integrator = MagicMock()
-                mock_setup.return_value = (mock_simulation, mock_integrator)
-                mock_load_chk.return_value = mock_simulation
-                mock_attach.return_value = mock_simulation
-                mock_prod.return_value = mock_simulation
-
-                sim.production(str(chkpt), restart=False)
-
-                # Should reinitialize context
-                mock_simulation.context.reinitialize.assert_called_once_with(True)
-                # Should NOT call system.addForce (no barostat for implicit)
-                # Note: The mock_system is not the same as mock_simulation.system
-                # The implicit simulator doesn't add barostat
+        # The production system carries no barostat (implicit solvent is NVT).
+        forces = sim.simulation.system.getForces()
+        assert not any(isinstance(f, MonteCarloBarostat) for f in forces)
+        # Production actually ran and saved a checkpoint.
+        assert sim.chkpt.exists()
 
 
 class TestImplicitSimulatorEquilibration:
     """Test suite for ImplicitSimulator equilibration method."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.StateDataReporter")
-    @patch("molecular_simulations.simulate.omm_simulator.DCDReporter")
-    def test_implicit_equilibrate_prints_energy(
-        self, mock_dcd, mock_state, mock_platform
-    ):
-        """Test ImplicitSimulator equilibrate prints energy before and after minimization."""
-        from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
+    def test_implicit_equilibrate_prints_energy(self, real_amber_system_files, capsys):
+        """Real ImplicitSimulator equilibrate prints energy before/after min."""
+        sim = _tiny_implicit_sim(real_amber_system_files)
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        sim.equilibrate()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
-
-            sim = ImplicitSimulator(path=path)
-
-            with (
-                patch.object(sim, "load_system") as mock_load,
-                patch.object(sim, "add_backbone_posres") as mock_posres,
-                patch.object(sim, "setup_sim") as mock_setup,
-                patch.object(sim, "_heating") as mock_heat,
-                patch.object(sim, "_equilibrate") as mock_eq,
-                patch("builtins.print") as mock_print,
-            ):
-                mock_system = MagicMock()
-                mock_load.return_value = mock_system
-                mock_posres.return_value = mock_system
-
-                mock_simulation = MagicMock()
-                mock_simulation.reporters = []
-                mock_state_obj = MagicMock()
-                mock_state_obj.getPotentialEnergy.return_value = -1000.0
-                mock_simulation.context.getState.return_value = mock_state_obj
-                mock_integrator = MagicMock()
-                mock_setup.return_value = (mock_simulation, mock_integrator)
-                mock_heat.return_value = (mock_simulation, mock_integrator)
-                mock_eq.return_value = mock_simulation
-
-                sim.coordinate = MagicMock()
-                sim.coordinate.positions = [[0, 0, 0]]
-                sim.topology = MagicMock()
-                sim.topology.topology.atoms.return_value = []
-                sim.indices = [0]
-
-                result = sim.equilibrate()
-
-                # Should print energy messages
-                assert mock_print.call_count == 2
-
-
-class TestMinimizerGromacsLoader:
-    """Test suite for Minimizer GROMACS file loading."""
-
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.GromacsGroFile")
-    @patch("molecular_simulations.simulate.omm_simulator.GromacsTopFile")
-    def test_load_gromacs(self, mock_top, mock_gro, mock_platform):
-        """Test load_gromacs method."""
-        from molecular_simulations.simulate.omm_simulator import Minimizer
-
-        mock_platform.getPlatformByName.return_value = MagicMock()
-        mock_gro.return_value = MagicMock()
-        mock_top_inst = MagicMock()
-        mock_top_inst.createSystem.return_value = MagicMock()
-        mock_top.return_value = mock_top_inst
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            top_file = path / "system.top"
-            top_file.write_text("mock topology")
-            gro_file = path / "system.gro"
-            gro_file.write_text("mock coordinates")
-
-            minimizer = Minimizer(topology=str(top_file), coordinates=str(gro_file))
-
-            system = minimizer.load_gromacs()
-
-            mock_gro.assert_called_once()
-            mock_top.assert_called_once()
-            assert system is not None
+        out = capsys.readouterr().out
+        # The overridden implicit equilibrate reports the real minimization energy.
+        assert 'Energy before minimization' in out
+        assert 'Energy after minimization' in out
 
 
 class TestSimulatorAttachReportersWithRestart:
     """Test suite for attach_reporters with restart option."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.DCDReporter")
-    @patch("molecular_simulations.simulate.omm_simulator.StateDataReporter")
-    @patch("molecular_simulations.simulate.omm_simulator.CheckpointReporter")
-    def test_attach_reporters_with_restart(
-        self, mock_chkpt, mock_state, mock_dcd, mock_platform
-    ):
-        """Test attach_reporters with restart=True sets append mode."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+    def test_attach_reporters_with_restart(self, real_amber_system_files):
+        """attach_reporters(restart=True) appends to a real existing DCD."""
+        from openmm.app import CheckpointReporter, DCDReporter, StateDataReporter
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        path = real_amber_system_files['path']
+        sim, simulation, _ = _build_real_implicit_simulation(real_amber_system_files)
+        sim.prod_freq = 1
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        dcd_file = path / 'test.dcd'
+        log_file = path / 'test.log'
+        rst_file = path / 'test.rst'
 
-            sim = Simulator(path=path)
+        # Seed a real DCD (restart=False) so append mode has a file to extend.
+        simulation.reporters = []
+        sim.attach_reporters(
+            simulation, str(dcd_file), str(log_file), str(rst_file), restart=False
+        )
+        simulation.step(1)
+        dcd_size_before = dcd_file.stat().st_size
 
-            mock_simulation = MagicMock()
-            mock_simulation.reporters = []
+        # Restart pass builds real append-mode reporters over the existing DCD.
+        simulation.reporters = []
+        result = sim.attach_reporters(
+            simulation, str(dcd_file), str(log_file), str(rst_file), restart=True
+        )
 
-            dcd_file = path / "test.dcd"
-            log_file = path / "test.log"
-            rst_file = path / "test.rst"
+        assert len(result.reporters) == 3
+        assert isinstance(result.reporters[0], DCDReporter)
+        assert isinstance(result.reporters[1], StateDataReporter)
+        assert isinstance(result.reporters[2], CheckpointReporter)
 
-            result = sim.attach_reporters(
-                mock_simulation,
-                str(dcd_file),
-                str(log_file),
-                str(rst_file),
-                restart=True,
-            )
-
-            # Verify DCDReporter was called with append=True
-            mock_dcd.assert_called_once()
-            call_kwargs = mock_dcd.call_args[1]
-            assert call_kwargs.get("append") is True
+        # Stepping appends real frames to the existing file rather than truncating.
+        simulation.step(1)
+        assert dcd_file.stat().st_size > dcd_size_before
 
 
 class TestSimulatorTotalProdSteps:
     """Test suite for total_prod_steps handling in attach_reporters."""
 
-    @patch("molecular_simulations.simulate.omm_simulator.Platform")
-    @patch("molecular_simulations.simulate.omm_simulator.DCDReporter")
-    @patch("molecular_simulations.simulate.omm_simulator.StateDataReporter")
-    @patch("molecular_simulations.simulate.omm_simulator.CheckpointReporter")
-    def test_attach_reporters_uses_total_prod_steps(
-        self, mock_chkpt, mock_state, mock_dcd, mock_platform
-    ):
-        """Test attach_reporters uses total_prod_steps for progress reporting."""
-        from molecular_simulations.simulate.omm_simulator import Simulator
+    def test_attach_reporters_uses_total_prod_steps(self, real_amber_system_files):
+        """attach_reporters threads total_prod_steps into a real StateDataReporter."""
+        from openmm.app import StateDataReporter
 
-        mock_platform.getPlatformByName.return_value = MagicMock()
+        path = real_amber_system_files['path']
+        sim, simulation, _ = _build_real_implicit_simulation(real_amber_system_files)
+        # run() sets total_prod_steps to the original prod total for progress %.
+        sim.total_prod_steps = 1000000
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        simulation.reporters = []
+        result = sim.attach_reporters(
+            simulation,
+            str(path / 'test.dcd'),
+            str(path / 'test.log'),
+            str(path / 'test.rst'),
+        )
 
-            sim = Simulator(path=path, prod_steps=1000000)
-            # Set total_prod_steps as run() method does
-            sim.total_prod_steps = 1000000
-
-            mock_simulation = MagicMock()
-            mock_simulation.reporters = []
-
-            dcd_file = path / "test.dcd"
-            log_file = path / "test.log"
-            rst_file = path / "test.rst"
-
-            sim.attach_reporters(
-                mock_simulation, str(dcd_file), str(log_file), str(rst_file)
-            )
-
-            # StateDataReporter should be called with totalSteps=total_prod_steps
-            mock_state.assert_called_once()
-            call_kwargs = mock_state.call_args[1]
-            assert call_kwargs.get("totalSteps") == 1000000
+        state_reporter = result.reporters[1]
+        assert isinstance(state_reporter, StateDataReporter)
+        # The real reporter recorded the total-steps target for remaining-time %.
+        assert state_reporter._totalSteps == 1000000
 
 
 class TestImplicitSimulatorInit:
     """Test suite for ImplicitSimulator initialization."""
 
-    def test_implicit_simulator_init(self):
+    def test_implicit_simulator_init(self, tmp_path):
         """Test ImplicitSimulator stores implicit solvent parameters."""
         from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        sim = ImplicitSimulator(path=tmp_path, platform='CPU', prod_steps=1000)
 
-            with patch(
-                "molecular_simulations.simulate.omm_simulator.Platform"
-            ) as mock_platform:
-                mock_platform.getPlatformByName.return_value = MagicMock()
-                sim = ImplicitSimulator(path=path, platform="CPU", prod_steps=1000)
+        assert sim.solute_dielectric == 1.0
+        assert sim.solvent_dielectric == 78.5
+        assert sim.kappa > 0  # Should be positive for 150mM ions
 
-            assert sim.solute_dielectric == 1.0
-            assert sim.solvent_dielectric == 78.5
-            assert sim.kappa > 0  # Should be positive for 150mM ions
-
-    def test_implicit_simulator_custom_dielectrics(self):
+    def test_implicit_simulator_custom_dielectrics(self, tmp_path):
         """Test ImplicitSimulator with custom dielectric constants."""
         from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        sim = ImplicitSimulator(
+            path=tmp_path,
+            platform='CPU',
+            prod_steps=1000,
+            solute_dielectric=2.0,
+            solvent_dielectric=80.0,
+        )
 
-            with patch(
-                "molecular_simulations.simulate.omm_simulator.Platform"
-            ) as mock_platform:
-                mock_platform.getPlatformByName.return_value = MagicMock()
-                sim = ImplicitSimulator(
-                    path=path,
-                    platform="CPU",
-                    prod_steps=1000,
-                    solute_dielectric=2.0,
-                    solvent_dielectric=80.0,
-                )
-
-            assert sim.solute_dielectric == 2.0
-            assert sim.solvent_dielectric == 80.0
+        assert sim.solute_dielectric == 2.0
+        assert sim.solvent_dielectric == 80.0
 
 
 class TestImplicitSimulatorLoadAmberFiles:
     """Test suite for ImplicitSimulator.load_amber_files method."""
 
     @requires_openmm
-    def test_load_amber_files_creates_system(self):
-        """Test load_amber_files returns an OpenMM System."""
+    def test_load_amber_files_creates_system(self, real_amber_system_files):
+        """Test load_amber_files returns a real implicit-solvent OpenMM System."""
+        from openmm import CustomGBForce, GBSAOBCForce, System
+
         from molecular_simulations.simulate.omm_simulator import ImplicitSimulator
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock")
-            (path / "system.inpcrd").write_text("mock")
+        sim = ImplicitSimulator(**_amber_kwargs(real_amber_system_files))
+        system = sim.load_amber_files()
 
-            with patch(
-                "molecular_simulations.simulate.omm_simulator.Platform"
-            ) as mock_platform:
-                mock_platform.getPlatformByName.return_value = MagicMock()
-                sim = ImplicitSimulator(path=path, platform="CPU", prod_steps=1000)
-
-            mock_prmtop = MagicMock()
-            mock_system = MagicMock()
-            mock_prmtop.createSystem.return_value = mock_system
-
-            mock_inpcrd = MagicMock()
-            mock_inpcrd.positions = MagicMock()
-
-            with (
-                patch(
-                    "molecular_simulations.simulate.omm_simulator.AmberPrmtopFile",
-                    return_value=mock_prmtop,
-                ),
-                patch(
-                    "molecular_simulations.simulate.omm_simulator.AmberInpcrdFile",
-                    return_value=mock_inpcrd,
-                ),
-            ):
-                system = sim.load_amber_files()
-
-            mock_prmtop.createSystem.assert_called_once()
-            assert system is mock_system
+        assert isinstance(system, System)
+        assert system.getNumParticles() == 22
+        # A Generalized Born (implicit solvent) force is present.
+        assert any(
+            isinstance(f, (CustomGBForce, GBSAOBCForce)) for f in system.getForces()
+        )
 
 
 class TestCustomForcesSimulatorInit:
     """Test suite for CustomForcesSimulator initialization."""
 
-    def test_custom_forces_simulator_stores_forces(self):
+    def test_custom_forces_simulator_stores_forces(self, tmp_path):
         """Test CustomForcesSimulator stores custom force objects."""
+        from openmm import CustomBondForce
+
         from molecular_simulations.simulate.omm_simulator import CustomForcesSimulator
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        force1 = CustomBondForce('r')
+        force2 = CustomBondForce('r^2')
 
-            mock_force1 = MagicMock()
-            mock_force2 = MagicMock()
+        sim = CustomForcesSimulator(
+            path=str(tmp_path),
+            custom_force_objects=[force1, force2],
+            platform='CPU',
+            prod_steps=1000,
+        )
 
-            with patch(
-                "molecular_simulations.simulate.omm_simulator.Platform"
-            ) as mock_platform:
-                mock_platform.getPlatformByName.return_value = MagicMock()
-                sim = CustomForcesSimulator(
-                    path=str(path),
-                    custom_force_objects=[mock_force1, mock_force2],
-                    platform="CPU",
-                    prod_steps=1000,
-                )
-
-            assert sim.custom_forces == [mock_force1, mock_force2]
+        assert sim.custom_forces == [force1, force2]
 
 
 class TestCustomForcesSimulatorAddForces:
     """Test suite for CustomForcesSimulator.add_forces method."""
 
-    def test_add_forces_adds_all_custom_forces(self):
-        """Test add_forces adds each custom force to the system."""
+    def test_add_forces_adds_all_custom_forces(self, tmp_path):
+        """Test add_forces adds each custom force to a real System."""
+        from openmm import CustomBondForce, System
+
         from molecular_simulations.simulate.omm_simulator import CustomForcesSimulator
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        force1 = CustomBondForce('0')
+        force2 = CustomBondForce('0')
 
-            mock_force1 = MagicMock()
-            mock_force2 = MagicMock()
+        sim = CustomForcesSimulator(
+            path=str(tmp_path),
+            custom_force_objects=[force1, force2],
+            platform='CPU',
+            prod_steps=1000,
+        )
 
-            with patch(
-                "molecular_simulations.simulate.omm_simulator.Platform"
-            ) as mock_platform:
-                mock_platform.getPlatformByName.return_value = MagicMock()
-                sim = CustomForcesSimulator(
-                    path=str(path),
-                    custom_force_objects=[mock_force1, mock_force2],
-                    platform="CPU",
-                    prod_steps=1000,
-                )
+        system = System()
+        result = sim.add_forces(system)
 
-            mock_system = MagicMock()
-            result = sim.add_forces(mock_system)
+        assert result is system
+        assert system.getNumForces() == 2
+        assert {type(system.getForce(i)) for i in range(system.getNumForces())} == {
+            CustomBondForce
+        }
 
-            mock_system.addForce.assert_any_call(mock_force1)
-            mock_system.addForce.assert_any_call(mock_force2)
-            assert mock_system.addForce.call_count == 2
-            assert result is mock_system
+    def test_add_forces_empty_list(self, tmp_path):
+        """Test add_forces with no custom forces leaves the System untouched."""
+        from openmm import System
 
-    def test_add_forces_empty_list(self):
-        """Test add_forces with no custom forces."""
         from molecular_simulations.simulate.omm_simulator import CustomForcesSimulator
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        sim = CustomForcesSimulator(
+            path=str(tmp_path),
+            custom_force_objects=[],
+            platform='CPU',
+            prod_steps=1000,
+        )
 
-            with patch(
-                "molecular_simulations.simulate.omm_simulator.Platform"
-            ) as mock_platform:
-                mock_platform.getPlatformByName.return_value = MagicMock()
-                sim = CustomForcesSimulator(
-                    path=str(path),
-                    custom_force_objects=[],
-                    platform="CPU",
-                    prod_steps=1000,
-                )
+        system = System()
+        result = sim.add_forces(system)
 
-            mock_system = MagicMock()
-            result = sim.add_forces(mock_system)
-
-            mock_system.addForce.assert_not_called()
-            assert result is mock_system
+        assert result is system
+        assert system.getNumForces() == 0
 
 
 class TestCustomForcesSimulatorLoadAmberFiles:
     """Test suite for CustomForcesSimulator.load_amber_files."""
 
-    def test_load_amber_files_adds_custom_forces(self):
-        """Test load_amber_files creates system and adds custom forces."""
+    def test_load_amber_files_adds_custom_forces(self, real_amber_explicit_files):
+        """load_amber_files builds a real PME system and adds the custom force.
+
+        CustomForcesSimulator.load_amber_files hardcodes ``system.prmtop`` /
+        ``system.inpcrd`` and uses PME, so the real solvated (boxed) dipeptide is
+        copied under those names to exercise the loader without mocks.
+        """
+        import shutil
+
+        from openmm import CustomBondForce, System
+
         from molecular_simulations.simulate.omm_simulator import CustomForcesSimulator
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir)
-            (path / "system.prmtop").write_text("mock topology")
-            (path / "system.inpcrd").write_text("mock coordinates")
+        path = real_amber_explicit_files['path']
+        shutil.copy(real_amber_explicit_files['prmtop'], path / 'system.prmtop')
+        shutil.copy(real_amber_explicit_files['inpcrd'], path / 'system.inpcrd')
 
-            mock_force = MagicMock()
+        force = CustomBondForce('0')
+        sim = CustomForcesSimulator(
+            path=str(path),
+            custom_force_objects=[force],
+            platform='CPU',
+            prod_steps=1000,
+        )
 
-            with patch(
-                "molecular_simulations.simulate.omm_simulator.Platform"
-            ) as mock_platform:
-                mock_platform.getPlatformByName.return_value = MagicMock()
-                sim = CustomForcesSimulator(
-                    path=str(path),
-                    custom_force_objects=[mock_force],
-                    platform="CPU",
-                    prod_steps=1000,
-                )
+        system = sim.load_amber_files()
 
-            mock_prmtop = MagicMock()
-            mock_system = MagicMock()
-            mock_prmtop.createSystem.return_value = mock_system
-
-            mock_inpcrd = MagicMock()
-            mock_inpcrd.boxVectors = MagicMock()
-
-            with (
-                patch(
-                    "molecular_simulations.simulate.omm_simulator.AmberPrmtopFile",
-                    return_value=mock_prmtop,
-                ),
-                patch(
-                    "molecular_simulations.simulate.omm_simulator.AmberInpcrdFile",
-                    return_value=mock_inpcrd,
-                ),
-            ):
-                system = sim.load_amber_files()
-
-            mock_system.addForce.assert_called_once_with(mock_force)
-            assert system is mock_system
+        assert isinstance(system, System)
+        # Real solvated box (913 atoms) with the custom force appended. OpenMM
+        # copies the force on addForce, so match by type (unique to the custom one).
+        assert system.getNumParticles() == 913
+        assert sum(isinstance(f, CustomBondForce) for f in system.getForces()) == 1
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

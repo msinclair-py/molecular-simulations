@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -11,19 +10,56 @@ from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
 from parsl.launchers import MpiExecLauncher
 from parsl.providers import LocalProvider, PBSProProvider
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 PathLike = str | Path
 _T = TypeVar('_T')
 
 
+def get_node_count():
+    """Infer the node count for a job from the scheduler environment.
+
+    For all LocalProvider-using protocols, checks for evidence of SLURM or PBS
+    to infer the number of nodes allocated to a job.
+
+    Returns:
+        Number of nodes for the job, defaulting to 1 if neither SLURM nor PBS
+        environment variables are found.
+    """
+    import os
+
+    if num_nodes := os.environ.get('SLURM_JOB_NUM_NODES'):
+        return int(num_nodes)
+
+    if nodefile := os.environ.get('PBS_NODEFILE'):
+        with open(nodefile) as f:
+            return len(f.readlines())
+
+    return 1
+
+
 class BaseSettings(BaseModel):
+    """Base pydantic model with YAML serialization helpers."""
+
     def dump_yaml(self, filename: PathLike) -> None:
+        """Serialize the settings to a YAML file.
+
+        Args:
+            filename: Destination path for the YAML file.
+        """
         with open(filename, mode='w') as fp:
             yaml.dump(json.loads(self.model_dump_json()), fp, indent=4, sort_keys=False)
 
     @classmethod
     def from_yaml(cls: type[_T], filename: PathLike) -> _T:
+        """Construct a settings instance from a YAML file.
+
+        Args:
+            filename: Path to the YAML file to load.
+
+        Returns:
+            A settings instance populated from the file contents.
+        """
         with open(filename) as fp:
             raw_data = yaml.safe_load(fp)
         return cls(**raw_data)
@@ -34,20 +70,41 @@ class BaseComputeSettings(ABC, BaseSettings):
 
     @abstractmethod
     def config_factory(self, run_dir: PathLike) -> Config:
-        """
-        Create new Parsl configuration.
+        """Create a new Parsl configuration.
+
+        Args:
+            run_dir: Directory in which to store Parsl run files.
+
+        Returns:
+            A Parsl Config for this compute platform.
         """
 
 
-class LocalSettings(BaseComputeSettings):
+class BaseLocalSettings(BaseComputeSettings):
+    """Shared settings for LocalProvider-based compute platforms."""
+
     available_accelerators: int | Sequence[str] = 4
     worker_init: str = ''
-    nodes: int = 1
+    nodes: int = Field(default_factory=get_node_count)
     retries: int = 1
-    label: str = 'gpu'
+    label: str = 'executor_label'
     worker_port_range: tuple[int, int] = (10000, 20000)
 
+
+class LocalSettings(BaseLocalSettings):
+    """Settings for a single-node, GPU-pinned local executor."""
+
+    label: str = 'gpu'
+
     def config_factory(self, run_dir: PathLike) -> Config:
+        """Create a Parsl configuration pinning workers to local GPUs.
+
+        Args:
+            run_dir: Directory in which to store Parsl run files.
+
+        Returns:
+            A Parsl Config with one GPU-affinity HighThroughputExecutor.
+        """
         return Config(
             run_dir=str(Path(run_dir) / 'runinfo'),
             retries=self.retries,
@@ -71,17 +128,23 @@ class LocalSettings(BaseComputeSettings):
         )
 
 
-class LocalCPUSettings(BaseComputeSettings):
-    worker_init: str = ''
-    nodes: int = 1
+class LocalCPUSettings(BaseLocalSettings):
+    """Settings for a single-node, CPU-only local executor."""
+
     max_workers_per_node: int = 1
     cores_per_worker: float = 1.0
-    retries: int = 1
     label: str = 'cpu'
-    worker_port_range: tuple[int, int] = (10000, 20000)
     available_accelerators: int | Sequence[str] = []
 
     def config_factory(self, run_dir: PathLike) -> Config:
+        """Create a Parsl configuration for CPU-only local execution.
+
+        Args:
+            run_dir: Directory in which to store Parsl run files.
+
+        Returns:
+            A Parsl Config with one CPU HighThroughputExecutor.
+        """
         return Config(
             run_dir=str(Path(run_dir) / 'runinfo'),
             retries=self.retries,
@@ -105,16 +168,23 @@ class LocalCPUSettings(BaseComputeSettings):
         )
 
 
-class HeterogeneousSettings(BaseComputeSettings):
-    worker_init: str = ''
-    nodes: int = 1
+class HeterogeneousSettings(BaseLocalSettings):
+    """Settings for a single node exposing both GPU and CPU executors."""
+
     max_workers_per_node: int = 1
     cores_per_worker: float = 1.0
-    retries: int = 1
-    worker_port_range: tuple[int, int] = (10000, 20000)
     available_accelerators: int = 4
 
     def config_factory(self, run_dir: PathLike) -> Config:
+        """Create a Parsl configuration with separate GPU and CPU executors.
+
+        Args:
+            run_dir: Directory in which to store Parsl run files.
+
+        Returns:
+            A Parsl Config with a GPU HighThroughputExecutor and a CPU
+            HighThroughputExecutor.
+        """
         return Config(
             run_dir=str(Path(run_dir) / 'runinfo'),
             retries=self.retries,
@@ -155,6 +225,8 @@ class HeterogeneousSettings(BaseComputeSettings):
 
 
 class PolarisSettings(BaseComputeSettings):
+    """Settings for running on the Polaris HPC system via PBSPro."""
+
     label: str = 'htex'
     num_nodes: int = 1
     worker_init: str = ''
@@ -167,12 +239,15 @@ class PolarisSettings(BaseComputeSettings):
     available_accelerators: int | Sequence[str] = 4
 
     def config_factory(self, run_dir: PathLike) -> Config:
-        """Create a configuration suitable for running all tasks on single nodes of Polaris
-        We will launch 4 workers per node, each pinned to a different GPU
+        """Create a configuration for running tasks on single nodes of Polaris.
+
+        Launches 4 workers per node, each pinned to a different GPU.
+
         Args:
-            num_nodes: Number of nodes to use for the MPI parallel tasks
-            user_options: Options for which account to use, location of environment files, etc
-            run_dir: Directory in which to store Parsl run files. Default: `runinfo`
+            run_dir: Directory in which to store Parsl run files.
+
+        Returns:
+            A Parsl Config with a PBSPro-provisioned HighThroughputExecutor.
         """
         return Config(
             retries=1,  # Allows restarts if jobs are killed by the end of a job
@@ -211,6 +286,8 @@ class PolarisSettings(BaseComputeSettings):
 
 
 class AuroraSettings(BaseComputeSettings):
+    """Settings for running on the Aurora HPC system via PBSPro."""
+
     label: str = 'htex'
     worker_init: str = ''
     num_nodes: int = 1
@@ -224,7 +301,14 @@ class AuroraSettings(BaseComputeSettings):
     available_accelerators: list[str] = [str(i) for i in range(12)]
 
     def config_factory(self, run_dir: PathLike) -> Config:
-        """Create a Parsl configuration for running on Aurora."""
+        """Create a Parsl configuration for running on Aurora.
+
+        Args:
+            run_dir: Directory in which to store Parsl run files.
+
+        Returns:
+            A Parsl Config with a PBSPro-provisioned HighThroughputExecutor.
+        """
         return Config(
             executors=[
                 HighThroughputExecutor(

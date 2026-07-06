@@ -3,163 +3,106 @@ Unit tests for utils/amber_utils.py module
 """
 
 import string
-from unittest.mock import MagicMock, patch
 
+import MDAnalysis as mda
 import numpy as np
 import pytest
 
+from molecular_simulations.utils.amber_utils import assign_chainids
+
 
 class TestAssignChainIds:
-    """Test suite for assign_chainids function"""
+    """Test suite for assign_chainids function using real MDAnalysis Universes."""
 
-    def test_assign_chainids_single_chain(self):
-        """Test assigning chain IDs to a single-chain structure"""
-        from molecular_simulations.utils.amber_utils import assign_chainids
+    def test_assign_chainids_single_chain(self, alanine_dipeptide_pdb):
+        """A single (uncapped-terminus) chain gets one label for every residue."""
+        u = mda.Universe(str(alanine_dipeptide_pdb))
 
-        # Create mock universe with one chain
-        mock_u = MagicMock()
-        mock_u.atoms = MagicMock()
-        mock_u.atoms.chainIDs = None
+        # alanine dipeptide (Ace-Ala-Nme) carries no OXT terminus atom, so the
+        # default selection finds nothing and the chain index never advances.
+        result = assign_chainids(u)
 
-        # Create mock residues
-        mock_residue1 = MagicMock()
-        mock_residue1.resindex = 0
-        mock_residue1.atoms = MagicMock()
-        mock_residue1.atoms.chainIDs = None
+        assert result is u
+        assert hasattr(u.atoms, 'chainIDs')
+        labels = [str(res.atoms.chainIDs[0]) for res in u.residues]
+        assert labels == ['A', 'A', 'A']
 
-        mock_residue2 = MagicMock()
-        mock_residue2.resindex = 1
-        mock_residue2.atoms = MagicMock()
-        mock_residue2.atoms.chainIDs = None
+    def test_assign_chainids_multi_chain(self, two_chain_pdb):
+        """Two NME-capped chains split into A and B at their termini."""
+        u = mda.Universe(str(two_chain_pdb))
 
-        mock_u.residues = [mock_residue1, mock_residue2]
+        # Chains here are capped with NME rather than OXT, so the terminus is the
+        # backbone C of each NME residue (resindices 2 and 5).
+        result = assign_chainids(u, terminus_selection='name C and resname NME')
 
-        # Mock terminus selection - last residue is terminus
-        mock_terminus_atoms = MagicMock()
-        mock_terminus_atoms.resindices = np.array([1])
-        mock_u.select_atoms.return_value = mock_terminus_atoms
+        assert result is u
+        labels = [str(res.atoms.chainIDs[0]) for res in u.residues]
+        # Residues 0-2 (ACE/LYS/NME) -> A, residues 3-5 (ACE/ASP/NME) -> B
+        assert labels == ['A', 'A', 'A', 'B', 'B', 'B']
 
-        # hasattr returns False to trigger adding chainIDs
-        with patch(
-            "molecular_simulations.utils.amber_utils.hasattr", return_value=False
-        ):
-            result = assign_chainids(mock_u)
+    def test_assign_chainids_custom_terminus_selection(self, two_chain_pdb):
+        """The terminus selection string controls where chains are split."""
+        # Default selection ('name OXT') finds no termini in this NME-capped
+        # system, so every residue collapses into a single chain.
+        u_default = mda.Universe(str(two_chain_pdb))
+        assign_chainids(u_default)
+        default_labels = [str(res.atoms.chainIDs[0]) for res in u_default.residues]
+        assert set(default_labels) == {'A'}
 
-        # Should return the universe
-        assert result == mock_u
-
-    def test_get_chain_label_single_letter(self):
-        """Test chain label generation for indices 0-25"""
-        from molecular_simulations.utils.amber_utils import assign_chainids
-
-        # Create a minimal mock universe to test the internal get_chain_label function
-        mock_u = MagicMock()
-        mock_u.residues = []
-        mock_u.select_atoms.return_value = MagicMock(resindices=np.array([]))
-
-        # hasattr returns True (chainIDs already exists)
-        with patch(
-            "molecular_simulations.utils.amber_utils.hasattr", return_value=True
-        ):
-            result = assign_chainids(mock_u)
-
-        # Should return universe without error
-        assert result == mock_u
-
-    def test_assign_chainids_multi_chain(self):
-        """Test assigning chain IDs to multi-chain structure"""
-        from molecular_simulations.utils.amber_utils import assign_chainids
-
-        mock_u = MagicMock()
-
-        # Create mock residues for two chains
-        residues = []
-        for i in range(6):
-            mock_res = MagicMock()
-            mock_res.resindex = i
-            mock_res.atoms = MagicMock()
-            mock_res.atoms.tempfactors = MagicMock()
-            mock_res.atoms.tempfactors.shape = (5,)
-            residues.append(mock_res)
-
-        mock_u.residues = residues
-
-        # Residues 2 and 5 are termini (end of chains)
-        mock_terminus = MagicMock()
-        mock_terminus.resindices = np.array([2, 5])
-        mock_u.select_atoms.return_value = mock_terminus
-
-        with patch(
-            "molecular_simulations.utils.amber_utils.hasattr", return_value=False
-        ):
-            result = assign_chainids(mock_u)
-
-        assert result == mock_u
-        # First 3 residues should be chain A
-        assert residues[0].atoms.chainIDs == "A"
-        assert residues[1].atoms.chainIDs == "A"
-        assert residues[2].atoms.chainIDs == "A"
-        # Next 3 residues should be chain B
-        assert residues[3].atoms.chainIDs == "B"
-        assert residues[4].atoms.chainIDs == "B"
-        assert residues[5].atoms.chainIDs == "B"
+        # A custom selection targeting the NME backbone C splits into two chains.
+        u_custom = mda.Universe(str(two_chain_pdb))
+        assign_chainids(u_custom, terminus_selection='name C and resname NME')
+        custom_labels = [str(res.atoms.chainIDs[0]) for res in u_custom.residues]
+        assert custom_labels[:3] == ['A', 'A', 'A']
+        assert custom_labels[3:] == ['B', 'B', 'B']
 
     def test_assign_chainids_more_than_26_chains(self):
-        """Test chain labeling for more than 26 chains (requires double letters)"""
-        from molecular_simulations.utils.amber_utils import assign_chainids
+        """Chain labels wrap to AA, AB, ... once 26 single letters are exhausted."""
+        n = 30
+        # Build a real Universe of n single-atom, single-residue "chains". Every
+        # atom is named OXT so the default terminus selection treats each residue
+        # as its own chain terminus.
+        u = mda.Universe.empty(
+            n_atoms=n,
+            n_residues=n,
+            atom_resindex=np.arange(n),
+            trajectory=True,
+        )
+        u.add_TopologyAttr('name', ['OXT'] * n)
+        u.add_TopologyAttr('resid', list(range(1, n + 1)))
+        u.add_TopologyAttr('resname', ['ALA'] * n)
 
-        mock_u = MagicMock()
+        assign_chainids(u)
 
-        # Create 30 single-residue chains
-        residues = []
-        terminus_indices = []
-        for i in range(30):
-            mock_res = MagicMock()
-            mock_res.resindex = i
-            mock_res.atoms = MagicMock()
-            residues.append(mock_res)
-            terminus_indices.append(i)  # Each residue is a terminus
+        labels = [str(res.atoms.chainIDs[0]) for res in u.residues]
 
-        mock_u.residues = residues
-        mock_terminus = MagicMock()
-        mock_terminus.resindices = np.array(terminus_indices)
-        mock_u.select_atoms.return_value = mock_terminus
+        # First 26 residues get single-letter IDs A-Z.
+        assert labels[:26] == list(string.ascii_uppercase)
+        # Residues 26-29 wrap to double letters AA, AB, AC, AD.
+        assert labels[26] == 'AA'
+        assert labels[27] == 'AB'
+        assert labels[28] == 'AC'
+        assert labels[29] == 'AD'
 
-        with patch(
-            "molecular_simulations.utils.amber_utils.hasattr", return_value=False
-        ):
-            result = assign_chainids(mock_u)
+    def test_assign_chainids_adds_attribute_when_missing(self):
+        """assign_chainids adds the chainIDs topology attribute if absent."""
+        n = 3
+        u = mda.Universe.empty(
+            n_atoms=n,
+            n_residues=n,
+            atom_resindex=np.arange(n),
+            trajectory=True,
+        )
+        u.add_TopologyAttr('name', ['OXT'] * n)
+        u.add_TopologyAttr('resid', list(range(1, n + 1)))
+        u.add_TopologyAttr('resname', ['ALA'] * n)
 
-        # First 26 residues should have single letter IDs (A-Z)
-        for i in range(26):
-            assert residues[i].atoms.chainIDs == string.ascii_uppercase[i]
-
-        # Residues 26-29 should have double letter IDs (AA, AB, AC, AD)
-        assert residues[26].atoms.chainIDs == "AA"
-        assert residues[27].atoms.chainIDs == "AB"
-        assert residues[28].atoms.chainIDs == "AC"
-        assert residues[29].atoms.chainIDs == "AD"
-
-    def test_assign_chainids_custom_terminus_selection(self):
-        """Test with custom terminus selection string"""
-        from molecular_simulations.utils.amber_utils import assign_chainids
-
-        mock_u = MagicMock()
-        mock_u.residues = []
-        mock_terminus = MagicMock()
-        mock_terminus.resindices = np.array([])
-        mock_u.select_atoms.return_value = mock_terminus
-
-        with patch(
-            "molecular_simulations.utils.amber_utils.hasattr", return_value=False
-        ):
-            result = assign_chainids(
-                mock_u, terminus_selection="name C and resname NME"
-            )
-
-        # Should call select_atoms with custom selection
-        mock_u.select_atoms.assert_called_with("name C and resname NME")
+        assert not hasattr(u.atoms, 'chainIDs')
+        assign_chainids(u)
+        assert hasattr(u.atoms, 'chainIDs')
+        labels = [str(res.atoms.chainIDs[0]) for res in u.residues]
+        assert labels == ['A', 'B', 'C']
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

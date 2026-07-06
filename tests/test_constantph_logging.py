@@ -21,21 +21,21 @@ class TestSetupTaskLogger:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = setup_task_logger(
-                run_id="run_001", task_id="task_abc", log_dir=tmpdir
+                run_id='run_001', task_id='task_abc', log_dir=tmpdir
             )
 
-            assert logger.name == "task.task_abc"
+            assert logger.name == 'task.task_abc'
 
     def test_creates_log_directory_structure(self):
         """Test log directory {log_dir}/{run_id}/{prefix}/ is created."""
         from molecular_simulations.simulate.constantph.logging import setup_task_logger
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            setup_task_logger(run_id="run_001", task_id="task_abc", log_dir=tmpdir)
+            setup_task_logger(run_id='run_001', task_id='task_abc', log_dir=tmpdir)
 
-            expected_dir = Path(tmpdir) / "run_001" / "tas"
+            expected_dir = Path(tmpdir) / 'run_001' / 'tas'
             assert expected_dir.exists()
-            assert (expected_dir / "task_abc.jsonl").exists() or True
+            assert (expected_dir / 'task_abc.jsonl').exists() or True
             # File is created by FileHandler on first write
 
     def test_creates_log_file(self):
@@ -44,30 +44,30 @@ class TestSetupTaskLogger:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = setup_task_logger(
-                run_id="run_001", task_id="task_abc", log_dir=tmpdir
+                run_id='run_001', task_id='task_abc', log_dir=tmpdir
             )
 
-            logger.info("test message")
+            logger.info('test message')
 
-            log_file = Path(tmpdir) / "run_001" / "tas" / "task_abc.jsonl"
+            log_file = Path(tmpdir) / 'run_001' / 'tas' / 'task_abc.jsonl'
             assert log_file.exists()
             content = log_file.read_text().strip()
             entry = json.loads(content)
-            assert entry["message"] == "test message"
-            assert entry["run_id"] == "run_001"
-            assert entry["task_id"] == "task_abc"
-            assert entry["level"] == "INFO"
+            assert entry['message'] == 'test message'
+            assert entry['run_id'] == 'run_001'
+            assert entry['task_id'] == 'task_abc'
+            assert entry['level'] == 'INFO'
 
     def test_short_task_id_prefix(self):
         """Test prefix bucketing with task_id shorter than 3 chars."""
         from molecular_simulations.simulate.constantph.logging import setup_task_logger
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger = setup_task_logger(run_id="run_001", task_id="ab", log_dir=tmpdir)
+            logger = setup_task_logger(run_id='run_001', task_id='ab', log_dir=tmpdir)
 
-            logger.info("short id test")
+            logger.info('short id test')
 
-            log_file = Path(tmpdir) / "run_001" / "ab" / "ab.jsonl"
+            log_file = Path(tmpdir) / 'run_001' / 'ab' / 'ab.jsonl'
             assert log_file.exists()
 
     def test_logger_level_is_debug(self):
@@ -76,7 +76,7 @@ class TestSetupTaskLogger:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             logger = setup_task_logger(
-                run_id="run_001", task_id="task_abc", log_dir=tmpdir
+                run_id='run_001', task_id='task_abc', log_dir=tmpdir
             )
 
             assert logger.level == logging.DEBUG
@@ -86,11 +86,9 @@ class TestSetupTaskLogger:
         from molecular_simulations.simulate.constantph.logging import setup_task_logger
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            logger1 = setup_task_logger(
-                run_id="run_001", task_id="task_abc", log_dir=tmpdir
-            )
+            setup_task_logger(run_id='run_001', task_id='task_abc', log_dir=tmpdir)
             logger2 = setup_task_logger(
-                run_id="run_001", task_id="task_abc", log_dir=tmpdir
+                run_id='run_001', task_id='task_abc', log_dir=tmpdir
             )
 
             assert len(logger2.handlers) == 1
@@ -103,13 +101,13 @@ class TestJsonFormatter:
         """Test that format() returns valid JSON."""
         from molecular_simulations.simulate.constantph.logging import JsonFormatter
 
-        formatter = JsonFormatter(task_id="task_001", run_id="run_001")
+        formatter = JsonFormatter(task_id='task_001', run_id='run_001')
         record = logging.LogRecord(
-            name="test",
+            name='test',
             level=logging.INFO,
-            pathname="",
+            pathname='',
             lineno=0,
-            msg="test message",
+            msg='test message',
             args=(),
             exc_info=None,
         )
@@ -117,23 +115,23 @@ class TestJsonFormatter:
         result = formatter.format(record)
         entry = json.loads(result)
 
-        assert entry["message"] == "test message"
-        assert entry["task_id"] == "task_001"
-        assert entry["run_id"] == "run_001"
-        assert entry["level"] == "INFO"
-        assert "timestamp" in entry
+        assert entry['message'] == 'test message'
+        assert entry['task_id'] == 'task_001'
+        assert entry['run_id'] == 'run_001'
+        assert entry['level'] == 'INFO'
+        assert 'timestamp' in entry
 
     def test_format_includes_extra_fields(self):
         """Test that extra fields from log call are included."""
         from molecular_simulations.simulate.constantph.logging import JsonFormatter
 
-        formatter = JsonFormatter(task_id="task_001", run_id="run_001")
+        formatter = JsonFormatter(task_id='task_001', run_id='run_001')
         record = logging.LogRecord(
-            name="test",
+            name='test',
             level=logging.INFO,
-            pathname="",
+            pathname='',
             lineno=0,
-            msg="test",
+            msg='test',
             args=(),
             exc_info=None,
         )
@@ -143,20 +141,20 @@ class TestJsonFormatter:
         result = formatter.format(record)
         entry = json.loads(result)
 
-        assert entry["pH"] == 7.0
-        assert entry["step"] == 42
+        assert entry['pH'] == 7.0
+        assert entry['step'] == 42
 
     def test_format_excludes_standard_log_fields(self):
         """Test that standard LogRecord fields are not duplicated."""
         from molecular_simulations.simulate.constantph.logging import JsonFormatter
 
-        formatter = JsonFormatter(task_id="task_001", run_id="run_001")
+        formatter = JsonFormatter(task_id='task_001', run_id='run_001')
         record = logging.LogRecord(
-            name="test",
+            name='test',
             level=logging.INFO,
-            pathname="/some/path.py",
+            pathname='/some/path.py',
             lineno=10,
-            msg="test",
+            msg='test',
             args=(),
             exc_info=None,
         )
@@ -165,11 +163,11 @@ class TestJsonFormatter:
         entry = json.loads(result)
 
         # These standard fields should NOT appear as separate keys
-        assert "pathname" not in entry
-        assert "lineno" not in entry
-        assert "funcName" not in entry
-        assert "thread" not in entry
+        assert 'pathname' not in entry
+        assert 'lineno' not in entry
+        assert 'funcName' not in entry
+        assert 'thread' not in entry
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

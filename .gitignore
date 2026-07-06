@@ -4,7 +4,16 @@ examples/test_sim
 *.swp
 .DS_Store
 dist/
+docs/_build/
 .venv
 joss/
+runinfo/
 .claude
 *.md
+!README.md
+!CHANGELOG.md
+!docs/changelog.md
+!skills/**/*.md
+
+# coverage data
+.coverage

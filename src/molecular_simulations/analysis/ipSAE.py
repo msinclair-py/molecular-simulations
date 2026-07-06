@@ -17,6 +17,7 @@ from scipy.spatial.distance import cdist
 PathLike = Path | str
 OptPath = Path | str | None
 
+
 class ipSAE:
     """Compute interaction prediction Score from Aligned Errors.
 
@@ -36,9 +37,12 @@ class ipSAE:
         pae_file: Path to PAE numpy file (.npz with 'pae' key).
         out_path: Output directory path. If None, uses parent directory
             of plddt_file.
+        skip_chains: Chain IDs to exclude from scoring (e.g. glycan
+            or ligand chains). Their pLDDT/PAE tokens are inferred
+            from remaining tokens and dropped before scoring.
 
     Example:
-        >>> scorer = ipSAE("model.pdb", "plddt.npz", "pae.npz")
+        >>> scorer = ipSAE('model.pdb', 'plddt.npz', 'pae.npz')
         >>> scorer.run()
         >>> print(scorer.scores)
     """
@@ -161,7 +165,7 @@ class ScoreCalculator:
         chains: Array of chain IDs for each residue.
         unique_chains: Unique chain IDs in the structure.
         chain_pair_type: Dictionary mapping chain ID to type.
-        n_res: Array of residue types.
+        n_res: Total number of residues across all chains (integer).
         permuted: List of all chain pairs to evaluate.
         scores: DataFrame of computed scores after compute_scores().
 
@@ -169,7 +173,7 @@ class ScoreCalculator:
         chains: Array of chain IDs.
         chain_pair_type: Dictionary mapping chain ID to chain type
             ('protein' or 'nucleic_acid').
-        n_residues: Number of residues per chain.
+        n_residues: Total number of residues across all chains.
         pdockq_cutoff: Distance cutoff for pDockQ in Angstroms.
             Defaults to 8.0.
         pae_cutoff: PAE cutoff for ipSAE in Angstroms. Defaults to 12.0.
@@ -193,7 +197,7 @@ class ScoreCalculator:
         Args:
             chains: Array of chain IDs.
             chain_pair_type: Chain ID to type mapping.
-            n_residues: Residue type array.
+            n_residues: Total number of residues across all chains.
             pdockq_cutoff: pDockQ distance cutoff.
             pae_cutoff: PAE cutoff.
         """
@@ -410,7 +414,7 @@ class ScoreCalculator:
 
         Args:
             x: Mean pLDDT scaled by log10 of the number of residue pairs
-                meeting pLDDT and distance cutoffs.
+                within the distance cutoff.
 
         Returns:
             pDockQ score.
@@ -426,7 +430,8 @@ class ScoreCalculator:
         Reference: https://doi.org/10.1093/bioinformatics/btad424
 
         Args:
-            x: Mean pLDDT scaled by mean PAE score.
+            x: Mean pLDDT scaled by the mean pTM derived from the PAE
+                values of contacting residue pairs.
 
         Returns:
             pDockQ2 score.
@@ -510,9 +515,12 @@ class ModelParser:
 
     Args:
         structure: Path to PDB or CIF file.
+        skip_chains: Chain IDs to exclude (e.g. glycan/ligand chains
+            whose per-atom token counts in the pLDDT/PAE arrays
+            aren't recoverable from the structure file alone).
 
     Example:
-        >>> parser = ModelParser("model.pdb")
+        >>> parser = ModelParser('model.pdb')
         >>> parser.parse_structure_file()
         >>> parser.classify_chains()
     """
@@ -676,13 +684,38 @@ class ModelParser:
 
     NUCLEIC_ACIDS = frozenset(['DA', 'DC', 'DT', 'DG', 'A', 'C', 'U', 'G'])
 
-    STANDARD_RESIDUES = frozenset([
-        'ALA', 'ARG', 'ASN', 'ASP', 'CYS',
-        'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
-        'LEU', 'LYS', 'MET', 'PHE', 'PRO',
-        'SER', 'THR', 'TRP', 'TYR', 'VAL',
-        'DA', 'DC', 'DT', 'DG', 'A', 'C', 'U', 'G',
-    ])
+    STANDARD_RESIDUES = frozenset(
+        [
+            'ALA',
+            'ARG',
+            'ASN',
+            'ASP',
+            'CYS',
+            'GLN',
+            'GLU',
+            'GLY',
+            'HIS',
+            'ILE',
+            'LEU',
+            'LYS',
+            'MET',
+            'PHE',
+            'PRO',
+            'SER',
+            'THR',
+            'TRP',
+            'TYR',
+            'VAL',
+            'DA',
+            'DC',
+            'DT',
+            'DG',
+            'A',
+            'C',
+            'U',
+            'G',
+        ]
+    )
 
     @staticmethod
     def parse_pdb_line(line: str, *args, **kwargs) -> dict[str, Any]:

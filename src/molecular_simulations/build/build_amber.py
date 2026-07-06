@@ -10,7 +10,6 @@ Classes:
     ExplicitSolvent: Build explicit solvent cubic boxes with 150mM NaCl.
 """
 
-import logging
 import os
 import subprocess
 import tempfile
@@ -18,8 +17,6 @@ from pathlib import Path
 
 PathLike = str | Path
 OptPath = str | Path | None
-
-logger = logging.getLogger(__name__)
 
 
 class ImplicitSolvent:
@@ -32,6 +29,8 @@ class ImplicitSolvent:
         path: Directory path for output files. If None, uses parent of pdb.
         pdb: Path to input PDB file.
         protein: Whether to load protein force field (ff19SB). Defaults to True.
+        glycans: Whether to load glycan force field (GLYCAM_06j-1).
+            Defaults to True.
         rna: Whether to load RNA force field (Shaw). Defaults to False.
         dna: Whether to load DNA force field (OL21). Defaults to False.
         phos_protein: Whether to load phosphorylated protein force field.
@@ -43,6 +42,8 @@ class ImplicitSolvent:
             Defaults to True.
         amberhome: Path to AMBER installation. If None, uses AMBERHOME
             environment variable. Defaults to None.
+        debug: Whether to write the tleap input to a persistent file
+            instead of a temporary one. Defaults to False.
         **kwargs: Additional attributes to set on the instance.
 
     Attributes:
@@ -57,7 +58,7 @@ class ImplicitSolvent:
         ValueError: If AMBERHOME is not set and amberhome is None.
 
     Example:
-        >>> builder = ImplicitSolvent(path="./build", pdb="protein.pdb", protein=True)
+        >>> builder = ImplicitSolvent(path='./build', pdb='protein.pdb', protein=True)
         >>> builder.build()
     """
 
@@ -132,12 +133,7 @@ class ImplicitSolvent:
         Runs tleap to produce topology (.prmtop) and coordinate (.inpcrd)
         files for the input structure.
         """
-        logger.info(
-            'Build start: implicit solvent',
-            extra={'pdb': str(self.pdb), 'out': str(self.out)},
-        )
         self.tleap_it()
-        logger.info('Build finished')
 
     def tleap_it(self) -> None:
         """Run tleap to build the system.
@@ -152,7 +148,7 @@ class ImplicitSolvent:
         prot = loadpdb {self.pdb}
         set default pbradii mbondi3
         savepdb prot {self.out}
-        saveamberparm prot {self.out.with_suffix(".prmtop")} {self.out.with_suffix(".inpcrd")}
+        saveamberparm prot {self.out.with_suffix('.prmtop')} {self.out.with_suffix('.inpcrd')}
         quit
         """
 
@@ -162,13 +158,10 @@ class ImplicitSolvent:
             self.temp_tleap(tleap_in)
 
     def debug_tleap(self, inp: str) -> None:
-        """Write a tleap input file.
+        """Write a tleap input file and run it.
 
         Args:
             inp: The tleap input file contents as a string.
-
-        Returns:
-            Path to the written tleap input file.
         """
         leap_file = f'{self.path}/tleap.in'
         with open(leap_file, 'w') as outfile:
@@ -219,8 +212,12 @@ class ExplicitSolvent(ImplicitSolvent):
     Args:
         path: Directory path for output files.
         pdb: Path to input PDB file.
+        disulfide_residues: Residue numbers to convert to CYX for disulfide
+            bonding. If None, no residues are forced to CYX. Defaults to None.
         padding: Padding around solute in Angstroms. Defaults to 10.0.
         protein: Whether to load protein force field. Defaults to True.
+        glycans: Whether to load glycan force field (GLYCAM_06j-1).
+            Defaults to False.
         rna: Whether to load RNA force field. Defaults to False.
         dna: Whether to load DNA force field. Defaults to False.
         phos_protein: Whether to load phosphorylated protein force field.
@@ -231,14 +228,18 @@ class ExplicitSolvent(ImplicitSolvent):
             Defaults to False.
         delete_temp_file: Whether to delete temporary files. Defaults to True.
         amberhome: Path to AMBER installation. Defaults to None.
+        debug: Whether to write the tleap input to a persistent file
+            instead of a temporary one. Defaults to False.
         **kwargs: Additional attributes to set on the instance.
 
     Attributes:
         pad: Padding value in Angstroms.
         water_box: Water box type ('OPCBOX' or 'SPCBOX').
+        disulfides: tleap commands assigning CYX to disulfide residues,
+            or a newline if none were specified.
 
     Example:
-        >>> builder = ExplicitSolvent(path="./build", pdb="protein.pdb", padding=12.0)
+        >>> builder = ExplicitSolvent(path='./build', pdb='protein.pdb', padding=12.0)
         >>> builder.build()
     """
 
@@ -279,9 +280,11 @@ class ExplicitSolvent(ImplicitSolvent):
         self.pad = padding
         self.ffs.extend(['leaprc.water.opc'])
         self.water_box = 'OPCBOX'
-        
+
         if disulfide_residues is not None:
-            self.disulfides = '\n'.join([f'protein.{resid} = CYX' for resid in disulfide_residues])
+            self.disulfides = '\n'.join(
+                [f'protein.{resid} = CYX' for resid in disulfide_residues]
+            )
         else:
             self.disulfides = '\n'
 
@@ -297,16 +300,11 @@ class ExplicitSolvent(ImplicitSolvent):
         calculates ion numbers for 150mM concentration, and runs tleap
         to assemble the final solvated system.
         """
-        logger.info(
-            'Build started: explicit solvent',
-            extra={'pdb': str(self.pdb), 'out': str(self.out)},
-        )
         self.prep_pdb()
         dim = self.get_pdb_extent()
         num_ions = self.get_ion_numbers(dim**3)
         self.assemble_system(dim, num_ions)
         self.clean_up_directory()
-        logger.info('Build finished')
 
     def prep_pdb(self) -> None:
         """Prepare the input PDB using cpptraj.
@@ -317,7 +315,7 @@ class ExplicitSolvent(ImplicitSolvent):
         design use cases). For that reason, we are utilizing the more
         feature-rich prepareforleap function in cpptraj.
         """
-        self.ss_bonds_leap = self.path  / 'ss_bonds.leap'
+        self.ss_bonds_leap = self.path / 'ss_bonds.leap'
         prepared_pdb = self.path / 'protein.pdb'
         cpptraj_in = [
             f'parm {self.pdb}',
@@ -327,15 +325,15 @@ class ExplicitSolvent(ImplicitSolvent):
                 f'pdbout {prepared_pdb} noh existingdisulfides '
                 f'leapunitname PROT out {self.ss_bonds_leap}'
             ),
-            'quit'
+            'quit',
         ]
 
         cpptraj = str(self.amberhome / 'bin' / 'cpptraj')
         subprocess.run(
-            [cpptraj], 
+            [cpptraj],
             input='\n'.join(cpptraj_in),
-            text=True, 
-            cwd=str(self.path), 
+            text=True,
+            cwd=str(self.path),
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -447,4 +445,3 @@ class ExplicitSolvent(ImplicitSolvent):
             Number of each ion type (Na+ and Cl-) needed for 150mM.
         """
         return round(volume * 10e-6 * 9.03)
-

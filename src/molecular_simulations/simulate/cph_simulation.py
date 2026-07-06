@@ -6,7 +6,6 @@ with replica exchange across different pH values. It uses Parsl for distributed
 execution of simulation replicas.
 """
 
-import logging
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +16,6 @@ import numpy as np
 import parsl
 from openmm.app import AmberInpcrdFile, AmberPrmtopFile, Topology
 from parsl import Config, python_app
-from pythonjsonlogger.json import JsonFormatter
 
 from .constantph.constantph import ConstantPH
 from .constantph.logging import setup_task_logger
@@ -49,7 +47,13 @@ def run_cph_sim(
     """
     from openmm import LangevinIntegrator
     from openmm.app import PME, CutoffNonPeriodic, HBonds
-    from openmm.unit import amu, kelvin, kilojoules_per_mole, nanometers, picosecond  # ty: ignore[unresolved-import]
+    from openmm.unit import (  # ty: ignore[unresolved-import]
+        amu,
+        kelvin,
+        kilojoules_per_mole,
+        nanometers,
+        picosecond,
+    )
 
     variants = params['residueVariants']
 
@@ -111,32 +115,6 @@ def run_cph_sim(
         )
 
 
-def setup_worker_logger(self, worker_id: str, log_dir: Path) -> logging.Logger:
-    """Set up a JSON logger for a simulation worker.
-
-    Creates a logger that writes JSON-formatted log entries to a
-    worker-specific file.
-
-    Args:
-        worker_id: Unique identifier for the worker.
-        log_dir: Directory path where log files will be written.
-
-    Returns:
-        Configured logging.Logger instance for the worker.
-    """
-    log_path = log_dir / f'{worker_id}.jsonl'
-
-    logger = logging.getLogger(f'task.{worker_id}')
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
-
-    handler = logging.FileHandler(log_path)
-    handler.setFormatter(JsonFormatter(task_id=worker_id))
-    logger.addHandler(handler)
-
-    return logger
-
-
 class ConstantPHEnsemble:
     """Orchestrator for running constant pH simulation ensembles.
 
@@ -168,6 +146,9 @@ class ConstantPHEnsemble:
             log_dir: Directory path for writing simulation logs.
             pHs: List of pH values to sample. Defaults to [0.5, 1.5, ..., 13.5].
             temperature: Simulation temperature in Kelvin. Defaults to 300.
+            platform: OpenMM platform name to run on. Defaults to 'CUDA'.
+            properties: Platform-specific properties passed to OpenMM. Defaults
+                to {'Precision': 'mixed'}.
             variant_sel: Optional MDAnalysis selection string to limit which
                 titratable residues are included. Defaults to None.
         """
@@ -279,8 +260,13 @@ class ConstantPHEnsemble:
         Args:
             n_cycles: Number of MD/MC cycles per replica. Defaults to 500.
             n_steps: Number of MD steps per cycle. Defaults to 500.
+            parsl_func: Parsl python app used to run each replica. Defaults to
+                run_cph_sim.
+
         Returns:
-            (dict): Dictionary containing failure modes, empty if all successful.
+            Dictionary mapping each replica index to None on success or to the
+            raised Exception on failure. Contains one entry per replica (it is
+            not empty when all replicas succeed).
         """
         futures = []
         for i, path in enumerate(self.paths):
@@ -335,9 +321,10 @@ class ConstantPHEnsemble:
             path: Directory containing system.prmtop and system.inpcrd files.
 
         Returns:
-            Dictionary containing all parameters needed to initialize a
-            ConstantPH simulation including file paths, pH values, integrators,
-            and force field parameters for both explicit and implicit solvent.
+            Dictionary containing the parameters needed to initialize a
+            ConstantPH simulation: file paths (prmtop_file, inpcrd_file), pH
+            values, relaxationSteps, the nonbonded and implicit cutoffs,
+            hmr, platform_name, and properties.
         """
         params = {
             'prmtop_file': path / 'system.prmtop',

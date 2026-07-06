@@ -66,6 +66,7 @@ Quick Example
 
    installation
    quickstart
+   usage
    tutorials/index
 
 .. toctree::

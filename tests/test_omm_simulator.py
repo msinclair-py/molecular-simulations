@@ -965,9 +965,7 @@ class TestBaseSimulatorProduction:
         sim._equilibrate(simulation)
         return sim
 
-    def test_base_production_no_restart_adds_barostat(
-        self, real_amber_explicit_files
-    ):
+    def test_base_production_no_restart_adds_barostat(self, real_amber_explicit_files):
         """Base production builds a real PME+NPT system and runs (restart=False)."""
         from openmm import MonteCarloBarostat
 

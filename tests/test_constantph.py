@@ -3733,9 +3733,7 @@ class TestConstantPHValidateStates:
         from molecular_simulations.simulate.constantph.constantph import ConstantPH
 
         cph = object.__new__(ConstantPH)
-        cph.titrations = {
-            3: _validation_titration(['ASP', 'ASH'], [4, 5], [4, 5], 1)
-        }
+        cph.titrations = {3: _validation_titration(['ASP', 'ASH'], [4, 5], [4, 5], 1)}
         assert cph.validateStates() is True
 
     def test_validate_states_count_mismatch(self) -> None:
@@ -3744,9 +3742,7 @@ class TestConstantPHValidateStates:
 
         cph = object.__new__(ConstantPH)
         # Two variants but only one implicit state.
-        cph.titrations = {
-            3: _validation_titration(['ASP', 'ASH'], [4], [4, 5], 0)
-        }
+        cph.titrations = {3: _validation_titration(['ASP', 'ASH'], [4], [4, 5], 0)}
         assert cph.validateStates() is False
 
     def test_validate_states_identical_hydrogen_counts(self) -> None:
@@ -3754,9 +3750,7 @@ class TestConstantPHValidateStates:
         from molecular_simulations.simulate.constantph.constantph import ConstantPH
 
         cph = object.__new__(ConstantPH)
-        cph.titrations = {
-            3: _validation_titration(['ASP', 'ASH'], [5, 5], [4, 5], 1)
-        }
+        cph.titrations = {3: _validation_titration(['ASP', 'ASH'], [5, 5], [4, 5], 1)}
         assert cph.validateStates() is False
 
     def test_validate_states_protonated_index_out_of_range(self) -> None:
@@ -3764,9 +3758,7 @@ class TestConstantPHValidateStates:
         from molecular_simulations.simulate.constantph.constantph import ConstantPH
 
         cph = object.__new__(ConstantPH)
-        cph.titrations = {
-            3: _validation_titration(['ASP', 'ASH'], [4, 5], [4, 5], 9)
-        }
+        cph.titrations = {3: _validation_titration(['ASP', 'ASH'], [4, 5], [4, 5], 9)}
         assert cph.validateStates() is False
 
     def test_validate_states_reports_issue(self, capsys) -> None:
@@ -3774,9 +3766,7 @@ class TestConstantPHValidateStates:
         from molecular_simulations.simulate.constantph.constantph import ConstantPH
 
         cph = object.__new__(ConstantPH)
-        cph.titrations = {
-            3: _validation_titration(['ASP', 'ASH'], [4, 5], [4, 5], 9)
-        }
+        cph.titrations = {3: _validation_titration(['ASP', 'ASH'], [4, 5], [4, 5], 9)}
         result = cph.validateStates()
         captured = capsys.readouterr()
 
@@ -3849,9 +3839,7 @@ class TestConstantPHFindResidueStatesReal:
 
         from openmm.app import Modeller, PDBFile, element
 
-        pdb_path = (
-            pathlib.Path(__file__).parent / 'data' / 'amber' / 'lys_asp.pdb'
-        )
+        pdb_path = pathlib.Path(__file__).parent / 'data' / 'amber' / 'lys_asp.pdb'
         pdb = PDBFile(str(pdb_path))
         modeller = Modeller(pdb.topology, pdb.positions)
         hydrogens = [
@@ -4040,9 +4028,7 @@ class TestConstantPHRealInitPipeline:
         assert real_solvated_cph.explicitSystem.getNumParticles() == 2620
         assert real_solvated_cph.implicitSystem.getNumParticles() == 46
 
-    def test_protonation_states_have_expected_hydrogen_counts(
-        self, real_solvated_cph
-    ):
+    def test_protonation_states_have_expected_hydrogen_counts(self, real_solvated_cph):
         """The built protonation states carry the real +1-proton differences."""
         lys = real_solvated_cph.titrations[1]
         asp = real_solvated_cph.titrations[2]

@@ -679,9 +679,7 @@ class TestGetCovarianceCutoffs:
 
     def test_covariance_permissive_cutoffs_keep_all(self, two_chain_pdb, tmp_path):
         """With huge cutoffs no pair is zeroed -> raw [[+1, 0-ish], ...] survives."""
-        ppi = self._controlled_ppi(
-            two_chain_pdb, tmp_path, cov_cutoff=(1000.0, 1000.0)
-        )
+        ppi = self._controlled_ppi(two_chain_pdb, tmp_path, cov_cutoff=(1000.0, 1000.0))
 
         C = ppi.get_covariance()
 

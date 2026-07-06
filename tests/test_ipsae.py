@@ -577,9 +577,7 @@ class TestParseCifLineAuthFallback:
             'auth_seq_id': 13,
         }
 
-        result = ModelParser.parse_cif_line(
-            cif_line, fields, allow_missing_seq_id=True
-        )
+        result = ModelParser.parse_cif_line(cif_line, fields, allow_missing_seq_id=True)
 
         assert result is not None
         assert result['resid'] == 5

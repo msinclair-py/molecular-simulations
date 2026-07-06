@@ -1938,7 +1938,7 @@ class TestPrepareUnknownResname:
             # Build a real TitrationCurve from a valid log ...
             log_path = Path(tmpdir) / 'cpH.log'
             log_path.write_text(
-                "cpH: resids 20\n"
+                'cpH: resids 20\n'
                 "rank=0 cpH: pH 4.0: ['ASH']\n"
                 "rank=0 cpH: pH 5.0: ['ASP']\n"
             )
@@ -1973,7 +1973,7 @@ class TestCurveFitFailureFallback:
             # NaN (lines 497-499). Three points clear the < 3 early-return.
             log_path = Path(tmpdir) / 'cpH.log'
             log_path.write_text(
-                "cpH: resids 20\n"
+                'cpH: resids 20\n'
                 "rank=0 cpH: pH 20.0: ['ASH']\n"
                 "rank=0 cpH: pH 21.0: ['ASP']\n"
                 "rank=0 cpH: pH 22.0: ['ASH']\n"
@@ -1996,9 +1996,7 @@ class TestInsufficientPointsOtherMethods:
         log_path = Path(tmpdir) / 'cpH.log'
         # Only one distinct pH value -> x.size == 1 < 3 for the residue.
         log_path.write_text(
-            "cpH: resids 20\n"
-            "rank=0 cpH: pH 4.0: ['ASH']\n"
-            "rank=0 cpH: pH 4.0: ['ASP']\n"
+            "cpH: resids 20\nrank=0 cpH: pH 4.0: ['ASH']\nrank=0 cpH: pH 4.0: ['ASP']\n"
         )
         return log_path
 

@@ -4076,6 +4076,63 @@ class TestConstantPHRealInitPipeline:
             assert 0 <= titration.currentIndex < len(titration.variants), resid
         assert cph.validateStates() is True
 
+    def test_gb_force_parameters_are_captured_per_state(self, real_solvated_cph):
+        """The implicit GB force is captured into every protonation state.
+
+        Regression test: ParmEd builds the GB model as a CustomGBForce, which the
+        mapping code originally ignored (it only matched GBSAOBCForce). That left
+        the GB charges frozen across states, so GB solvation cancelled out of
+        every MC energy difference. Each state must now carry GB parameters keyed
+        by the implicit GB force index.
+        """
+        from openmm import CustomGBForce, GBSAOBCForce
+
+        cph = real_solvated_cph
+        gb_idx = next(
+            i
+            for i, f in enumerate(cph.implicitSystem.getForces())
+            if isinstance(f, (GBSAOBCForce, CustomGBForce))
+        )
+        for titration in cph.titrations.values():
+            for state in titration.implicitStates:
+                assert gb_idx in state.particleParameters
+                assert state.particleParameters[gb_idx], 'GB params must be non-empty'
+
+    def test_gb_charges_differ_between_protonation_states(self, real_solvated_cph):
+        """GB per-particle charge tracks the NB charge and changes on titration.
+
+        The Lys fixture is stored protonated (LYS), so its labile HZ3 proton is a
+        real particle: charge 0 in LYN (deprotonated ghost) and a real positive
+        charge in LYS. The GB charge must mirror that so the desolvation penalty
+        enters the MC energy -- the behaviour that was broken when the
+        CustomGBForce was ignored.
+        """
+        from openmm import CustomGBForce, GBSAOBCForce
+
+        cph = real_solvated_cph
+        gb_idx = next(
+            i
+            for i, f in enumerate(cph.implicitSystem.getForces())
+            if isinstance(f, (GBSAOBCForce, CustomGBForce))
+        )
+        lys = cph.titrations[1]  # variants ['LYN', 'LYS'], protonated index 1
+        gb0 = lys.implicitStates[0].particleParameters[gb_idx]  # LYN (deprotonated)
+        gb1 = lys.implicitStates[1].particleParameters[gb_idx]  # LYS (protonated)
+
+        def charge(params):
+            c = params[0]
+            return c.value_in_unit(c.unit) if hasattr(c, 'unit') else float(c)
+
+        # At least one atom's GB charge (parameter index 0) must differ.
+        shared = set(gb0) & set(gb1)
+        assert any(
+            abs(charge(gb0[name]) - charge(gb1[name])) > 1e-6 for name in shared
+        ), 'GB charges are identical across protonation states'
+
+        # The labile HZ3 proton is a zero-charge ghost in LYN, real charge in LYS.
+        assert abs(charge(gb0['HZ3'])) < 1e-9
+        assert abs(charge(gb1['HZ3'])) > 1e-3
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

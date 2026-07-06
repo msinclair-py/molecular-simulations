@@ -19,7 +19,7 @@ from copy import deepcopy
 
 import numpy as np
 import parmed as pmd
-from openmm import Context, GBSAOBCForce, NonbondedForce, System
+from openmm import Context, CustomGBForce, GBSAOBCForce, NonbondedForce, System
 from openmm.app import (
     OBC2,
     AmberInpcrdFile,
@@ -592,7 +592,12 @@ class ConstantPH:
         for fi, force in enumerate(self.implicitSystem.getForces()):
             if isinstance(force, NonbondedForce):
                 implicitNBForceIdx = fi
-            elif isinstance(force, GBSAOBCForce):
+            elif isinstance(force, (GBSAOBCForce, CustomGBForce)):
+                # ParmEd builds every GB model (OBC2, GBn2) as a CustomGBForce,
+                # so we must recognize both classes here. Only GBSAOBCForce was
+                # matched previously, which left the GB charges frozen across
+                # protonation states and removed the desolvation term from every
+                # MC energy difference.
                 implicitGBForceIdx = fi
 
         if implicitNBForceIdx is None:
@@ -678,11 +683,6 @@ class ConstantPH:
             protonatedNBParams = protonatedState.particleParameters.get(
                 implicitNBForceIdx, {}
             )
-            protonatedGBParams = (
-                protonatedState.particleParameters.get(implicitGBForceIdx, {})
-                if implicitGBForceIdx
-                else {}
-            )
             protonatedExceptionParams = protonatedState.exceptionParameters.get(
                 implicitNBForceIdx, {}
             )
@@ -702,18 +702,6 @@ class ConstantPH:
                         stateNBParams[atomName] = zeroParams
                 state.particleParameters[implicitNBForceIdx] = stateNBParams
 
-                # Ensure GB parameters include all atoms from protonated state
-                if implicitGBForceIdx is not None and implicitGBForce is not None:
-                    stateGBParams = state.particleParameters.get(implicitGBForceIdx, {})
-                    for atomName in protonatedGBParams:
-                        if atomName not in stateGBParams:
-                            originalParams = protonatedGBParams[atomName]
-                            zeroParams = self._get_zero_parameters(
-                                originalParams, implicitGBForce
-                            )
-                            stateGBParams[atomName] = zeroParams
-                    state.particleParameters[implicitGBForceIdx] = stateGBParams
-
                 # Handle exceptions for ghost atoms
                 stateExceptionParams = state.exceptionParameters.get(
                     implicitNBForceIdx, {}
@@ -726,6 +714,42 @@ class ConstantPH:
                             *originalParams[1:],
                         )
                 state.exceptionParameters[implicitNBForceIdx] = stateExceptionParams
+
+            # Third pass: derive per-state GB (implicit-solvent) parameters.
+            #
+            # The GB per-particle charge is the same partial charge as the
+            # NonbondedForce; only the charge changes between protonation states,
+            # never the GB radii. So for every state we take the GB force's own
+            # base parameter tuple (correct radii, straight from ParmEd) and
+            # substitute the charge (parameter index 0) with this state's NB
+            # charge. Ghost hydrogens carry the zeroed NB charge here too, so
+            # they contribute no GB solvation in deprotonated states.
+            #
+            # Without this, the GB charges stay frozen at the initial (fully
+            # protonated) values, the GB term cancels out of every MC energy
+            # difference, and titration is driven by unscreened electrostatics.
+            if implicitGBForceIdx is not None and implicitGBForce is not None:
+                gbIsCustom = isinstance(implicitGBForce, CustomGBForce)
+                for state in titration.implicitStates:
+                    stateNBParams = state.particleParameters.get(implicitNBForceIdx, {})
+                    stateGBParams = {}
+                    for atomName, nbParams in stateNBParams.items():
+                        atomIdx = state.atomIndices.get(atomName)
+                        if atomIdx is None:
+                            continue
+                        base = list(implicitGBForce.getParticleParameters(atomIdx))
+                        charge = nbParams[0]
+                        chargeVal = (
+                            charge.value_in_unit(elementary_charge)
+                            if hasattr(charge, 'value_in_unit')
+                            else float(charge)
+                        )
+                        # CustomGBForce takes bare floats; GBSAOBCForce Quantities.
+                        base[0] = (
+                            chargeVal if gbIsCustom else chargeVal * elementary_charge
+                        )
+                        stateGBParams[atomName] = tuple(base)
+                    state.particleParameters[implicitGBForceIdx] = stateGBParams
 
     def _findResidueStates(self, topology, positions, forcefield, variants, ffargs):
         """Build ResidueState objects for residues with specified variants."""
@@ -1400,8 +1424,11 @@ class ConstantPH:
         for forceIndex, params in state.particleParameters.items():
             force = context.getSystem().getForce(forceIndex)
 
-            # Only NonbondedForce and GBSAOBCForce support setParticleParameters
-            if not isinstance(force, (NonbondedForce, GBSAOBCForce)):
+            # Only NonbondedForce, GBSAOBCForce and CustomGBForce expose
+            # per-particle setParticleParameters. CustomGBForce is how ParmEd
+            # builds every GB model, so it must be updated too or the implicit
+            # solvation term stays frozen across protonation states.
+            if not isinstance(force, (NonbondedForce, GBSAOBCForce, CustomGBForce)):
                 continue
 
             for atomName, atomParams in params.items():

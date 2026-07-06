@@ -25,34 +25,6 @@ warnings.filterwarnings(
 )
 
 
-def _kabsch_works() -> bool:
-    """Return True if rust_simulation_tools.kabsch_align accepts this numpy build.
-
-    rust-simulation-tools 0.2.4 is a compiled (PyO3/rust-numpy) extension built
-    against the numpy 1.x C-API, so on numpy 2.x it rejects arrays at the
-    conversion boundary ('ndarray' object cannot be converted to 'PyArray<T, D>').
-    Probe with a tiny real call so the alignment tests run wherever the extension
-    is ABI-compatible and skip (rather than fail) where it is not -- once a
-    numpy-2-compatible rust-simulation-tools is released, they run again with no
-    test change.
-    """
-    try:
-        import rust_simulation_tools as rst
-
-        p = np.zeros((2, 3, 3), dtype=np.float32)
-        rst.kabsch_align(p, p[0], np.array([0, 1, 2]))
-        return True
-    except Exception:
-        return False
-
-
-requires_kabsch = pytest.mark.skipif(
-    not _kabsch_works(),
-    reason='rust-simulation-tools kabsch_align is not ABI-compatible with this '
-    'numpy build (needs a numpy-2-compatible rust-simulation-tools release)',
-)
-
-
 def _rmsd_to_first(positions: np.ndarray, idx: np.ndarray) -> float:
     """Mean per-frame RMSD of frames 1..N to frame 0 over the given atom subset."""
     ref = positions[0][idx]
@@ -120,7 +92,6 @@ class TestTrimTrajectory:
         assert result.trajectory.n_frames == expected
         assert result.atoms.n_atoms == u.atoms.n_atoms
 
-    @requires_kabsch
     def test_trim_trajectory_with_align(self, two_chain_trajectory, tmp_path):
         """Default backbone alignment reduces RMSD-to-reference vs the unaligned trajectory."""
         top, traj = str(two_chain_trajectory['top']), str(two_chain_trajectory['traj'])
@@ -151,7 +122,6 @@ class TestTrimTrajectory:
         # Alignment must not increase, and on this drifting trajectory must reduce, RMSD.
         assert aligned_rmsd < raw_rmsd
 
-    @requires_kabsch
     def test_trim_trajectory_with_custom_align_selection(
         self, two_chain_trajectory, tmp_path
     ):
@@ -198,7 +168,6 @@ class TestTrimTrajectory:
 
         np.testing.assert_allclose(load_coords(out_plain), load_coords(out_rewrap))
 
-    @requires_kabsch
     def test_trim_trajectory_amber_system(self, real_amber_system_files, tmp_path):
         """Works on a real AMBER topology + trajectory (prmtop/DCD), aligning backbone."""
         prmtop, dcd = (

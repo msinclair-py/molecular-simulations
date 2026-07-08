@@ -1,0 +1,23 @@
+# HEWL (hen egg-white lysozyme) experimental side-chain pKa values (NMR).
+#
+# *** REPRESENTATIVE LITERATURE VALUES -- VERIFY BEFORE DRAWING CONCLUSIONS ***
+# These are approximate consensus values compiled from the classic HEWL NMR
+# titration studies. Individual values (especially the very low Asp48/Asp66,
+# which are hard to measure) vary by source and method. Replace this table with
+# the exact dataset you trust before reporting an RMSE. The well-established
+# landmarks are Glu35 (upshifted, ~6.1), Asp52 (catalytic, ~3.6) and His15
+# (~5.5). Suggested primary sources: Bartik, Redfield & Dobson, Biophys J 1994;
+# Webb, Tynan-Connolly et al., Proteins 2011; Kuramitsu & Hamaguchi 1980.
+#
+# resnum = author (PDB) residue number; pKa_exp in pH units.
+resnum,resname,pKa_exp,note
+7,GLU,2.6,
+15,HIS,5.5,landmark
+18,ASP,2.8,
+35,GLU,6.1,landmark_upshifted_catalytic
+48,ASP,1.4,very_low_uncertain
+52,ASP,3.6,landmark_catalytic
+66,ASP,1.2,very_low_uncertain
+87,ASP,2.1,
+101,ASP,4.5,
+119,ASP,3.2,

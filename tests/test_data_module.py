@@ -30,7 +30,11 @@ class TestGetRefEnergies:
         from molecular_simulations.data import get_ref_energies
 
         ref = get_ref_energies(ff='amber19')
-        assert ref['ASP'][1] < 0  # protonated state has negative reference energy
+        # After the CustomGBForce fix and recalibration, the protonated-state
+        # reference energy is positive for these residues: GB desolvation opposes
+        # forming/retaining the charged (or, for Asp/Glu, the neutral-vs-charged)
+        # state, so the calibrated energy that recovers the experimental pKa is > 0.
+        assert ref['ASP'][1] > 0
 
     def test_unknown_forcefield_raises(self):
         """Test that unknown force field raises ValueError."""

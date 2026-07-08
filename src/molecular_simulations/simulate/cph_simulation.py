@@ -218,14 +218,20 @@ class ConstantPHEnsemble:
             'LYS': ['LYN', 'LYS'],
             'HIS': ['HID', 'HIP'],
         }
-        names = list(_variants.keys())
+        # A titratable residue may appear under its default name or, when the
+        # system was built for constant pH, under its protonated variant. Map
+        # both to the canonical key used by _variants and the reference-energy
+        # table (ConstantPHSolvent builds ASP->ASH, GLU->GLH, HIS->HIP).
+        _canonical = {name: name for name in _variants}
+        _canonical.update({'ASH': 'ASP', 'GLH': 'GLU', 'HIP': 'HIS', 'LYN': 'LYS'})
         variants = {}
         reference_energies = {}
         for residue in top.residues():
-            if residue.name in names:
-                variants[residue.index] = _variants[residue.name]
+            canonical = _canonical.get(residue.name)
+            if canonical is not None:
+                variants[residue.index] = _variants[canonical]
                 reference_energies[residue.index] = [
-                    x for x in self.ref_energies[residue.name]
+                    x for x in self.ref_energies[canonical]
                 ]
 
         u = mda.Universe(str(path / 'system.prmtop'), str(path / 'system.inpcrd'))

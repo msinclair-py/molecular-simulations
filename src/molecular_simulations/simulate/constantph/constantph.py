@@ -19,7 +19,7 @@ from copy import deepcopy
 
 import numpy as np
 import parmed as pmd
-from openmm import Context, GBSAOBCForce, NonbondedForce, System
+from openmm import Context, CustomGBForce, GBSAOBCForce, NonbondedForce, System
 from openmm.app import (
     OBC2,
     AmberInpcrdFile,
@@ -301,7 +301,55 @@ class ConstantPH:
         print('Mapping protonation states to explicit system...')
         self._mapStatesToExplicitSystem()
 
+        # Fail loudly if the input was not built with titratable sites protonated
+        self._validateProtonatedInput()
+
         print('ConstantPHAmber initialization complete.')
+
+    def _validateProtonatedInput(self):
+        """Verify every titratable residue was built in its protonated form.
+
+        Constant pH represents a deprotonated state by zeroing the labile
+        proton's charge (a "ghost" hydrogen), so that proton must exist as a
+        real particle in the AMBER topology. tleap builds Asp/Glu deprotonated
+        and His singly protonated by default, which omits those protons; such a
+        system silently loses the proton (its parameters are dropped during
+        mapping) and cannot titrate correctly.
+
+        This detects that case by comparing the number of hydrogens actually
+        present in each titratable residue against the hydrogen count of its
+        fully protonated variant, and raises with actionable guidance.
+
+        Raises:
+            ValueError: If any titrated residue is missing its labile proton(s).
+        """
+        explicitResidues = list(self.explicitTopology.residues())
+        problems = []
+        for resIndex, titration in self.titrations.items():
+            protonatedState = titration.implicitStates[titration.protonatedIndex]
+            expectedH = protonatedState.numHydrogens
+            residue = explicitResidues[resIndex]
+            actualH = sum(
+                1 for atom in residue.atoms() if atom.element == element.hydrogen
+            )
+            if actualH < expectedH:
+                protonatedVariant = titration.variants[titration.protonatedIndex]
+                problems.append(
+                    f'  residue {resIndex} (built as {residue.name}) has {actualH} '
+                    f'hydrogens but its protonated variant {protonatedVariant} '
+                    f'requires {expectedH}; the labile proton is not a real particle'
+                )
+
+        if problems:
+            raise ValueError(
+                'Titratable residues are missing labile protons -- the input '
+                'system was not built in the fully protonated form required for '
+                'constant pH:\n'
+                + '\n'.join(problems)
+                + '\n\nRebuild the system with these residues protonated (ASP->ASH, '
+                'GLU->GLH, HIS->HIP), e.g. with '
+                'molecular_simulations.build.build_amber.ConstantPHSolvent.'
+            )
 
     def _buildImplicitSystemWithParmEd(self):
         """
@@ -592,7 +640,12 @@ class ConstantPH:
         for fi, force in enumerate(self.implicitSystem.getForces()):
             if isinstance(force, NonbondedForce):
                 implicitNBForceIdx = fi
-            elif isinstance(force, GBSAOBCForce):
+            elif isinstance(force, (GBSAOBCForce, CustomGBForce)):
+                # ParmEd builds every GB model (OBC2, GBn2) as a CustomGBForce,
+                # so we must recognize both classes here. Only GBSAOBCForce was
+                # matched previously, which left the GB charges frozen across
+                # protonation states and removed the desolvation term from every
+                # MC energy difference.
                 implicitGBForceIdx = fi
 
         if implicitNBForceIdx is None:
@@ -678,11 +731,6 @@ class ConstantPH:
             protonatedNBParams = protonatedState.particleParameters.get(
                 implicitNBForceIdx, {}
             )
-            protonatedGBParams = (
-                protonatedState.particleParameters.get(implicitGBForceIdx, {})
-                if implicitGBForceIdx
-                else {}
-            )
             protonatedExceptionParams = protonatedState.exceptionParameters.get(
                 implicitNBForceIdx, {}
             )
@@ -702,18 +750,6 @@ class ConstantPH:
                         stateNBParams[atomName] = zeroParams
                 state.particleParameters[implicitNBForceIdx] = stateNBParams
 
-                # Ensure GB parameters include all atoms from protonated state
-                if implicitGBForceIdx is not None and implicitGBForce is not None:
-                    stateGBParams = state.particleParameters.get(implicitGBForceIdx, {})
-                    for atomName in protonatedGBParams:
-                        if atomName not in stateGBParams:
-                            originalParams = protonatedGBParams[atomName]
-                            zeroParams = self._get_zero_parameters(
-                                originalParams, implicitGBForce
-                            )
-                            stateGBParams[atomName] = zeroParams
-                    state.particleParameters[implicitGBForceIdx] = stateGBParams
-
                 # Handle exceptions for ghost atoms
                 stateExceptionParams = state.exceptionParameters.get(
                     implicitNBForceIdx, {}
@@ -726,6 +762,42 @@ class ConstantPH:
                             *originalParams[1:],
                         )
                 state.exceptionParameters[implicitNBForceIdx] = stateExceptionParams
+
+            # Third pass: derive per-state GB (implicit-solvent) parameters.
+            #
+            # The GB per-particle charge is the same partial charge as the
+            # NonbondedForce; only the charge changes between protonation states,
+            # never the GB radii. So for every state we take the GB force's own
+            # base parameter tuple (correct radii, straight from ParmEd) and
+            # substitute the charge (parameter index 0) with this state's NB
+            # charge. Ghost hydrogens carry the zeroed NB charge here too, so
+            # they contribute no GB solvation in deprotonated states.
+            #
+            # Without this, the GB charges stay frozen at the initial (fully
+            # protonated) values, the GB term cancels out of every MC energy
+            # difference, and titration is driven by unscreened electrostatics.
+            if implicitGBForceIdx is not None and implicitGBForce is not None:
+                gbIsCustom = isinstance(implicitGBForce, CustomGBForce)
+                for state in titration.implicitStates:
+                    stateNBParams = state.particleParameters.get(implicitNBForceIdx, {})
+                    stateGBParams = {}
+                    for atomName, nbParams in stateNBParams.items():
+                        atomIdx = state.atomIndices.get(atomName)
+                        if atomIdx is None:
+                            continue
+                        base = list(implicitGBForce.getParticleParameters(atomIdx))
+                        charge = nbParams[0]
+                        chargeVal = (
+                            charge.value_in_unit(elementary_charge)
+                            if hasattr(charge, 'value_in_unit')
+                            else float(charge)
+                        )
+                        # CustomGBForce takes bare floats; GBSAOBCForce Quantities.
+                        base[0] = (
+                            chargeVal if gbIsCustom else chargeVal * elementary_charge
+                        )
+                        stateGBParams[atomName] = tuple(base)
+                    state.particleParameters[implicitGBForceIdx] = stateGBParams
 
     def _findResidueStates(self, topology, positions, forcefield, variants, ffargs):
         """Build ResidueState objects for residues with specified variants."""
@@ -1400,8 +1472,11 @@ class ConstantPH:
         for forceIndex, params in state.particleParameters.items():
             force = context.getSystem().getForce(forceIndex)
 
-            # Only NonbondedForce and GBSAOBCForce support setParticleParameters
-            if not isinstance(force, (NonbondedForce, GBSAOBCForce)):
+            # Only NonbondedForce, GBSAOBCForce and CustomGBForce expose
+            # per-particle setParticleParameters. CustomGBForce is how ParmEd
+            # builds every GB model, so it must be updated too or the implicit
+            # solvation term stays frozen across protonation states.
+            if not isinstance(force, (NonbondedForce, GBSAOBCForce, CustomGBForce)):
                 continue
 
             for atomName, atomParams in params.items():
@@ -1419,10 +1494,45 @@ class ConstantPH:
                     forceIndex, {}
                 ).items():
                     if key in exceptionIndex:
-                        p = force.getExceptionParameters(exceptionIndex[key])
-                        force.setExceptionParameters(
-                            exceptionIndex[key], p[0], p[1], *exceptionParams
+                        excIdx = exceptionIndex[key]
+                        p = force.getExceptionParameters(excIdx)
+                        cp, sigma, eps = (
+                            exceptionParams[0],
+                            exceptionParams[1],
+                            exceptionParams[2],
                         )
+                        # Guard against flipping a 1-4 exception into an
+                        # exclusion (chargeProd=0 AND epsilon=0). This happens
+                        # for ghost-hydrogen pairs whose LJ epsilon is already
+                        # zero in AMBER; zeroing their charge makes both
+                        # parameters zero, which OpenMM treats as an exclusion.
+                        cp_val = (
+                            cp.value_in_unit(elementary_charge**2)
+                            if hasattr(cp, 'value_in_unit')
+                            else float(cp)
+                        )
+                        eps_val = (
+                            eps.value_in_unit(kilojoules_per_mole)
+                            if hasattr(eps, 'value_in_unit')
+                            else float(eps)
+                        )
+                        if cp_val == 0.0 and eps_val == 0.0:
+                            _, _, orig_cp, _, orig_eps = force.getExceptionParameters(
+                                excIdx
+                            )
+                            orig_cp_val = (
+                                orig_cp.value_in_unit(elementary_charge**2)
+                                if hasattr(orig_cp, 'value_in_unit')
+                                else float(orig_cp)
+                            )
+                            orig_eps_val = (
+                                orig_eps.value_in_unit(kilojoules_per_mole)
+                                if hasattr(orig_eps, 'value_in_unit')
+                                else float(orig_eps)
+                            )
+                            if orig_cp_val != 0.0 or orig_eps_val != 0.0:
+                                eps = 1e-20 * kilojoules_per_mole
+                        force.setExceptionParameters(excIdx, p[0], p[1], cp, sigma, eps)
 
                 # Update inter-residue 1-4 interactions
                 for index in interResidue14.get(state.residueIndex, []):
@@ -1440,6 +1550,15 @@ class ConstantPH:
                         else float(q2)
                     )
                     chargeProd = coulomb14Scale * q1_val * q2_val * elementary_charge**2
+                    # Same guard for inter-residue 1-4 pairs
+                    cp_val = chargeProd.value_in_unit(elementary_charge**2)
+                    eps_val = (
+                        epsilon.value_in_unit(kilojoules_per_mole)
+                        if hasattr(epsilon, 'value_in_unit')
+                        else float(epsilon)
+                    )
+                    if cp_val == 0.0 and eps_val == 0.0:
+                        epsilon = 1e-20 * kilojoules_per_mole
                     force.setExceptionParameters(
                         index, p1, p2, chargeProd, sigma, epsilon
                     )

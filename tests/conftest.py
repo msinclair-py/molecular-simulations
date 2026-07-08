@@ -150,6 +150,22 @@ def alanine_dipeptide_pdb() -> Path:
 
 
 @pytest.fixture
+def disulfide_peptide_pdb() -> Path:
+    """Return a hydrogen-free PDB with a geometric disulfide.
+
+    An Ace-Cys-Ala-Cys-Nme peptide whose two Cys SG atoms sit ~2.0 A apart (a
+    real disulfide geometry, minimized with ff19SB). Both cysteines are named
+    plain ``CYS`` and there are no ``SSBOND``/``CONECT`` records, so the bond is
+    only discoverable by distance -- exercising ``search_disulfides`` versus the
+    binder-safe ``existingdisulfides`` default.
+
+    Returns:
+        Path to the static disulfide peptide PDB file.
+    """
+    return get_test_data_dir() / 'pdb' / 'disulfide_peptide.pdb'
+
+
+@pytest.fixture
 def two_chain_pdb() -> Path:
     """Return a real two-chain PDB with a charged interface pair.
 

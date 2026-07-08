@@ -214,6 +214,11 @@ class ExplicitSolvent(ImplicitSolvent):
         pdb: Path to input PDB file.
         disulfide_residues: Residue numbers to convert to CYX for disulfide
             bonding. If None, no residues are forced to CYX. Defaults to None.
+        search_disulfides: If True, detect disulfides by SG-SG distance
+            (cpptraj ``searchdisulfides``) rather than only honoring disulfides
+            already declared in the input (``existingdisulfides``). Off by
+            default so distance-based bonds are never formed silently (e.g. in
+            binder-design use cases); :class:`ConstantPHSolvent` enables it.
         padding: Padding around solute in Angstroms. Defaults to 10.0.
         protein: Whether to load protein force field. Defaults to True.
         glycans: Whether to load glycan force field (GLYCAM_06j-1).
@@ -248,6 +253,7 @@ class ExplicitSolvent(ImplicitSolvent):
         path: PathLike,
         pdb: PathLike,
         disulfide_residues: list[int] | None = None,
+        search_disulfides: bool = False,
         padding: float = 10.0,
         protein: bool = True,
         glycans: bool = False,
@@ -280,6 +286,7 @@ class ExplicitSolvent(ImplicitSolvent):
         self.pad = padding
         self.ffs.extend(['leaprc.water.opc'])
         self.water_box = 'OPCBOX'
+        self.search_disulfides = search_disulfides
 
         if disulfide_residues is not None:
             self.disulfides = '\n'.join(
@@ -317,12 +324,17 @@ class ExplicitSolvent(ImplicitSolvent):
         """
         self.ss_bonds_leap = self.path / 'ss_bonds.leap'
         prepared_pdb = self.path / 'protein.pdb'
+        disulfide_kw = (
+            'searchdisulfides'
+            if getattr(self, 'search_disulfides', False)
+            else 'existingdisulfides'
+        )
         cpptraj_in = [
             f'parm {self.pdb}',
             f'loadcrd {self.pdb} name IN',
             (
                 'prepareforleap crdset IN name OUT '
-                f'pdbout {prepared_pdb} noh existingdisulfides '
+                f'pdbout {prepared_pdb} noh {disulfide_kw} '
                 f'leapunitname PROT out {self.ss_bonds_leap}'
             ),
             'quit',
@@ -340,6 +352,30 @@ class ExplicitSolvent(ImplicitSolvent):
         )
 
         self.pdb = str(prepared_pdb)
+        self.disulfide_bonds = self._read_disulfide_bonds()
+
+    def _read_disulfide_bonds(self) -> str:
+        """Extract the ``bond PROT.i.SG PROT.j.SG`` commands for detected disulfides.
+
+        ``prepareforleap`` renames the bonded cysteines to CYX in the prepared
+        PDB and writes the matching ``bond`` commands to ``ss_bonds.leap`` (along
+        with a ``loadpdb`` line we ignore, since :meth:`assemble_system` issues
+        its own ``loadpdb`` of that same prepared PDB, keeping the residue indices
+        valid). Without issuing these bonds, tleap loads the CYX residues
+        unbonded, so the disulfide crosslinks are silently dropped.
+
+        Returns:
+            Newline-joined ``bond`` commands, or an empty string if none were
+            detected.
+        """
+        if not self.ss_bonds_leap.exists():
+            return ''
+        bonds = [
+            line.strip()
+            for line in self.ss_bonds_leap.read_text().splitlines()
+            if line.strip().startswith('bond ')
+        ]
+        return '\n'.join(bonds)
 
     def _prep_pdb(self) -> None:
         """Prepare the input PDB using pdb4amber.
@@ -377,6 +413,7 @@ class ExplicitSolvent(ImplicitSolvent):
         tleap_complex = f"""{tleap_ffs}
         PROT = loadpdb {self.pdb}
         {self.disulfides}
+        {getattr(self, 'disulfide_bonds', '')}
 
         setbox PROT centers
         set PROT box {{{dim} {dim} {dim}}}
@@ -506,6 +543,11 @@ class ConstantPHSolvent(ExplicitSolvent):
         **kwargs,
     ):
         """Initialize the ConstantPHSolvent builder."""
+        # Native-state pKa depends on the fold being held together, so detect and
+        # form disulfides by distance unless the caller explicitly opts out. A
+        # reduced (disulfide-free) topology perturbs the very microenvironments
+        # being titrated.
+        kwargs.setdefault('search_disulfides', True)
         super().__init__(path=path, pdb=pdb, **kwargs)
         self.titratable_sel = titratable_sel
         # Constant pH evaluates GB (GBn2/OBC2) implicit solvent at run time, so

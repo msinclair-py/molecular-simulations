@@ -1494,9 +1494,24 @@ class ConstantPH:
                     forceIndex, {}
                 ).items():
                     if key in exceptionIndex:
-                        p = force.getExceptionParameters(exceptionIndex[key])
+                        excIdx = exceptionIndex[key]
+                        p = force.getExceptionParameters(excIdx)
+                        cp, sigma, eps = exceptionParams[0], exceptionParams[1], exceptionParams[2]
+                        # Guard against flipping a 1-4 exception into an
+                        # exclusion (chargeProd=0 AND epsilon=0). This happens
+                        # for ghost-hydrogen pairs whose LJ epsilon is already
+                        # zero in AMBER; zeroing their charge makes both
+                        # parameters zero, which OpenMM treats as an exclusion.
+                        cp_val = cp.value_in_unit(elementary_charge**2) if hasattr(cp, 'value_in_unit') else float(cp)
+                        eps_val = eps.value_in_unit(kilojoules_per_mole) if hasattr(eps, 'value_in_unit') else float(eps)
+                        if cp_val == 0.0 and eps_val == 0.0:
+                            _, _, orig_cp, _, orig_eps = force.getExceptionParameters(excIdx)
+                            orig_cp_val = orig_cp.value_in_unit(elementary_charge**2) if hasattr(orig_cp, 'value_in_unit') else float(orig_cp)
+                            orig_eps_val = orig_eps.value_in_unit(kilojoules_per_mole) if hasattr(orig_eps, 'value_in_unit') else float(orig_eps)
+                            if orig_cp_val != 0.0 or orig_eps_val != 0.0:
+                                eps = 1e-20 * kilojoules_per_mole
                         force.setExceptionParameters(
-                            exceptionIndex[key], p[0], p[1], *exceptionParams
+                            excIdx, p[0], p[1], cp, sigma, eps
                         )
 
                 # Update inter-residue 1-4 interactions
@@ -1515,6 +1530,11 @@ class ConstantPH:
                         else float(q2)
                     )
                     chargeProd = coulomb14Scale * q1_val * q2_val * elementary_charge**2
+                    # Same guard for inter-residue 1-4 pairs
+                    cp_val = chargeProd.value_in_unit(elementary_charge**2)
+                    eps_val = epsilon.value_in_unit(kilojoules_per_mole) if hasattr(epsilon, 'value_in_unit') else float(epsilon)
+                    if cp_val == 0.0 and eps_val == 0.0:
+                        epsilon = 1e-20 * kilojoules_per_mole
                     force.setExceptionParameters(
                         index, p1, p2, chargeProd, sigma, epsilon
                     )

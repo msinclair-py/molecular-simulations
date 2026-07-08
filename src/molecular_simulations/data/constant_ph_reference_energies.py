@@ -41,16 +41,19 @@ def get_ref_energies(ff: str = 'amber19'):
     """
     match ff.lower():
         case 'amber19':
-            # Regenerated 2026-07-06 via scripts/calibrate_reference_energies.py
+            # Regenerated 2026-07-07 via scripts/calibrate_reference_energies.py
             # for the CustomGBForce-corrected implicit energy (ff19SB/GBn2,
             # mbondi3). Comments give: target pKa; validation pKa and Hill n from
             # an independent titration of the model compound.
+            # Note that while the validation pKa for cysteine is quite off, that
+            # this set of reference energies much better approximates experimental
+            # pKa shifts observed in NMR experiments for HEWL protein.
             ref_energies = {
-                'CYS': [0.0, 324.03],  # pKa 8.3; validation 8.36, n 1.11 (CYX<->CYS)
-                'ASP': [0.0, 91.50],  # pKa 3.9; validation 3.85, n 0.95
-                'GLU': [0.0, 100.81],  # pKa 4.3; validation 4.22, n 1.03
-                'LYS': [0.0, 24.11],  # pKa 10.5; validation 10.55, n 1.04
-                'HIS': [0.0, 75.64],  # pKa 6.5; validation 6.44, n 0.98 (HID<->HIP)
+                'CYS': [0.0, 319.083],  # pKa 8.3; validation 8.85, n 1.03 (CYX<->CYS)
+                'ASP': [0.0, 90.513],  # pKa 3.9; validation 3.72, n 0.98
+                'GLU': [0.0, 100.296],  # pKa 4.3; validation 4.26, n 0.94
+                'LYS': [0.0, 24.109],  # pKa 10.5; validation 10.51, n 1.05
+                'HIS': [0.0, 74.975],  # pKa 6.5; validation 6.43, n 1.03 (HID<->HIP)
             }
         case _:
             raise ValueError(f'Forcefield {ff} not yet computed!')

@@ -36,6 +36,8 @@ MODELS = {
     'HIS': (['HID', 'HIP'], 6.5),
     'LYS': (['LYN', 'LYS'], 10.5),
     'CYS': (['CYX', 'CYS'], 8.3),
+    # TYR requires custom TYD (tyrosinate) template not in standard AMBER/OpenMM
+    # 'TYR': (['TYD', 'TYR'], 10.1),
 }
 
 
@@ -54,7 +56,7 @@ def amberhome():
 def build_source_pdb(resname, workdir, home):
     """tleap sequence-build a capped Ace-X-Nme peptide."""
     workdir.mkdir(parents=True, exist_ok=True)
-    src = workdir / f'{resname}_source.pdb'
+    src = (workdir / f'{resname}_source.pdb').resolve()
     leap = workdir / 'seq.in'
     leap.write_text(
         'source leaprc.protein.ff19SB\n'
@@ -63,7 +65,7 @@ def build_source_pdb(resname, workdir, home):
         'quit\n'
     )
     subprocess.run(
-        [str(home / 'bin' / 'tleap'), '-f', str(leap)],
+        [str(home / 'bin' / 'tleap'), '-f', str(leap.resolve())],
         cwd=str(workdir),
         check=True,
         stdout=subprocess.DEVNULL,
@@ -114,7 +116,7 @@ def make_cph(prmtop, inpcrd, variants):
         relaxationIntegrator=LangevinMiddleIntegrator(
             300 * kelvin, 10.0 / picosecond, 0.002 * picosecond
         ),
-        platform=Platform.getPlatformByName('CPU'),
+        platform=Platform.getPlatformByName('CUDA'),
     )
 
 

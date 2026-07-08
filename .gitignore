@@ -8,6 +8,9 @@ docs/_build/
 .venv
 joss/
 runinfo/
+cph_calibration/
+hewl/
+leap.log
 .claude
 *.md
 !README.md

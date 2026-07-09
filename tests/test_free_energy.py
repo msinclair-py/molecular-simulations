@@ -319,6 +319,58 @@ class TestEVBProperties:
             assert morse['alpha'] == 14.0
             assert morse['r0'] == 0.11
 
+    def test_morse_bond2_none_by_default(self, alanine_dipeptide_pdb) -> None:
+        """morse_bond2 is None unless a symmetric second Morse is requested."""
+        from molecular_simulations.simulate.free_energy import EVB
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom='index 10',
+                acceptor_atom='index 15',
+                reactive_atom='index 20',
+                reaction_coordinate=[-0.2, 0.2, 0.1],
+                parsl_config=None,
+                log_path=Path(tmpdir) / 'logs',
+            )
+
+            assert evb.morse_bond2 is None
+
+    def test_morse_bond2_property(self, alanine_dipeptide_pdb) -> None:
+        """With second_morse=True, morse_bond2 bonds acceptor-reactive.
+
+        It mirrors morse_bond but between the acceptor (atom_j of the umbrella)
+        and the shared reactive atom, reusing the same well parameters so the
+        two ends of a symmetric transfer are equivalent.
+        """
+        from molecular_simulations.simulate.free_energy import EVB
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            evb = EVB(
+                topology=alanine_dipeptide_pdb,
+                coordinates=alanine_dipeptide_pdb,
+                donor_atom='index 10',
+                acceptor_atom='index 15',
+                reactive_atom='index 20',
+                reaction_coordinate=[-0.2, 0.2, 0.1],
+                parsl_config=None,
+                log_path=Path(tmpdir) / 'logs',
+                D_e=400.0,
+                alpha=14.0,
+                r0=0.11,
+                second_morse=True,
+            )
+
+            morse2 = evb.morse_bond2
+
+            assert morse2 is not None
+            assert morse2['atom_i'] == 15  # acceptor
+            assert morse2['atom_j'] == 20  # reactive
+            assert morse2['D_e'] == 400.0
+            assert morse2['alpha'] == 14.0
+            assert morse2['r0'] == 0.11
+
 
 class TestEVBParslManagement:
     """Test suite for EVB Parsl initialization and shutdown."""
@@ -759,6 +811,60 @@ class TestEVBCalculationRemoveHarmonicBond:
         # Check force constant is now zero
         _p1, _p2, _length, k = bond_force.getBondParameters(0)
         assert k.value_in_unit(kilojoules_per_mole / nanometers**2) == 0.0
+
+
+class TestEVBCalculationExcludeNonbonded:
+    """Test suite for exclude_nonbonded static method (symmetric 2nd Morse)."""
+
+    def test_exclude_nonbonded_zeros_interaction(self) -> None:
+        """exclude_nonbonded adds a charge=0, epsilon=0 exception for the pair.
+
+        The acceptor-reactive pair of a symmetric second Morse bond is not
+        bonded in the original topology, so it keeps full Coulomb/LJ unless we
+        add this exclusion to mirror the (already-excluded) donor-reactive pair.
+        """
+        from openmm import NonbondedForce, System
+        from openmm.unit import elementary_charge, kilojoules_per_mole
+
+        from molecular_simulations.simulate.free_energy import EVBCalculation
+
+        system = System()
+        for _ in range(3):
+            system.addParticle(1.0)
+
+        nb = NonbondedForce()
+        for q in (0.5, -0.5, 0.3):
+            nb.addParticle(q, 0.3, 0.5)
+        system.addForce(nb)
+
+        assert nb.getNumExceptions() == 0
+
+        EVBCalculation.exclude_nonbonded(system, 0, 2)
+
+        assert nb.getNumExceptions() == 1
+        p1, p2, chargeprod, _sigma, epsilon = nb.getExceptionParameters(0)
+        assert {p1, p2} == {0, 2}
+        assert chargeprod.value_in_unit(elementary_charge**2) == 0.0
+        assert epsilon.value_in_unit(kilojoules_per_mole) == 0.0
+
+    def test_exclude_nonbonded_replaces_existing(self) -> None:
+        """Calling exclude_nonbonded twice on a pair does not raise (replace)."""
+        from openmm import NonbondedForce, System
+
+        from molecular_simulations.simulate.free_energy import EVBCalculation
+
+        system = System()
+        system.addParticle(1.0)
+        system.addParticle(1.0)
+        nb = NonbondedForce()
+        nb.addParticle(0.5, 0.3, 0.5)
+        nb.addParticle(-0.5, 0.3, 0.5)
+        system.addForce(nb)
+
+        EVBCalculation.exclude_nonbonded(system, 0, 1)
+        EVBCalculation.exclude_nonbonded(system, 0, 1)  # must not raise
+
+        assert nb.getNumExceptions() == 1
 
 
 @pytest.mark.parametrize(

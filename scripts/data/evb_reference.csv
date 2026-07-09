@@ -17,10 +17,11 @@
 #  - The `proton_transfer` rows describe the symmetric PHYSICAL benchmark
 #    (benchmark_evb.py build/run/analyze). By symmetry the reaction free energy
 #    of a symmetric D-H-A transfer is exactly zero, so |dG_rxn| is the primary
-#    validation metric. The barrier is REPORTED, not asserted: this code is a
-#    single-state Morse + umbrella PMF (no off-diagonal H12 coupling), so the
-#    absolute barrier depends on the empirical Morse parameters and is not a
-#    force-field-free reference. Do not quote it as a validated number.
+#    validation metric. The barrier is REPORTED, not asserted: build uses a
+#    symmetric double-Morse PMF (proton Morse-bonded to both oxygens) with no
+#    off-diagonal H12 coupling, so the absolute barrier depends on the empirical
+#    Morse parameters and is not a force-field-free reference. Do not quote it as
+#    a validated number.
 #
 # columns:
 #   case        - benchmark case / system
@@ -36,4 +37,4 @@ double_well,barrier,20.0,3.0,kJ/mol,analytic symmetric double-well barrier heigh
 double_well,dG_rxn,0.0,1.5,kJ/mol,symmetric double well -> reaction free energy is exactly zero
 double_well,pmf_asymmetry,0.0,1.5,kJ/mol,recovered PMF must be symmetric about rc=0 (RMS of PMF(rc)-PMF(-rc))
 proton_transfer,dG_rxn,0.0,4.0,kJ/mol,symmetric physical D-H-A transfer -> ~0 by symmetry (finite-sampling tolerance)
-proton_transfer,barrier,NaN,NaN,kJ/mol,reported only; single-Morse PMF barrier is parameter dependent (see header)
+proton_transfer,barrier,NaN,NaN,kJ/mol,reported only; double-Morse PMF barrier is parameter dependent w/o H12 coupling (see header)

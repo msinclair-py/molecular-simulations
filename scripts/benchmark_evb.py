@@ -24,13 +24,16 @@ is the machinery self-consistent):
      and MBAR/WHAM reweighting against ground truth.
 
   2. ``build`` / ``run`` / ``analyze`` -- a symmetric PHYSICAL reaction
-     (malonaldehyde intramolecular O-H...O proton transfer). The molecule has
-     C2v symmetry, so dG_rxn is exactly zero by symmetry regardless of force
-     field; ``|dG_rxn|`` (and the PMF asymmetry) is therefore a parameter-free
-     validation metric for a real MD run. The barrier is REPORTED but not
-     asserted: this implementation is a single-state Morse + umbrella PMF with
-     no off-diagonal H12 coupling, so its absolute barrier is parameter
-     dependent and is not a force-field-free reference.
+     (malonaldehyde intramolecular O-H...O proton transfer). The molecule is
+     symmetric under swapping the two oxygens, so dG_rxn is exactly zero by
+     symmetry; ``|dG_rxn|`` is therefore a parameter-free validation metric for
+     a real MD run. ``build`` uses a symmetric double-Morse model (the proton is
+     Morse-bonded to BOTH oxygens and nonbonded-excluded from each) with an
+     overlap-matched umbrella window set, so the reactant and product wells are
+     equivalent. The barrier is REPORTED but not asserted: without an
+     off-diagonal H12 coupling the absolute barrier is parameter dependent, and
+     a residual whole-PMF asymmetry remains from the frozen (asymmetric) GAFF
+     Lewis structure.
 
 Reference values live in ``scripts/data/evb_reference.csv``.
 
@@ -783,6 +786,21 @@ def build(args) -> int:
         f'(acceptor..H = {atoms["acceptor_h_angstrom"]} A)'
     )
 
+    # Symmetric reaction coordinate bracketing the transfer. At the built
+    # geometry the proton sits on the donor: rc = d(donor,H) - d(acceptor,H)
+    # ~ 0.097 nm - acceptor..H. We span +/- ~1.6x that so both the reactant
+    # (-) and product (+) basins are well inside the window set, and choose the
+    # increment so neighbouring umbrellas overlap at ~1.4 sigma for the default
+    # k (sigma = sqrt(kB*T/k)); poor overlap is what makes WHAM/MBAR unstable.
+    rc_reactant = 0.097 - atoms['acceptor_h_angstrom'] / 10.0  # nm
+    rc_bound = round(1.6 * abs(rc_reactant), 2)
+    increment = round(2.0 * rc_bound / (args.n_windows - 1), 4)
+    sigma = (KB * args.temperature / args.k) ** 0.5
+    print(
+        f'reaction coordinate: +/-{rc_bound} nm, {args.n_windows} windows, '
+        f'increment {increment} nm (~{increment / sigma:.1f} sigma overlap)'
+    )
+
     config = {
         'system': 'malonaldehyde_proton_transfer',
         'structure': atoms['sdf'],
@@ -796,12 +814,20 @@ def build(args) -> int:
         'reactive_atom': f'index {atoms["reactive"]}',
         'log_prefix': 'malonaldehyde',
         'n_windows': args.n_windows,
+        # Symmetric [min, max, increment] window set (nm), overlap-matched to k.
+        'reaction_coordinate': [-rc_bound, rc_bound, increment],
+        # Symmetric double-Morse: Morse-bond the proton to BOTH donor and
+        # acceptor (and nonbonded-exclude the acceptor pair) so a symmetric
+        # transfer has symmetric reactant/product wells and dG_rxn ~ 0.
+        'second_morse': True,
         # O-H Morse parameters (kJ/mol, nm). D_e ~ O-H BDE; alpha, r0 typical.
         'D_e': 460.0,
         'alpha': 22.0,
         'r0': 0.097,
         'k': args.k,
         'k_path': 100.0,
+        # 1 fs timestep: the stiff Morse + umbrella forces are unstable at 2 fs.
+        'dt': args.dt,
         'temperature': args.temperature,
     }
 
@@ -857,7 +883,13 @@ def run(args) -> int:
 
     log_path = Path(args.out)
     log_path.mkdir(parents=True, exist_ok=True)
-    parsl_config = LocalSettings().config_factory(str(log_path / 'runinfo'))
+    # On a plain single GPU box the default ALCF-style MpiExecLauncher fails
+    # (stock mpiexec rejects --cpu-bind); --local swaps in a SimpleLauncher and
+    # pins one worker per local GPU.
+    settings = LocalSettings(
+        mpi_launcher=not args.local, available_accelerators=args.n_gpus
+    )
+    parsl_config = settings.config_factory(str(log_path / 'runinfo'))
 
     evb = EVB(
         topology=top,
@@ -869,12 +901,15 @@ def run(args) -> int:
         log_path=log_path,
         log_prefix=cfg['log_prefix'],
         steps=args.steps,
+        dt=cfg.get('dt', 0.002),
         k=cfg['k'],
         k_path=cfg['k_path'],
         D_e=cfg['D_e'],
         alpha=cfg['alpha'],
         r0=cfg['r0'],
         n_windows=cfg['n_windows'],
+        reaction_coordinate=cfg.get('reaction_coordinate'),
+        second_morse=cfg.get('second_morse', False),
         platform=args.platform,
     )
     evb.save_metadata()
@@ -919,7 +954,11 @@ def analyze(args) -> int:
     ]
     ok = _print_results('EVB physical benchmark (malonaldehyde transfer)', rows)
     print(f'\nPMF asymmetry (RMS PMF(rc)-PMF(-rc)): {asym:.2f} kJ/mol')
-    print('Barrier is reported only (single-Morse PMF; not force-field-free).')
+    print(
+        'Barrier is reported only (double-Morse PMF, no H12 coupling; not '
+        'force-field-free). Residual PMF asymmetry reflects the frozen GAFF '
+        'Lewis structure.'
+    )
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -956,8 +995,9 @@ def main() -> int:
 
     b = sub.add_parser('build', help='build the symmetric malonaldehyde system')
     b.add_argument('--out', default='evb_bench')
-    b.add_argument('--n-windows', type=int, default=40, dest='n_windows')
-    b.add_argument('--k', type=float, default=160000.0)
+    b.add_argument('--n-windows', type=int, default=36, dest='n_windows')
+    b.add_argument('--k', type=float, default=80000.0, help='umbrella k (kJ/mol/nm^2)')
+    b.add_argument('--dt', type=float, default=0.001, help='timestep (ps)')
     b.add_argument('--padding', type=float, default=12.0, help='solvent pad (A)')
     b.add_argument('--temperature', type=float, default=300.0)
     b.set_defaults(func=build)
@@ -965,8 +1005,14 @@ def main() -> int:
     r = sub.add_parser('run', help='run EVB umbrella windows (needs a GPU)')
     r.add_argument('--config', default='evb_bench/evb_config.json')
     r.add_argument('--out', default='evb_bench/logs')
-    r.add_argument('--steps', type=int, default=500000)
+    r.add_argument('--steps', type=int, default=250000)
     r.add_argument('--platform', default='CUDA')
+    r.add_argument(
+        '--local',
+        action='store_true',
+        help='use a SimpleLauncher (plain single GPU node, no MPI/scheduler)',
+    )
+    r.add_argument('--n-gpus', type=int, default=4, dest='n_gpus')
     r.set_defaults(func=run)
 
     a = sub.add_parser('analyze', help='reduce physical run -> dG_rxn vs reference')

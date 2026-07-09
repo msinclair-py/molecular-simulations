@@ -8,7 +8,7 @@ import yaml
 from parsl.addresses import address_by_hostname
 from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
-from parsl.launchers import MpiExecLauncher
+from parsl.launchers import MpiExecLauncher, SimpleLauncher
 from parsl.providers import LocalProvider, PBSProProvider
 from pydantic import BaseModel, Field
 
@@ -95,9 +95,16 @@ class LocalSettings(BaseLocalSettings):
     """Settings for a single-node, GPU-pinned local executor."""
 
     label: str = 'gpu'
+    mpi_launcher: bool = True
 
     def config_factory(self, run_dir: PathLike) -> Config:
         """Create a Parsl configuration pinning workers to local GPUs.
+
+        By default this uses ``MpiExecLauncher`` with ``--cpu-bind``, which is
+        what ALCF-style nodes (e.g. Polaris) expect. On a plain single GPU box
+        the stock ``mpiexec`` rejects ``--cpu-bind`` and workers fail to
+        register; set ``mpi_launcher=False`` to fall back to ``SimpleLauncher``,
+        which launches workers directly with no MPI wrapper.
 
         Args:
             run_dir: Directory in which to store Parsl run files.
@@ -105,6 +112,11 @@ class LocalSettings(BaseLocalSettings):
         Returns:
             A Parsl Config with one GPU-affinity HighThroughputExecutor.
         """
+        launcher = (
+            MpiExecLauncher(bind_cmd='--cpu-bind', overrides='--depth=1 --ppn 1')
+            if self.mpi_launcher
+            else SimpleLauncher()
+        )
         return Config(
             run_dir=str(Path(run_dir) / 'runinfo'),
             retries=self.retries,
@@ -114,9 +126,7 @@ class LocalSettings(BaseLocalSettings):
                         nodes_per_block=self.nodes,
                         init_blocks=1,
                         max_blocks=1,
-                        launcher=MpiExecLauncher(
-                            bind_cmd='--cpu-bind', overrides='--depth=1 --ppn 1'
-                        ),
+                        launcher=launcher,
                         worker_init=self.worker_init,
                     ),
                     label=self.label,

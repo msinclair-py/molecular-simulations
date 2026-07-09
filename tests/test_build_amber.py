@@ -291,6 +291,58 @@ class TestExplicitInputGeneration:
         assert builder.pdb.endswith('protein.pdb')
         assert builder.ss_bonds_leap == tmp_path / 'ss_bonds.leap'
 
+    def test_search_disulfides_switches_cpptraj_keyword(self, tmp_path, fake_amberhome):
+        """search_disulfides=True asks cpptraj to detect disulfides by distance."""
+        pdb = _write_pdb(tmp_path)
+        builder = ExplicitSolvent(
+            path=tmp_path, pdb=str(pdb), protein=True, search_disulfides=True
+        )
+
+        builder.prep_pdb()
+
+        cpptraj_input = (fake_amberhome / 'cpptraj_input.txt').read_text()
+        assert 'searchdisulfides' in cpptraj_input
+        assert 'existingdisulfides' not in cpptraj_input
+
+    def test_read_disulfide_bonds_keeps_only_bond_lines(self, tmp_path, monkeypatch):
+        """The loadpdb line cpptraj writes is dropped; only bond commands survive."""
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = _write_pdb(tmp_path)
+        builder = ExplicitSolvent(path=tmp_path, pdb=str(pdb), protein=True)
+        builder.ss_bonds_leap = tmp_path / 'ss_bonds.leap'
+        builder.ss_bonds_leap.write_text(
+            'PROT = loadpdb protein.pdb\n'
+            'bond PROT.6.SG PROT.127.SG\n'
+            'bond PROT.30.SG PROT.115.SG\n'
+        )
+
+        bonds = builder._read_disulfide_bonds()
+
+        assert bonds == 'bond PROT.6.SG PROT.127.SG\nbond PROT.30.SG PROT.115.SG'
+        assert 'loadpdb' not in bonds
+
+    def test_read_disulfide_bonds_absent_file(self, tmp_path, monkeypatch):
+        """No ss_bonds.leap -> empty string, not an error."""
+        monkeypatch.setenv('AMBERHOME', str(tmp_path))
+        pdb = _write_pdb(tmp_path)
+        builder = ExplicitSolvent(path=tmp_path, pdb=str(pdb), protein=True)
+        builder.ss_bonds_leap = tmp_path / 'does_not_exist.leap'
+
+        assert builder._read_disulfide_bonds() == ''
+
+    def test_detected_disulfide_bonds_injected_into_tleap(
+        self, tmp_path, fake_amberhome
+    ):
+        """Bonds captured by prep_pdb reach the tleap input (the wiring that was missing)."""
+        pdb = _write_pdb(tmp_path)
+        builder = ExplicitSolvent(path=tmp_path, pdb=str(pdb), protein=True, debug=True)
+        builder.disulfide_bonds = 'bond PROT.2.SG PROT.4.SG'
+
+        builder.assemble_system(dim=60.0, num_ions=15)
+
+        content = (tmp_path / 'tleap.in').read_text()
+        assert 'bond PROT.2.SG PROT.4.SG' in content
+
 
 # ---------------------------------------------------------------------------
 # Skip-gated: real AmberTools execution
@@ -332,6 +384,66 @@ class TestRealAmberBuild:
         assert builder.out.with_suffix('.prmtop').exists()
         assert builder.out.with_suffix('.inpcrd').exists()
 
+    @staticmethod
+    def _sg_sg_bonds(prmtop) -> list[tuple[int, int]]:
+        """Residue-number pairs (1-indexed) of every SG-SG bond in a prmtop."""
+        import parmed as pmd
+
+        p = pmd.load_file(str(prmtop))
+        return [
+            (b.atom1.residue.idx + 1, b.atom2.residue.idx + 1)
+            for b in p.bonds
+            if b.atom1.name == 'SG' and b.atom2.name == 'SG'
+        ]
+
+    def test_search_disulfides_forms_ss_bond(
+        self, tmp_path, disulfide_peptide_pdb, skip_without_amber
+    ):
+        """A geometric disulfide in the input becomes a real SG-SG bond in the prmtop.
+
+        Regression guard for the two bugs that left HEWL fully reduced: cpptraj
+        must be run with ``searchdisulfides`` (distance detection), and the bond
+        commands it emits must actually reach tleap. The Cys are plain ``CYS``
+        with no SSBOND records, so nothing forms unless both halves work.
+        """
+        import parmed as pmd
+
+        home = _real_amberhome()
+        builder = ExplicitSolvent(
+            path=tmp_path,
+            pdb=str(disulfide_peptide_pdb),
+            padding=10.0,
+            search_disulfides=True,
+            amberhome=home,
+        )
+        builder.build()
+
+        prmtop = builder.out.with_suffix('.prmtop')
+        assert self._sg_sg_bonds(prmtop) == [(2, 4)]
+
+        # The bonded cysteines are oxidized (CYX) and shed their thiol H.
+        p = pmd.load_file(str(prmtop))
+        cyx = {r.idx + 1 for r in p.residues if r.name == 'CYX'}
+        assert cyx == {2, 4}
+        assert not any(
+            a.name == 'HG' for r in p.residues if r.name == 'CYX' for a in r.atoms
+        )
+
+    def test_disulfides_not_formed_without_opt_in(
+        self, tmp_path, disulfide_peptide_pdb, skip_without_amber
+    ):
+        """The binder-safe default never forms distance-based disulfides silently."""
+        home = _real_amberhome()
+        builder = ExplicitSolvent(
+            path=tmp_path,
+            pdb=str(disulfide_peptide_pdb),
+            padding=10.0,
+            amberhome=home,
+        )
+        builder.build()
+
+        assert self._sg_sg_bonds(builder.out.with_suffix('.prmtop')) == []
+
 
 class TestConstantPHSolvent:
     """Titratable-residue protonation logic for ConstantPHSolvent (no binary)."""
@@ -348,6 +460,18 @@ class TestConstantPHSolvent:
     def test_sets_mbondi3_radii(self, tmp_path, monkeypatch):
         builder = self._builder(tmp_path, monkeypatch, PDB_TEXT)
         assert builder.pbradii == 'mbondi3'
+
+    def test_defaults_to_search_disulfides(self, tmp_path, monkeypatch):
+        """Native-state titration should keep the fold's disulfides by default."""
+        builder = self._builder(tmp_path, monkeypatch, PDB_TEXT)
+        assert builder.search_disulfides is True
+
+    def test_search_disulfides_can_be_overridden(self, tmp_path, monkeypatch):
+        """The caller can still opt out (e.g. an intentionally reduced construct)."""
+        builder = self._builder(
+            tmp_path, monkeypatch, PDB_TEXT, search_disulfides=False
+        )
+        assert builder.search_disulfides is False
 
     def test_protonate_renames_all_titratable_by_default(self, tmp_path, monkeypatch):
         builder = self._builder(tmp_path, monkeypatch, TITRATABLE_PDB_TEXT)

@@ -719,6 +719,83 @@ class TestEVBCalculationStaticMethods:
         assert isinstance(force, CustomBondForce)
         assert force.getNumBonds() == 1
 
+    def test_evb_coupled_force_type_and_cvs(self) -> None:
+        """evb_coupled_force returns a CustomCVForce with two Morse CVs."""
+        from openmm import CustomCVForce
+
+        from molecular_simulations.simulate.free_energy import EVBCalculation
+
+        force = EVBCalculation.evb_coupled_force(
+            atom_donor=0,
+            atom_acceptor=1,
+            atom_reactive=2,
+            D_e=460.0,
+            alpha=22.0,
+            r0=0.097,
+            h12=50.0,
+        )
+
+        assert isinstance(force, CustomCVForce)
+        assert force.getNumCollectiveVariables() == 2
+
+    @pytest.mark.parametrize('h12', [0.0, 50.0, 120.0])
+    def test_evb_coupled_force_energy_matches_eigenvalue(self, h12: float) -> None:
+        """The force energy equals the 2x2 EVB ground-state eigenvalue.
+
+        Evaluate the CustomCVForce on the Reference platform for a fixed
+        geometry and compare against 0.5(V1+V2) - sqrt(0.25(V1-V2)^2 + H12^2)
+        computed by hand from the two Morse potentials. Also checks the coupling
+        never raises the ground state above min(V1, V2).
+        """
+        import numpy as np
+        from openmm import Context, Platform, System, VerletIntegrator
+        from openmm.unit import kilojoules_per_mole, nanometer
+
+        from molecular_simulations.simulate.free_energy import EVBCalculation
+
+        D_e, alpha, r0 = 460.0, 22.0, 0.097
+
+        def morse(r: float) -> float:
+            return D_e * (1.0 - np.exp(-alpha * (r - r0))) ** 2
+
+        # donor-reactive = 0.10 nm, acceptor-reactive = 0.16 nm (collinear).
+        d_dr, d_ar = 0.10, 0.16
+        v1, v2 = morse(d_dr), morse(d_ar)
+        expected = 0.5 * (v1 + v2) - np.sqrt(0.25 * (v1 - v2) ** 2 + h12**2)
+
+        system = System()
+        for _ in range(3):
+            system.addParticle(1.0)
+        system.addForce(
+            EVBCalculation.evb_coupled_force(
+                atom_donor=0,
+                atom_acceptor=1,
+                atom_reactive=2,
+                D_e=D_e,
+                alpha=alpha,
+                r0=r0,
+                h12=h12,
+            )
+        )
+
+        context = Context(
+            system,
+            VerletIntegrator(0.001),
+            Platform.getPlatformByName('Reference'),
+        )
+        # donor at origin, reactive on +x at d_dr, acceptor beyond it so that
+        # acceptor-reactive = d_ar.
+        positions = np.array([[0.0, 0, 0], [d_dr + d_ar, 0, 0], [d_dr, 0, 0]])
+        context.setPositions(positions * nanometer)
+        energy = (
+            context.getState(getEnergy=True)
+            .getPotentialEnergy()
+            .value_in_unit(kilojoules_per_mole)
+        )
+
+        assert energy == pytest.approx(expected, abs=1e-3)
+        assert energy <= min(v1, v2) + 1e-6  # coupling only lowers the state
+
 
 class TestEVBCalculationRemoveHarmonicBond:
     """Test suite for remove_harmonic_bond static method."""

@@ -30,10 +30,12 @@ is the machinery self-consistent):
      a real MD run. ``build`` uses a symmetric double-Morse model (the proton is
      Morse-bonded to BOTH oxygens and nonbonded-excluded from each) with an
      overlap-matched umbrella window set, so the reactant and product wells are
-     equivalent. The barrier is REPORTED but not asserted: without an
-     off-diagonal H12 coupling the absolute barrier is parameter dependent, and
-     a residual whole-PMF asymmetry remains from the frozen (asymmetric) GAFF
-     Lewis structure.
+     equivalent. An off-diagonal EVB coupling H12 can be enabled (build --h12)
+     to mix the two Morse diabats as the 2x2 ground-state eigenvalue (true
+     two-state EVB), which gives a proper coupled double-well barrier. The
+     barrier is REPORTED but not asserted: it is parameter dependent, and a
+     residual whole-PMF asymmetry remains from the frozen (asymmetric) GAFF
+     Lewis structure (removing it fully needs symmetric diabatic charge states).
 
 Reference values live in ``scripts/data/evb_reference.csv``.
 
@@ -820,6 +822,11 @@ def build(args) -> int:
         # acceptor (and nonbonded-exclude the acceptor pair) so a symmetric
         # transfer has symmetric reactant/product wells and dG_rxn ~ 0.
         'second_morse': True,
+        # Off-diagonal EVB coupling (kJ/mol): mixes the two Morse diabats as the
+        # 2x2 EVB ground-state eigenvalue (two-state EVB) instead of summing
+        # them, giving a proper coupled barrier. Empirical; barrier is reported
+        # only. null -> plain additive double-Morse; 0 -> uncoupled min(V1,V2).
+        'h12': args.h12,
         # O-H Morse parameters (kJ/mol, nm). D_e ~ O-H BDE; alpha, r0 typical.
         'D_e': 460.0,
         'alpha': 22.0,
@@ -910,6 +917,7 @@ def run(args) -> int:
         n_windows=cfg['n_windows'],
         reaction_coordinate=cfg.get('reaction_coordinate'),
         second_morse=cfg.get('second_morse', False),
+        h12=cfg.get('h12'),
         platform=args.platform,
     )
     evb.save_metadata()
@@ -998,6 +1006,13 @@ def main() -> int:
     b.add_argument('--n-windows', type=int, default=36, dest='n_windows')
     b.add_argument('--k', type=float, default=80000.0, help='umbrella k (kJ/mol/nm^2)')
     b.add_argument('--dt', type=float, default=0.001, help='timestep (ps)')
+    b.add_argument(
+        '--h12',
+        type=float,
+        default=None,
+        help='EVB off-diagonal coupling (kJ/mol); enables two-state eigenvalue '
+        'mixing (opt-in; default None = additive double-Morse)',
+    )
     b.add_argument('--padding', type=float, default=12.0, help='solvent pad (A)')
     b.add_argument('--temperature', type=float, default=300.0)
     b.set_defaults(func=build)

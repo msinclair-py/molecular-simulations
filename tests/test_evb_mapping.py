@@ -150,3 +150,64 @@ class TestAnalyzeGapIntegration:
         assert isinstance(res, EVBGapResult)
         assert np.isfinite(res.pmf).sum() > 10
         assert res.dG_rxn == pytest.approx(0.0, abs=3.0)
+
+
+class TestReconcileExceptions:
+    def test_makes_exception_pairsets_equal(self):
+        """After reconciliation both forces share one exception-pair set."""
+        import openmm as mm
+
+        from molecular_simulations.simulate.evb_mapping import _reconcile_exceptions
+
+        a, b = mm.NonbondedForce(), mm.NonbondedForce()
+        for f in (a, b):
+            for _ in range(4):
+                f.addParticle(0.1, 0.3, 0.5)
+        a.addException(0, 1, 0.0, 0.3, 0.0)  # excluded in a only
+        a.addException(2, 3, 0.0, 0.3, 0.0)  # common
+        b.addException(2, 3, 0.0, 0.3, 0.0)  # common
+        b.addException(0, 2, 0.0, 0.3, 0.0)  # excluded in b only
+
+        _reconcile_exceptions(a, b)
+
+        def pairs(f):
+            out = set()
+            for k in range(f.getNumExceptions()):
+                i, j, *_ = f.getExceptionParameters(k)
+                out.add(frozenset((i, j)))
+            return out
+
+        assert pairs(a) == pairs(b)
+        # the pair added to 'a' carries a's real interaction (nonzero charge).
+        added = next(
+            a.getExceptionParameters(k)
+            for k in range(a.getNumExceptions())
+            if {a.getExceptionParameters(k)[0], a.getExceptionParameters(k)[1]}
+            == {0, 2}
+        )
+        assert added[2].value_in_unit(added[2].unit) != 0.0  # chargeProd nonzero
+
+
+class TestEVBMappingAnalyze:
+    def test_reads_windows_and_reduces(self, tmp_path):
+        """EVBMapping.analyze loads per-window npz and reduces to a result."""
+        from molecular_simulations.simulate.evb_mapping import EVBMapping
+
+        lams = default_lambda_schedule(7)
+        evb = EVBMapping(
+            reactant_prmtop=tmp_path / 'r.prmtop',
+            product_prmtop=tmp_path / 'p.prmtop',
+            coordinates=tmp_path / 'c.inpcrd',
+            parsl_config=None,
+            out_path=tmp_path / 'windows',
+            lambdas=lams,
+            temperature=300.0,
+        )
+        for i, lam in enumerate(lams):
+            rng = np.random.default_rng(i)
+            gap = rng.normal(40.0 * (1.0 - 2.0 * lam), 8.0, 3000)
+            base = rng.normal(0.0, 5.0, 3000)
+            np.savez(evb.out_path / f'window{i}.npz', v1=base, v2=base + gap, lam=lam)
+        res = evb.analyze(h12=0.0, n_bins=40)
+        assert isinstance(res, EVBGapResult)
+        assert res.dG_rxn == pytest.approx(0.0, abs=3.0)

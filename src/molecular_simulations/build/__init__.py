@@ -2,6 +2,7 @@ import contextlib
 from pathlib import Path
 
 from .build_amber import ExplicitSolvent, ImplicitSolvent
+from .build_evb import EVBBuilder, EVBBuildError
 
 with contextlib.suppress(ImportError):
     from .build_ligand import ComplexBuilder, LigandBuilder

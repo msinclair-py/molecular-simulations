@@ -109,6 +109,7 @@ ignore = [
     'N803',   # lowercase argument name (X for data matrices, etc.)
     'N806',   # lowercase variable in function (pH, X, etc.)
     'N813',   # ignore import alias case (MDAnalysis -> mda)
+    'N815',   # mixedCase attributes for domain terms (dG_rxn, D_e, etc.)
 ]
 
 [tool.ruff.lint.per-file-ignores]

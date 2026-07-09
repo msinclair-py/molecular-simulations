@@ -643,11 +643,22 @@ class EVBMapping:
     per-window ``window{i}.npz`` of (v1, v2); ``analyze`` reduces them to the
     energy-gap free-energy profile via :func:`analyze_gap`.
 
+    This class does **not** own the parsl DataFlowKernel: the caller loads and
+    cleans up parsl, so its lifetime is managed at the scope where it is created.
+    ``run`` submits to whatever DFK is currently loaded. A typical driver::
+
+        import parsl
+        from molecular_simulations.utils.parsl_settings import LocalSettings
+
+        with parsl.load(LocalSettings(mpi_launcher=False).config_factory(rundir)):
+            evb = EVBMapping(reactant, product, coords, out, ...)
+            evb.run()
+        result = evb.analyze()  # analysis needs no parsl
+
     Args:
         reactant_prmtop: Reactant diabatic topology.
         product_prmtop: Product diabatic topology (shared atoms/coords).
         coordinates: Shared coordinate file (AMBER inpcrd).
-        parsl_config: Parsl Config (e.g. LocalSettings(mpi_launcher=False)).
         out_path: Output directory for the per-window npz files.
         lambdas: Explicit lambda schedule; if None, ``n_windows`` evenly spaced.
         n_windows: Number of windows when ``lambdas`` is None. Defaults to 11.
@@ -666,7 +677,6 @@ class EVBMapping:
         reactant_prmtop: PathLike,
         product_prmtop: PathLike,
         coordinates: PathLike,
-        parsl_config,
         out_path: PathLike,
         lambdas: np.ndarray | None = None,
         n_windows: int = 11,
@@ -694,7 +704,6 @@ class EVBMapping:
         self.reactant_prmtop = str(Path(reactant_prmtop).resolve())
         self.product_prmtop = str(Path(product_prmtop).resolve())
         self.coordinates = str(Path(coordinates).resolve())
-        self.parsl_config = parsl_config
         self.out_path = Path(out_path)
         self.out_path.mkdir(parents=True, exist_ok=True)
         self.donor = donor
@@ -718,38 +727,15 @@ class EVBMapping:
         self.platform = platform
         self.nonbonded_cutoff = nonbonded_cutoff
 
-        self.dfk = None
-        self._owns_parsl = False
-
-    def initialize(self) -> None:
-        """Load parsl (reusing a parent DFK if one is already running)."""
-        import parsl
-
-        if self.dfk is None:
-            try:
-                self.dfk = parsl.dfk()
-                self._owns_parsl = False
-            except Exception:
-                self.dfk = parsl.load(self.parsl_config)
-                self._owns_parsl = True
-
-    def shutdown(self) -> None:
-        """Clean up parsl if this instance loaded it."""
-        import parsl
-
-        if self._owns_parsl and self.dfk:
-            self.dfk.cleanup()
-            parsl.clear()
-        self.dfk = None
-        self._owns_parsl = False
-
     def run(self) -> list[str]:
         """Distribute the windows and wait for all to finish.
+
+        Requires parsl to already be loaded by the caller (see the class
+        docstring); this method neither loads nor cleans up the DataFlowKernel.
 
         Returns:
             The per-window npz paths (window order = lambda order).
         """
-        self.initialize()
         futures, out_files = [], []
         for i, lam in enumerate(self.lambdas):
             out_npz = str(self.out_path / f'window{i}.npz')
@@ -779,8 +765,6 @@ class EVBMapping:
             )
         for fut in futures:
             fut.result()
-        if self._owns_parsl:
-            self.shutdown()
         return out_files
 
     def analyze(self, h12: float = 0.0, n_bins: int = 50) -> EVBGapResult:

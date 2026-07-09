@@ -198,7 +198,6 @@ class TestEVBMappingAnalyze:
             reactant_prmtop=tmp_path / 'r.prmtop',
             product_prmtop=tmp_path / 'p.prmtop',
             coordinates=tmp_path / 'c.inpcrd',
-            parsl_config=None,
             out_path=tmp_path / 'windows',
             lambdas=lams,
             temperature=300.0,

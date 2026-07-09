@@ -7,6 +7,14 @@ Releases from 0.4.4 onward are generated automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). This project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.1](https://github.com/msinclair-py/molecular-simulations/compare/v0.5.0...v0.5.1) (2026-07-09)
+
+
+### Bug Fixes
+
+* **build:** form disulfides instead of leaving cysteines reduced ([bd56cb1](https://github.com/msinclair-py/molecular-simulations/commit/bd56cb1a1e41647a738cc5a7fa8bddd7e1c34321))
+* **build:** form disulfides instead of leaving cysteines reduced ([63f63e4](https://github.com/msinclair-py/molecular-simulations/commit/63f63e4877c541207c4699982c3c6214a2127228))
+
 ## [0.5.0](https://github.com/msinclair-py/molecular-simulations/compare/v0.4.4...v0.5.0) (2026-07-08)
 
 

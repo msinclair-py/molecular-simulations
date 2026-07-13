@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "molecular-simulations"
+abstract: >
+  A Python toolkit for building, running, and analyzing molecular dynamics
+  simulations using the AMBER force field ecosystem with OpenMM, scaling
+  workflows on HPC via Parsl, and providing analysis utilities for clustering
+  and protein interface scoring.
+authors:
+  - family-names: "Sinclair"
+    given-names: "Matt"
+    orcid: "https://orcid.org/0000-0001-9206-1895"
+license: "MIT"
+url: "https://github.com/msinclair-py/molecular-simulations"
+repository-code: "https://github.com/msinclair-py/molecular-simulations"
+documentation: "https://molecular-simulations.readthedocs.io/en/latest/"
+version: "0.5.0"
+keywords:
+  - "molecular dynamics"
+  - "AMBER"
+  - "AmberTools"
+  - "OpenMM"
+  - "Parsl"
+  - "MDAnalysis"
+  - "HPC"
+doi: ""
+date-released: "YYYY-MM-DD"

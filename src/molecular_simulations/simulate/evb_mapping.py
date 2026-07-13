@@ -34,6 +34,7 @@ E_g = 0.5(V1+V2) - sqrt(0.25 (V1-V2)^2 + H12^2) for analysis.
 from __future__ import annotations
 
 import copy
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -389,8 +390,25 @@ def run_lambda_window(
 # ---------------------------------------------------------------------------
 
 
+class BARConvergenceWarning(UserWarning):
+    """Warns that a BAR/ladder step could not be estimated (no window overlap).
+
+    Emitted instead of raising when adjacent lambda windows are spaced too far
+    apart for their work distributions to overlap; the affected free energies are
+    ``nan`` and the caller gets a partial result. The remedy is a denser lambda
+    schedule in the flagged range.
+    """
+
+
 def bar(work_f: np.ndarray, work_r: np.ndarray, kT: float) -> float:
     """Bennett acceptance ratio free-energy difference dG = G_B - G_A.
+
+    The BAR self-consistency root is bracketed on ``|dG| <= 500 kT`` -- a
+    generous trust region for a single lambda step. If the root lies outside it,
+    the forward/reverse work distributions do not overlap (the two windows are
+    spaced too far apart) and BAR is undefined; this returns ``nan`` and warns a
+    :class:`BARConvergenceWarning` rather than raising, so a poorly-spaced ladder
+    degrades to a partial result instead of crashing.
 
     Args:
         work_f: Forward works U_B - U_A sampled in state A (kJ/mol).
@@ -398,9 +416,11 @@ def bar(work_f: np.ndarray, work_r: np.ndarray, kT: float) -> float:
         kT: Thermal energy kB*T (kJ/mol).
 
     Returns:
-        The free-energy difference G_B - G_A in kJ/mol.
+        The free-energy difference G_B - G_A in kJ/mol, or ``nan`` if the two
+        states' work distributions do not overlap.
     """
     from scipy.optimize import brentq  # ty: ignore[unresolved-import]
+    from scipy.special import expit  # ty: ignore[unresolved-import]
 
     uf = np.asarray(work_f) / kT
     ur = np.asarray(work_r) / kT
@@ -411,12 +431,28 @@ def bar(work_f: np.ndarray, work_r: np.ndarray, kT: float) -> float:
         # Shirts & Chodera (2008) two-state BAR self-consistency:
         #   sum_A f(ln(nf/nr) + u_f - d) = sum_B f(ln(nr/nf) + u_r + d),
         # with u_f = beta(U_B - U_A) from A and u_r = beta(U_A - U_B) from B.
-        lhs = np.sum(1.0 / (1.0 + np.exp(m + uf - d)))
-        rhs = np.sum(1.0 / (1.0 + np.exp(-m + ur + d)))
+        # expit(-x) = 1/(1+exp(x)) is the overflow-safe Fermi function, so a
+        # huge (non-overlapping) work does not raise/emit numpy overflow noise.
+        lhs = np.sum(expit(-(m + uf - d)))
+        rhs = np.sum(expit(-(-m + ur + d)))
         return lhs - rhs
 
-    d = brentq(objective, -500.0, 500.0, xtol=1e-8)
-    return d * kT
+    lo, hi = -500.0, 500.0
+    # Strict sign change only: when a non-overlapping (huge) work underflows the
+    # objective to exactly 0 at a bound, that is not a real bracket -- treat it
+    # as non-overlap (nan) rather than letting brentq return a spurious root.
+    if objective(lo) * objective(hi) < 0:
+        return brentq(objective, lo, hi, xtol=1e-8) * kT
+
+    warnings.warn(
+        f'BAR did not converge: the forward/reverse work distributions do not '
+        f'overlap (mean work_f={np.mean(work_f):.4g}, '
+        f'mean work_r={np.mean(work_r):.4g} kJ/mol, |dG| > 500 kT). The two '
+        f'lambda windows are spaced too far apart; returning nan.',
+        BARConvergenceWarning,
+        stacklevel=2,
+    )
+    return float('nan')
 
 
 def ladder_free_energies(
@@ -440,7 +476,17 @@ def ladder_free_energies(
         dlam = lambdas[m + 1] - lambdas[m]
         w_f = dlam * gaps[m]  # forward work from window m
         w_r = -dlam * gaps[m + 1]  # reverse work from window m+1
-        dG[m + 1] = dG[m] + bar(w_f, w_r, kT)
+        step = bar(w_f, w_r, kT)
+        if not np.isfinite(step):
+            warnings.warn(
+                f'lambda ladder broken between window {m} (lambda='
+                f'{lambdas[m]:.4g}) and window {m + 1} (lambda={lambdas[m + 1]:.4g}):'
+                f' the windows do not overlap. Free energies past window {m} are '
+                f'undefined (nan); use a denser lambda schedule in this range.',
+                BARConvergenceWarning,
+                stacklevel=2,
+            )
+        dG[m + 1] = dG[m] + step  # nan propagates: downstream windows unresolved
     return dG
 
 
@@ -517,11 +563,13 @@ def analyze_gap(
             counts[m, bin_idx] = n
 
     # Splice windows: count-weighted average of the per-window estimates.
+    # Windows past a broken ladder step carry a nan free-energy reference; drop
+    # them here so the bins covered by the resolvable windows still get a PMF.
     pmf = np.full(n_bins, np.nan)
     for bin_idx in range(n_bins):
         w = counts[:, bin_idx]
         vals = g_est[:, bin_idx]
-        ok = w > 0
+        ok = (w > 0) & np.isfinite(vals)
         if ok.any():
             pmf[bin_idx] = np.average(vals[ok], weights=w[ok])
 

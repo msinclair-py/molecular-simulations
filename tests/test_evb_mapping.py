@@ -11,6 +11,7 @@ import pytest
 
 from molecular_simulations.simulate.evb_mapping import (
     KB,
+    BARConvergenceWarning,
     EVBGapResult,
     analyze_gap,
     bar,
@@ -52,6 +53,18 @@ class TestBar:
         reverse = bar(w_r, w_f, kT)
         assert forward == pytest.approx(-reverse, abs=0.1)
 
+    def test_nonoverlapping_returns_nan_and_warns(self):
+        """Work distributions with no overlap -> nan + BARConvergenceWarning,
+        not a brentq 'different signs' crash."""
+        kT = KB * 300.0
+        # forward/reverse works both huge-positive: their distributions are
+        # disjoint, so the BAR root lies far outside +/-500 kT.
+        w_f = np.full(1000, 3.0e5)
+        w_r = np.full(1000, 3.0e5)
+        with pytest.warns(BARConvergenceWarning):
+            result = bar(w_f, w_r, kT)
+        assert np.isnan(result)
+
 
 class TestLadder:
     def test_zero_gap_gives_zero_ladder(self):
@@ -73,6 +86,24 @@ class TestLadder:
         assert dG[0] == 0.0
         assert dG[1] < dG[2] or dG[1] > dG[2]  # monotone accumulation, either sign
         assert len(dG) == 3
+
+    def test_broken_segment_nans_downstream_and_warns(self):
+        """A non-overlapping window breaks the ladder: free energies up to the
+        break stay finite, everything past it is nan (with a warning)."""
+        kT = KB * 300.0
+        lam = default_lambda_schedule(5)
+        rng = np.random.default_rng(5)
+        gaps = [
+            rng.normal(20, 2, 4000),
+            rng.normal(10, 2, 4000),
+            rng.normal(0, 2, 4000),
+            rng.normal(3.0e5, 2, 4000),  # disjoint from window 2 -> breaks 2->3
+            rng.normal(3.0e5, 2, 4000),
+        ]
+        with pytest.warns(BARConvergenceWarning):
+            dG = ladder_free_energies(lam, gaps, kT)
+        assert np.all(np.isfinite(dG[:3]))  # resolved up to the break
+        assert np.all(np.isnan(dG[3:]))  # undefined past it
 
 
 class TestGroundState:
@@ -150,6 +181,26 @@ class TestAnalyzeGapIntegration:
         assert isinstance(res, EVBGapResult)
         assert np.isfinite(res.pmf).sum() > 10
         assert res.dG_rxn == pytest.approx(0.0, abs=3.0)
+
+    def test_broken_ladder_does_not_crash(self):
+        """A non-overlapping tail window must not crash analyze_gap: BAR warns,
+        the ladder resolves up to the break, and a result is still returned."""
+        rng = np.random.default_rng(6)
+        lams = default_lambda_schedule(6)
+        v1s, v2s = [], []
+        for i, lam in enumerate(lams):
+            base = rng.normal(0.0, 5.0, 4000)
+            if i < 4:
+                gap = rng.normal(40.0 * (1.0 - 2.0 * lam), 8.0, 4000)
+            else:
+                gap = rng.normal(3.0e5, 8.0, 4000)  # disjoint tail -> broken ladder
+            v1s.append(base)
+            v2s.append(base + gap)
+        with pytest.warns(BARConvergenceWarning):
+            res = analyze_gap(lams, v1s, v2s, temperature=300.0, h12=0.0, n_bins=40)
+        assert isinstance(res, EVBGapResult)
+        assert np.isfinite(res.ladder[:4]).all()  # resolved up to the break
+        assert np.isnan(res.ladder[4:]).any()  # undefined past it
 
 
 class TestReconcileExceptions:

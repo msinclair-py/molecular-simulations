@@ -24,6 +24,7 @@ dependencies = [
     'MDAnalysis>=2.7',
     'mdtraj',
     'natsort',
+    'networkx>=3',
     'numba',
     'numpy>=2.0',
     'openmm>=8.0',

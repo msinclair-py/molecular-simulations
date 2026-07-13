@@ -238,6 +238,73 @@ class TestReconcileExceptions:
         )
         assert added[2].value_in_unit(added[2].unit) != 0.0  # chargeProd nonzero
 
+    def test_reports_added_pairs(self):
+        """_reconcile_exceptions returns the (i, j) pairs it adds to each force."""
+        import openmm as mm
+
+        from molecular_simulations.simulate.evb_mapping import _reconcile_exceptions
+
+        a, b = mm.NonbondedForce(), mm.NonbondedForce()
+        for f in (a, b):
+            for _ in range(4):
+                f.addParticle(0.1, 0.3, 0.5)
+        a.addException(0, 1, 0.0, 0.3, 0.0)  # excluded in a only
+        b.addException(0, 2, 0.0, 0.3, 0.0)  # excluded in b only
+        added_a, added_b = _reconcile_exceptions(a, b)
+        assert {frozenset(p) for p in added_a} == {frozenset((0, 2))}  # b's -> a
+        assert {frozenset(p) for p in added_b} == {frozenset((0, 1))}  # a's -> b
+
+
+class TestSoftCore:
+    def test_bounds_reactive_clash(self):
+        """Soft-core moves a reactive pair's hard LJ into a bounded CustomBondForce:
+        the exception LJ is zeroed and the energy at contact stays finite."""
+        import openmm as mm
+        from openmm import unit
+
+        from molecular_simulations.simulate.evb_mapping import _soft_core_reactive_pairs
+
+        system = mm.System()
+        system.addParticle(1.0)
+        system.addParticle(1.0)
+        system.setDefaultPeriodicBoxVectors(
+            mm.Vec3(5, 0, 0) * unit.nanometer,
+            mm.Vec3(0, 5, 0) * unit.nanometer,
+            mm.Vec3(0, 0, 5) * unit.nanometer,
+        )
+        nb = mm.NonbondedForce()
+        nb.setNonbondedMethod(mm.NonbondedForce.CutoffPeriodic)
+        nb.setCutoffDistance(1.0 * unit.nanometer)
+        nb.addParticle(0.0, 0.3, 0.5)
+        nb.addParticle(0.0, 0.3, 0.5)
+        nb.addException(
+            0, 1, 0.0, 0.3, 0.5
+        )  # real-interaction pair (as reconcile adds)
+        system.addForce(nb)
+
+        _soft_core_reactive_pairs(system, nb, reactive=0, pairs=[(0, 1)], sc_alpha=0.5)
+
+        # the exception's hard LJ is zeroed...
+        _, _, _, _, eps = nb.getExceptionParameters(0)
+        assert eps.value_in_unit(unit.kilojoule_per_mole) == pytest.approx(0.0)
+        # ...and a CustomBondForce was added.
+        cbfs = [f for f in system.getForces() if isinstance(f, mm.CustomBondForce)]
+        assert len(cbfs) == 1
+        cbfs[0].setForceGroup(5)
+
+        ctx = mm.Context(
+            system, mm.VerletIntegrator(1e-3), mm.Platform.getPlatform('Reference')
+        )
+        # 0.05 nm apart: a bare LJ (sigma=0.3) would be ~1e9 kJ/mol; soft-core
+        # plateaus at 4*eps*(1/a^2 - 1/a) = 4 kJ/mol for eps=0.5, a=0.5.
+        ctx.setPositions([mm.Vec3(0, 0, 0), mm.Vec3(0.05, 0, 0)] * unit.nanometer)
+        e_sc = (
+            ctx.getState(getEnergy=True, groups={5})
+            .getPotentialEnergy()
+            .value_in_unit(unit.kilojoule_per_mole)
+        )
+        assert e_sc == pytest.approx(4.0, abs=0.5)
+
 
 class TestEVBMappingAnalyze:
     def test_reads_windows_and_reduces(self, tmp_path):

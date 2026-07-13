@@ -63,6 +63,8 @@ def build_mapping_system(
     alpha: float = 22.0,
     r0: float = 0.097,
     nonbonded_cutoff: float = 1.0,
+    soft_core: bool = False,
+    sc_alpha: float = 0.5,
 ) -> mm.System:
     """Combine two diabatic AMBER topologies into one dual-force-group System.
 
@@ -95,6 +97,13 @@ def build_mapping_system(
         alpha: Morse width parameter in nm^-1.
         r0: Morse equilibrium distance in nm.
         nonbonded_cutoff: PME real-space cutoff in nm.
+        soft_core: If True (and transfer atoms supplied), replace the hard LJ of
+            the reactive atom's diabat-flipping nonbonded pairs with a bounded
+            soft-core term. Keeps the diabatic energy finite at the endpoints,
+            where the transferring atom clashes with a partner it is not bonded to
+            in that diabat (the Morse bond only bounds the *bonded* term). Opt-in
+            prototype; off by default preserves the exact prior behaviour.
+        sc_alpha: Soft-core offset (fraction of sigma^6); larger = softer plateau.
 
     Returns:
         An OpenMM System whose group-1 energy is V1 and group-2 energy is V2.
@@ -141,7 +150,14 @@ def build_mapping_system(
     nb_react = _nonbonded_force(react)
     nb_prod = _nonbonded_force(prod)
     if nb_react is not None and nb_prod is not None:
-        _reconcile_exceptions(nb_react, nb_prod)
+        added_react, added_prod = _reconcile_exceptions(nb_react, nb_prod)
+        # Optionally soft-core the reactive atom's *nonbonded* clash with the
+        # partner it is not bonded to in each diabat -- the flip pairs reconcile
+        # just added. Keeps the diabatic energy finite at the endpoints (the
+        # Morse bond only bounds the bonded reactive term). Prototype; opt-in.
+        if soft_core and reactive is not None:
+            _soft_core_reactive_pairs(react, nb_react, reactive, added_react, sc_alpha)
+            _soft_core_reactive_pairs(prod, nb_prod, reactive, added_prod, sc_alpha)
 
     # Reactant forces -> group 1.
     for force in react.getForces():
@@ -167,7 +183,9 @@ def _nonbonded_force(system: mm.System) -> mm.NonbondedForce | None:
     return None
 
 
-def _reconcile_exceptions(nb_a: mm.NonbondedForce, nb_b: mm.NonbondedForce) -> None:
+def _reconcile_exceptions(
+    nb_a: mm.NonbondedForce, nb_b: mm.NonbondedForce
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
     """Give two NonbondedForces the same exception-pair set (params may differ).
 
     A pair excluded in one diabatic state but not the other is added to the state
@@ -179,9 +197,17 @@ def _reconcile_exceptions(nb_a: mm.NonbondedForce, nb_b: mm.NonbondedForce) -> N
     approximation this introduces is negligible and, for a symmetric reaction,
     cancels between the two states.
 
+    These added pairs are exactly the ones whose LJ diverges when the diabat is
+    evaluated at the *other* state's geometry (the transferring atom near a
+    partner it is not bonded to here), so the returned lists drive the optional
+    reactive-atom soft-core (:func:`_soft_core_reactive_pairs`).
+
     Args:
         nb_a: First NonbondedForce (modified in place).
         nb_b: Second NonbondedForce (modified in place).
+
+    Returns:
+        ``(added_to_a, added_to_b)`` -- the (i, j) pairs added to each force.
     """
 
     def pairset(nb: mm.NonbondedForce) -> set[tuple[int, int]]:
@@ -192,6 +218,7 @@ def _reconcile_exceptions(nb_a: mm.NonbondedForce, nb_b: mm.NonbondedForce) -> N
         return pairs
 
     pa, pb = pairset(nb_a), pairset(nb_b)
+    added: dict[int, list[tuple[int, int]]] = {id(nb_a): [], id(nb_b): []}
     for nb, missing in ((nb_a, pb - pa), (nb_b, pa - pb)):
         for i, j in missing:
             qi, si, ei = nb.getParticleParameters(i)
@@ -213,6 +240,73 @@ def _reconcile_exceptions(nb_a: mm.NonbondedForce, nb_b: mm.NonbondedForce) -> N
                 sigma * unit.nanometer,
                 epsilon * unit.kilojoule_per_mole,
             )
+            added[id(nb)].append((i, j))
+    return added[id(nb_a)], added[id(nb_b)]
+
+
+def _soft_core_reactive_pairs(
+    system: mm.System,
+    nb: mm.NonbondedForce,
+    reactive: int,
+    pairs: list[tuple[int, int]],
+    sc_alpha: float,
+) -> None:
+    """Soft-core the LJ of the given reactive-atom nonbonded pairs (prototype).
+
+    The two-topology diabatic energy explodes at the endpoints because the
+    transferring atom sits ~1 Angstrom from a partner it is *not* bonded to in
+    this diabat, so a bare r^-12 LJ term blows up (the Morse fix only bounds the
+    *bonded* reactive term, not this nonbonded clash). Here each such pair's hard
+    LJ is moved out of the NonbondedForce into a bounded soft-core CustomBondForce
+
+        V_sc(r) = 4 eps (u^2 - u),   u = sigma^6 / (sc_alpha*sigma^6 + r^6),
+
+    which -> the true LJ at large r but plateaus at ``4 eps (1/sc_alpha^2 -
+    1/sc_alpha)`` as r -> 0. Coulomb on the pair is left intact (small; ~r^-1).
+    Only the handful of flip pairs from :func:`_reconcile_exceptions` are touched,
+    so the physical basins (where these pairs are at normal range, u ~ (sigma/r)^6)
+    are essentially unchanged.
+
+    Args:
+        system: System to add the soft-core CustomBondForce to (its own group).
+        nb: The diabat's NonbondedForce (its exception LJ is zeroed in place).
+        reactive: Transferring atom index (pairs not involving it are ignored).
+        pairs: Candidate (i, j) pairs (the reconcile-added flip pairs).
+        sc_alpha: Soft-core offset (nm^6 fraction of sigma^6); larger = softer.
+    """
+    pairs = [(i, j) for (i, j) in pairs if reactive in (i, j)]
+    if not pairs:
+        return
+
+    by_pair: dict[frozenset, int] = {}
+    for k in range(nb.getNumExceptions()):
+        i, j, *_ = nb.getExceptionParameters(k)
+        by_pair[frozenset((i, j))] = k
+
+    cbf = mm.CustomBondForce(
+        '4*epsilon*(u*u - u); u = s6/(sc_alpha*s6 + r6); s6 = sigma^6; r6 = r^6'
+    )
+    cbf.addGlobalParameter('sc_alpha', sc_alpha)
+    cbf.addPerBondParameter('sigma')
+    cbf.addPerBondParameter('epsilon')
+
+    n_added = 0
+    for pair in pairs:
+        k = by_pair.get(frozenset(pair))
+        if k is None:
+            continue
+        i, j, q, s, e = nb.getExceptionParameters(k)
+        eps = e.value_in_unit(unit.kilojoule_per_mole)
+        if eps <= 0.0:
+            continue  # pure exclusion / no LJ to soften
+        # Strip the hard LJ from the exception (keep its Coulomb chargeProd)...
+        nb.setExceptionParameters(k, i, j, q, s, 0.0 * unit.kilojoule_per_mole)
+        # ...and re-add it soft-cored.
+        cbf.addBond(i, j, [s.value_in_unit(unit.nanometer), eps])
+        n_added += 1
+
+    if n_added:
+        system.addForce(cbf)
 
 
 def mapping_integrator(

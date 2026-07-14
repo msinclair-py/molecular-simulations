@@ -533,6 +533,15 @@ class BARConvergenceWarning(UserWarning):
     """
 
 
+class GapSamplingWarning(UserWarning):
+    """Warns that the gap PMF does not span both basins.
+
+    Emitted when one side of the crossing (reactant gap > 0 or product gap < 0)
+    is unsampled, so ``dG_barrier``/``dG_rxn`` come back ``nan``. The remedy is to
+    extend the lambda range across the crossing or sample more.
+    """
+
+
 def bar(work_f: np.ndarray, work_r: np.ndarray, kT: float) -> float:
     """Bennett acceptance ratio free-energy difference dG = G_B - G_A.
 
@@ -678,8 +687,16 @@ def analyze_gap(
     dG_m = ladder_free_energies(lambdas, gaps, kT)
 
     all_gap = np.concatenate(gaps)
-    edges = np.linspace(all_gap.min(), all_gap.max(), n_bins + 1)
+    # Equal-population (quantile) bin edges: the densely sampled crossing and
+    # basin-floor regions get fine resolution while a sparse extreme tail (e.g.
+    # the deep reactant-basin window near lambda=0, whose gap is huge) gets a few
+    # wide bins -- so a wide gap range does not wash out the crossing under uniform
+    # binning. Collapsed edges are deduped; fall back to uniform if degenerate.
+    edges = np.unique(np.quantile(all_gap, np.linspace(0.0, 1.0, n_bins + 1)))
+    if edges.size < 3:
+        edges = np.linspace(all_gap.min(), all_gap.max() + 1e-9, n_bins + 1)
     centers = 0.5 * (edges[:-1] + edges[1:])
+    n_bins = len(centers)  # effective bin count after dedup
 
     # Per-window, per-bin FEP/US estimate g_m(bin), and sample counts for the
     # weighting splice.
@@ -718,6 +735,14 @@ def analyze_gap(
     pmf = pmf - np.nanmin(pmf)
 
     dG_rxn, dG_barrier = _gap_observables(centers, pmf, finite)
+    if not np.isfinite(dG_barrier):
+        warnings.warn(
+            'gap PMF does not span both basins (one side of the crossing is '
+            'unsampled); dG_barrier/dG_rxn are nan. Extend the lambda range across '
+            'the crossing (raise lam_max) or sample more.',
+            GapSamplingWarning,
+            stacklevel=2,
+        )
 
     dG_rxn_err = dG_barrier_err = float('nan')
     if n_boot > 0:

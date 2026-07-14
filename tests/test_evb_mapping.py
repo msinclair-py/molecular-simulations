@@ -13,6 +13,7 @@ from molecular_simulations.simulate.evb_mapping import (
     KB,
     BARConvergenceWarning,
     EVBGapResult,
+    GapSamplingWarning,
     aggregate_replicas,
     analyze_gap,
     bar,
@@ -237,6 +238,35 @@ class TestAnalyzeGapIntegration:
         rb = analyze_gap(lams, v1s, v2s, n_bins=40, n_boot=40)
         assert np.isfinite(rb.dG_barrier_err) and rb.dG_barrier_err > 0
         assert np.isfinite(rb.dG_rxn_err) and rb.dG_rxn_err > 0
+
+    def test_wide_gap_range_resolves_barrier(self):
+        """A deep-basin window with a huge gap must not wash out the crossing:
+        equal-population (quantile) binning still resolves both basins."""
+        rng = np.random.default_rng(8)
+        lams = np.array([0.0, 0.1, 0.3, 0.5, 0.6, 0.7])
+        means = [25000.0, 3000.0, 800.0, 100.0, -100.0, -800.0]
+        v1s, v2s = [], []
+        for mu in means:
+            base = rng.normal(0.0, 5.0, 3000)
+            gap = rng.normal(mu, max(50.0, 0.05 * abs(mu)), 3000)
+            v1s.append(base)
+            v2s.append(base + gap)
+        res = analyze_gap(lams, v1s, v2s, n_bins=40)
+        assert np.isfinite(res.dG_barrier)  # crossing resolved despite the tail
+        assert np.isfinite(res.dG_rxn)
+
+    def test_single_sided_warns(self):
+        """Windows that never cross the gap=0 line -> nan + GapSamplingWarning."""
+        rng = np.random.default_rng(9)
+        lams = np.array([0.0, 0.2, 0.4])
+        v1s, v2s = [], []
+        for mu in [3000.0, 2000.0, 1000.0]:  # gap stays positive: no product side
+            base = rng.normal(0.0, 5.0, 2000)
+            v1s.append(base)
+            v2s.append(base + rng.normal(mu, 50.0, 2000))
+        with pytest.warns(GapSamplingWarning):
+            res = analyze_gap(lams, v1s, v2s, n_bins=30)
+        assert np.isnan(res.dG_barrier)
 
 
 class TestAggregateReplicas:

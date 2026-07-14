@@ -13,9 +13,11 @@ from molecular_simulations.simulate.evb_mapping import (
     KB,
     BARConvergenceWarning,
     EVBGapResult,
+    aggregate_replicas,
     analyze_gap,
     bar,
     default_lambda_schedule,
+    endpoint_dense_schedule,
     ground_state_energy,
     ladder_free_energies,
 )
@@ -134,6 +136,24 @@ class TestSchedule:
         assert np.all(np.diff(s) > 0)
 
 
+class TestEndpointDenseSchedule:
+    def test_endpoints_length_monotone(self):
+        s = endpoint_dense_schedule(11, 0.0, 0.55)
+        assert len(s) == 11
+        assert s[0] == pytest.approx(0.0)
+        assert s[-1] == pytest.approx(0.55)
+        assert np.all(np.diff(s) > 0)
+
+    def test_denser_at_the_ends(self):
+        s = endpoint_dense_schedule(11)
+        d = np.diff(s)
+        assert d[0] < d[len(d) // 2]  # first step tighter than the middle
+        assert d[-1] < d[len(d) // 2]  # last step tighter than the middle
+
+    def test_single_window(self):
+        assert endpoint_dense_schedule(1, 0.2, 0.8).tolist() == [0.2]
+
+
 class TestGapObservables:
     def test_symmetric_double_well_zero_dg(self):
         c = np.linspace(-40, 40, 81)
@@ -201,6 +221,56 @@ class TestAnalyzeGapIntegration:
         assert isinstance(res, EVBGapResult)
         assert np.isfinite(res.ladder[:4]).all()  # resolved up to the break
         assert np.isnan(res.ladder[4:]).any()  # undefined past it
+
+    def test_bootstrap_sets_finite_error(self):
+        rng = np.random.default_rng(7)
+        lams = default_lambda_schedule(7)
+        v1s, v2s = [], []
+        for lam in lams:
+            base = rng.normal(0.0, 5.0, 3000)
+            gap = rng.normal(40.0 * (1.0 - 2.0 * lam), 8.0, 3000)
+            v1s.append(base)
+            v2s.append(base + gap)
+        # no bootstrap -> nan errors; bootstrap -> finite, positive errors
+        r0 = analyze_gap(lams, v1s, v2s, n_bins=40, n_boot=0)
+        assert np.isnan(r0.dG_barrier_err)
+        rb = analyze_gap(lams, v1s, v2s, n_bins=40, n_boot=40)
+        assert np.isfinite(rb.dG_barrier_err) and rb.dG_barrier_err > 0
+        assert np.isfinite(rb.dG_rxn_err) and rb.dG_rxn_err > 0
+
+
+class TestAggregateReplicas:
+    def _result(self, barrier, rxn):
+        return EVBGapResult(
+            gap_centers=np.zeros(2),
+            pmf=np.zeros(2),
+            dG_rxn=rxn,
+            dG_barrier=barrier,
+            ladder=np.zeros(2),
+        )
+
+    def test_mean_and_sem(self):
+        reps = [
+            self._result(10.0, -5.0),
+            self._result(12.0, -7.0),
+            self._result(14.0, -6.0),
+        ]
+        agg = aggregate_replicas(reps)
+        assert agg['dG_barrier'] == pytest.approx(12.0)
+        assert agg['dG_rxn'] == pytest.approx(-6.0)
+        assert agg['n'] == 3
+        expect_sem = float(np.std([10, 12, 14], ddof=1) / np.sqrt(3))
+        assert agg['dG_barrier_sem'] == pytest.approx(expect_sem)
+
+    def test_ignores_nan_replicas(self):
+        reps = [
+            self._result(10.0, -5.0),
+            self._result(float('nan'), float('nan')),
+            self._result(12.0, -5.0),
+        ]
+        agg = aggregate_replicas(reps)
+        assert agg['n'] == 2
+        assert agg['dG_barrier'] == pytest.approx(11.0)
 
 
 class TestReconcileExceptions:

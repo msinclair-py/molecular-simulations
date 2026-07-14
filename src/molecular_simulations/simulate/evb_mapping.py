@@ -398,6 +398,36 @@ def default_lambda_schedule(n_windows: int) -> np.ndarray:
     return np.linspace(0.0, 1.0, n_windows)
 
 
+def endpoint_dense_schedule(
+    n_windows: int, lam_min: float = 0.0, lam_max: float = 1.0
+) -> np.ndarray:
+    """Cosine-spaced lambda windows -- dense near both ends of [lam_min, lam_max].
+
+    The diabatic energy gap is largest in the reactant basin (near lam_min) and
+    steep through the crossing (near the barrier), so a uniform schedule leaves
+    adjacent windows there with too little overlap for BAR. Chebyshev/cosine
+    (Gauss-Lobatto) spacing clusters windows at the two endpoints, keeping the
+    per-step work within BAR's overlap range where the gap changes fastest.
+
+    For a reactant->TS barrier one typically passes ``lam_max`` ~0.55 (just past
+    the crossing) so the product endpoint -- which needs its own dense tail -- is
+    not sampled.
+
+    Args:
+        n_windows: Number of windows (>= 2).
+        lam_min: Reactant-side endpoint (default 0.0).
+        lam_max: Product-side endpoint (default 1.0).
+
+    Returns:
+        Increasing lambda values in ``[lam_min, lam_max]`` (inclusive).
+    """
+    if n_windows < 2:
+        return np.array([lam_min], dtype=float)
+    i = np.arange(n_windows)
+    x = 0.5 * (1.0 - np.cos(np.pi * i / (n_windows - 1)))  # 0..1, dense at ends
+    return lam_min + (lam_max - lam_min) * x
+
+
 def ground_state_energy(v1: np.ndarray, v2: np.ndarray, h12: float) -> np.ndarray:
     """Adiabatic ground-state energy from two diabats and a constant coupling.
 
@@ -435,6 +465,7 @@ def run_lambda_window(
     sample_interval: int = 100,
     platform: str = 'CUDA',
     minimize: bool = True,
+    seed: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Sample one mapping window and record the two diabatic energies.
 
@@ -456,18 +487,26 @@ def run_lambda_window(
         sample_interval: Steps between V1/V2 samples.
         platform: OpenMM platform name.
         minimize: Whether to energy-minimize before equilibration.
+        seed: Random seed for the thermostat + initial velocities. Pass distinct
+            seeds to generate independent replicas (see :func:`aggregate_replicas`);
+            None draws a fresh nondeterministic seed each call.
 
     Returns:
         ``(v1, v2)`` arrays of per-sample diabatic energies (kJ/mol).
     """
     integ = mapping_integrator(temperature, friction, dt, lam)
+    if seed is not None:
+        integ.setRandomNumberSeed(int(seed))
     context = mm.Context(system, integ, mm.Platform.getPlatformByName(platform))
     if box_vectors is not None:
         context.setPeriodicBoxVectors(*box_vectors)
     context.setPositions(positions)
     if minimize:
         mm.LocalEnergyMinimizer.minimize(context, maxIterations=1000)
-    context.setVelocitiesToTemperature(temperature)
+    if seed is not None:
+        context.setVelocitiesToTemperature(temperature, int(seed))
+    else:
+        context.setVelocitiesToTemperature(temperature)
     integ.step(n_equil)
 
     n_samples = max(1, n_prod // sample_interval)
@@ -593,6 +632,8 @@ class EVBGapResult:
     dG_rxn: float  # product basin - reactant basin (kJ/mol)
     dG_barrier: float  # diabatic (or adiabatic) barrier (kJ/mol)
     ladder: np.ndarray  # dG_m(lambda) mapping free energies (kJ/mol)
+    dG_rxn_err: float = float('nan')  # bootstrap SE of dG_rxn (nan if n_boot=0)
+    dG_barrier_err: float = float('nan')  # bootstrap SE of dG_barrier
 
 
 def analyze_gap(
@@ -602,6 +643,7 @@ def analyze_gap(
     temperature: float = 300.0,
     h12: float = 0.0,
     n_bins: int = 50,
+    n_boot: int = 0,
 ) -> EVBGapResult:
     """Combine lambda windows into a free-energy profile along the energy gap.
 
@@ -620,6 +662,11 @@ def analyze_gap(
         temperature: Temperature in K.
         h12: Off-diagonal coupling in kJ/mol (0 = diabatic).
         n_bins: Number of energy-gap bins.
+        n_boot: If > 0, resample each window's frames with replacement this many
+            times and re-estimate to set ``dG_rxn_err`` / ``dG_barrier_err``.
+            NOTE: a plain (non-block) bootstrap over correlated MD frames is a
+            *lower bound* on the true statistical error -- for the honest error
+            run independent replicas and combine with :func:`aggregate_replicas`.
 
     Returns:
         An :class:`EVBGapResult`.
@@ -671,7 +718,64 @@ def analyze_gap(
     pmf = pmf - np.nanmin(pmf)
 
     dG_rxn, dG_barrier = _gap_observables(centers, pmf, finite)
-    return EVBGapResult(centers, pmf, dG_rxn, dG_barrier, dG_m)
+
+    dG_rxn_err = dG_barrier_err = float('nan')
+    if n_boot > 0:
+        rng = np.random.default_rng(0)
+        rxn_b, bar_b = [], []
+        for _ in range(n_boot):
+            rv1, rv2 = [], []
+            for a, b in zip(v1, v2, strict=True):
+                a = np.asarray(a)
+                idx = rng.integers(0, len(a), len(a))
+                rv1.append(a[idx])
+                rv2.append(np.asarray(b)[idx])
+            r = analyze_gap(lambdas, rv1, rv2, temperature, h12, n_bins, n_boot=0)
+            rxn_b.append(r.dG_rxn)
+            bar_b.append(r.dG_barrier)
+        dG_rxn_err = float(np.nanstd(rxn_b))
+        dG_barrier_err = float(np.nanstd(bar_b))
+
+    return EVBGapResult(
+        centers, pmf, dG_rxn, dG_barrier, dG_m, dG_rxn_err, dG_barrier_err
+    )
+
+
+def aggregate_replicas(results: list[EVBGapResult]) -> dict[str, float]:
+    """Combine independent-replica results into mean +/- standard error.
+
+    Independent replicas (different random seeds / initial velocities) are the
+    honest error estimate for an EVB barrier -- they capture the slow
+    conformational sampling that a within-run bootstrap misses. Feed one
+    :class:`EVBGapResult` per replica (from :func:`analyze_gap` on that replica's
+    windows).
+
+    Args:
+        results: One result per replica (nan observables are ignored).
+
+    Returns:
+        Dict with ``dG_barrier``/``dG_rxn`` means, ``_sem`` standard errors, and
+        ``n`` (number of finite replicas used).
+    """
+    bar = np.array([r.dG_barrier for r in results], dtype=float)
+    rxn = np.array([r.dG_rxn for r in results], dtype=float)
+
+    def mean_sem(x: np.ndarray) -> tuple[float, float]:
+        x = x[np.isfinite(x)]
+        if x.size == 0:
+            return float('nan'), float('nan')
+        sem = float(np.std(x, ddof=1) / np.sqrt(x.size)) if x.size > 1 else float('nan')
+        return float(np.mean(x)), sem
+
+    bar_m, bar_s = mean_sem(bar)
+    rxn_m, rxn_s = mean_sem(rxn)
+    return {
+        'dG_barrier': bar_m,
+        'dG_barrier_sem': bar_s,
+        'dG_rxn': rxn_m,
+        'dG_rxn_sem': rxn_s,
+        'n': int(np.isfinite(bar).sum()),
+    }
 
 
 def _logsumexp(x: np.ndarray) -> float:

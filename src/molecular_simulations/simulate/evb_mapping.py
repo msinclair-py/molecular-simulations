@@ -837,6 +837,9 @@ def run_mapping_window(
     D_e: float,
     alpha: float,
     r0: float,
+    soft_core: bool = False,
+    sc_alpha: float = 0.5,
+    seed: int | None = None,
 ) -> str:
     """Parsl app: sample one mapping window and save (v1, v2) to ``out_npz``.
 
@@ -862,6 +865,8 @@ def run_mapping_window(
         alpha=alpha,
         r0=r0,
         nonbonded_cutoff=nonbonded_cutoff,
+        soft_core=soft_core,
+        sc_alpha=sc_alpha,
     )
     v1, v2 = run_lambda_window(
         system,
@@ -875,6 +880,7 @@ def run_mapping_window(
         n_prod=n_prod,
         sample_interval=sample_interval,
         platform=platform,
+        seed=seed,
     )
     np.savez(out_npz, v1=v1, v2=v2, lam=lam)
     return out_npz
@@ -940,12 +946,16 @@ class EVBMapping:
         D_e: float = 460.0,
         alpha: float = 22.0,
         r0: float = 0.097,
+        soft_core: bool = False,
+        sc_alpha: float = 0.5,
     ):
         """Initialize the EVBMapping orchestrator.
 
         ``donor``/``acceptor``/``reactive`` (0-based indices, from EVBBuilder's
         evb_meta.json) trigger Morse-ification of each state's reactive bond,
-        which is required for the diabatic energy gap to stay bounded.
+        which is required for the diabatic energy gap to stay bounded. Set
+        ``soft_core=True`` to also bound the reactive atom's endpoint nonbonded
+        clash (needed to sample the reactant basin near lambda=0 cleanly).
         """
         self.reactant_prmtop = str(Path(reactant_prmtop).resolve())
         self.product_prmtop = str(Path(product_prmtop).resolve())
@@ -958,6 +968,8 @@ class EVBMapping:
         self.D_e = D_e
         self.alpha = alpha
         self.r0 = r0
+        self.soft_core = soft_core
+        self.sc_alpha = sc_alpha
 
         self.lambdas = (
             default_lambda_schedule(n_windows)
@@ -973,11 +985,17 @@ class EVBMapping:
         self.platform = platform
         self.nonbonded_cutoff = nonbonded_cutoff
 
-    def run(self) -> list[str]:
+    def run(self, seed: int | None = None) -> list[str]:
         """Distribute the windows and wait for all to finish.
 
         Requires parsl to already be loaded by the caller (see the class
         docstring); this method neither loads nor cleans up the DataFlowKernel.
+
+        Args:
+            seed: Base random seed. Each window gets ``seed*1000 + i`` so windows
+                are independent yet reproducible; pass distinct base seeds (with
+                distinct ``out_path``\\ s) to generate replicas for
+                :func:`aggregate_replicas`. None = nondeterministic.
 
         Returns:
             The per-window npz paths (window order = lambda order).
@@ -986,6 +1004,7 @@ class EVBMapping:
         for i, lam in enumerate(self.lambdas):
             out_npz = str(self.out_path / f'window{i}.npz')
             out_files.append(out_npz)
+            win_seed = None if seed is None else int(seed) * 1000 + i
             futures.append(
                 run_mapping_window(
                     self.reactant_prmtop,
@@ -1007,6 +1026,9 @@ class EVBMapping:
                     self.D_e,
                     self.alpha,
                     self.r0,
+                    self.soft_core,
+                    self.sc_alpha,
+                    win_seed,
                 )
             )
         for fut in futures:

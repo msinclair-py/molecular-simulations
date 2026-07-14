@@ -12,11 +12,14 @@ import pytest
 from molecular_simulations.simulate.evb_mapping import (
     KB,
     BARConvergenceWarning,
+    EVBCalibration,
     EVBGapResult,
     GapSamplingWarning,
     aggregate_replicas,
     analyze_gap,
     bar,
+    calibrate_evb,
+    ddg_barrier,
     default_lambda_schedule,
     endpoint_dense_schedule,
     ground_state_energy,
@@ -301,6 +304,83 @@ class TestAggregateReplicas:
         agg = aggregate_replicas(reps)
         assert agg['n'] == 2
         assert agg['dG_barrier'] == pytest.approx(11.0)
+
+
+def _marcus_windows(seed, k=1.0, d=14.0, dG0=-10.0, n_windows=11, n=3000):
+    """Marcus two-state model: V1=0.5k x^2, V2=0.5k(x-d)^2+dG0. Window m samples
+    x ~ N(lam*d, sqrt(kT/k)) so the gap sweeps from + (reactant) to - (product)."""
+    rng = np.random.default_rng(seed)
+    kT = KB * 300.0
+    sigma = np.sqrt(kT / k)
+    lams = default_lambda_schedule(n_windows)
+    v1s, v2s = [], []
+    for lam in lams:
+        x = rng.normal(lam * d, sigma, n)
+        v1s.append(0.5 * k * x**2)
+        v2s.append(0.5 * k * (x - d) ** 2 + dG0)
+    return lams, v1s, v2s
+
+
+class TestAlphaShift:
+    def test_alpha_shifts_dG_rxn(self):
+        """Raising V2 by alpha raises the product basin: dG_rxn increases ~alpha."""
+        lams, v1s, v2s = _marcus_windows(10)
+        r0 = analyze_gap(lams, v1s, v2s, n_bins=60, alpha=0.0)
+        r1 = analyze_gap(lams, v1s, v2s, n_bins=60, alpha=20.0)
+        assert (r1.dG_rxn - r0.dG_rxn) == pytest.approx(20.0, abs=4.0)
+
+
+class TestCalibrate:
+    def test_hits_targets(self):
+        """calibrate_evb finds (alpha, H12) reproducing a reference dG_rxn+dG dagger."""
+        lams, v1s, v2s = _marcus_windows(11)
+        cal = calibrate_evb(
+            lams,
+            v1s,
+            v2s,
+            dG_rxn_ref=-15.0,
+            dG_barrier_ref=8.0,
+            n_bins=60,
+            tol=1.0,
+        )
+        assert isinstance(cal, EVBCalibration)
+        assert cal.converged
+        assert cal.dG_rxn == pytest.approx(-15.0, abs=1.0)
+        assert cal.dG_barrier == pytest.approx(8.0, abs=1.0)
+        assert cal.h12 > 0.0  # coupling lowered the diabatic barrier to the target
+
+    def test_reapplying_calibration_reproduces_targets(self):
+        """analyze_gap with the fitted (alpha, h12) reproduces the calibrated values."""
+        lams, v1s, v2s = _marcus_windows(12)
+        cal = calibrate_evb(
+            lams,
+            v1s,
+            v2s,
+            dG_rxn_ref=-20.0,
+            dG_barrier_ref=6.0,
+            n_bins=60,
+            tol=1.0,
+        )
+        res = analyze_gap(lams, v1s, v2s, n_bins=60, h12=cal.h12, alpha=cal.alpha)
+        assert res.dG_rxn == pytest.approx(cal.dG_rxn, abs=0.5)
+        assert res.dG_barrier == pytest.approx(cal.dG_barrier, abs=0.5)
+
+
+class TestDDGBarrier:
+    def test_difference_and_error(self):
+        def r(barrier, err):
+            return EVBGapResult(
+                gap_centers=np.zeros(2),
+                pmf=np.zeros(2),
+                dG_rxn=0.0,
+                dG_barrier=barrier,
+                ladder=np.zeros(2),
+                dG_barrier_err=err,
+            )
+
+        ddg, err = ddg_barrier(r(58.0, 3.0), r(50.0, 4.0))
+        assert ddg == pytest.approx(8.0)
+        assert err == pytest.approx(5.0)  # hypot(3, 4)
 
 
 class TestReconcileExceptions:

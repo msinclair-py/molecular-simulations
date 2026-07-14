@@ -653,6 +653,7 @@ def analyze_gap(
     h12: float = 0.0,
     n_bins: int = 50,
     n_boot: int = 0,
+    alpha: float = 0.0,
 ) -> EVBGapResult:
     """Combine lambda windows into a free-energy profile along the energy gap.
 
@@ -676,12 +677,20 @@ def analyze_gap(
             NOTE: a plain (non-block) bootstrap over correlated MD frames is a
             *lower bound* on the true statistical error -- for the honest error
             run independent replicas and combine with :func:`aggregate_replicas`.
+        alpha: EVB diabat-2 gas-phase shift in kJ/mol (H22 = V2 + alpha). A pure
+            post-processing constant -- it does not change the sampled
+            trajectories -- calibrated with :func:`calibrate_evb` so the diabatic
+            reaction free energy matches a reference.
 
     Returns:
         An :class:`EVBGapResult`.
     """
     kT = KB * temperature
     lambdas = np.asarray(lambdas)
+    # H22 = V2 + alpha (EVB gas-phase shift). In the mapping potential alpha is a
+    # per-window constant (lambda*alpha), so it does not change the sampled
+    # trajectories; it is applied here, in post-processing, only.
+    v2 = [np.asarray(b) + alpha for b in v2]
     gaps = [np.asarray(b) - np.asarray(a) for a, b in zip(v1, v2, strict=True)]
 
     dG_m = ladder_free_energies(lambdas, gaps, kT)
@@ -801,6 +810,151 @@ def aggregate_replicas(results: list[EVBGapResult]) -> dict[str, float]:
         'dG_rxn_sem': rxn_s,
         'n': int(np.isfinite(bar).sum()),
     }
+
+
+# ---------------------------------------------------------------------------
+# EVB calibration: fit (alpha, H12) to a reference dG_rxn + dG_barrier
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class EVBCalibration:
+    """Calibrated EVB parameters and the observables they reproduce.
+
+    ``alpha`` (diabat-2 gas-phase shift) and ``h12`` (off-diagonal coupling) are
+    calibrated once on a reference (e.g. WT enzyme, or the reaction in water) and
+    then held FIXED across mutants of the same reaction -- the EVB transferability
+    premise. Apply them via ``analyze_gap(..., h12=cal.h12, alpha=cal.alpha)``.
+    """
+
+    alpha: float  # diabat-2 gas-phase shift (kJ/mol)
+    h12: float  # off-diagonal coupling (kJ/mol)
+    dG_rxn: float  # achieved reaction free energy (kJ/mol)
+    dG_barrier: float  # achieved adiabatic barrier (kJ/mol)
+    converged: bool  # both targets hit within tol
+
+
+def calibrate_evb(
+    lambdas: np.ndarray,
+    v1: list[np.ndarray],
+    v2: list[np.ndarray],
+    dG_rxn_ref: float,
+    dG_barrier_ref: float,
+    temperature: float = 300.0,
+    n_bins: int = 50,
+    max_iter: int = 20,
+    tol: float = 0.5,
+) -> EVBCalibration:
+    """Fit the EVB (alpha, H12) so the profile matches a reference.
+
+    Both parameters are pure post-processing constants (see :func:`analyze_gap`),
+    so this re-analyzes the *already-sampled* windows -- no new simulation. It
+    alternates two 1-D solves until both targets are met:
+
+      * ``alpha`` sets the reaction free energy (raising V2 by alpha raises the
+        product basin, so dG_rxn increases ~linearly with alpha) and barely
+        affects the barrier;
+      * ``h12`` lowers the barrier (E_g = V - H12 at the crossing) and barely
+        affects the well-separated basins,
+
+    so the two solves are nearly decoupled and converge in a few iterations.
+    Calibrate on a reference system (WT, or the reaction in water) and reuse the
+    result across mutants.
+
+    Args:
+        lambdas: Window lambda values.
+        v1: Per-window reactant diabatic energies.
+        v2: Per-window product diabatic energies.
+        dG_rxn_ref: Target reaction free energy (kJ/mol).
+        dG_barrier_ref: Target activation free energy (kJ/mol). Must be below the
+            diabatic (h12=0) barrier, which H12 can only lower.
+        temperature: Temperature in K.
+        n_bins: Energy-gap bins.
+        max_iter: Maximum alternating iterations.
+        tol: Convergence tolerance on both targets (kJ/mol).
+
+    Returns:
+        An :class:`EVBCalibration` (``converged`` False if a target was not met --
+        e.g. the reference barrier exceeds the diabatic upper bound).
+    """
+
+    def rxn(a: float, h: float) -> float:
+        return analyze_gap(
+            lambdas, v1, v2, temperature=temperature, h12=h, n_bins=n_bins, alpha=a
+        ).dG_rxn
+
+    def barrier(a: float, h: float) -> float:
+        return analyze_gap(
+            lambdas, v1, v2, temperature=temperature, h12=h, n_bins=n_bins, alpha=a
+        ).dG_barrier
+
+    from scipy.optimize import brentq  # ty: ignore[unresolved-import]
+
+    # alpha is only valid within (-max_gap, -min_gap): outside it the shifted gap
+    # V2+alpha-V1 no longer straddles the crossing, a basin empties and dG_rxn is
+    # nan. Bracket brentq inside that window (inset off the degenerate edges).
+    all_gap = np.concatenate(
+        [np.asarray(b) - np.asarray(a) for a, b in zip(v1, v2, strict=True)]
+    )
+    inset = 0.1 * float(np.max(all_gap) - np.min(all_gap))
+    a_lo, a_hi = -float(np.max(all_gap)) + inset, -float(np.min(all_gap)) - inset
+
+    alpha, h12 = 0.0, 0.0
+    d_rxn = d_bar = float('nan')
+    for _ in range(max_iter):
+        if a_hi <= a_lo:
+            break
+        # alpha matches dG_rxn (monotone increasing over the valid window).
+        try:
+            alpha = brentq(
+                lambda a, h=h12: rxn(a, h) - dG_rxn_ref, a_lo, a_hi, xtol=1e-4
+            )
+        except ValueError:
+            break  # reference dG_rxn unachievable with this sampling
+
+        # h12 >= 0 matches dG_barrier (monotone decreasing; E_g = V - H12 at the
+        # crossing, so the barrier drops ~H12). Expand the bound until it brackets.
+        b0 = barrier(alpha, 0.0)
+        if not np.isfinite(b0) or b0 <= dG_barrier_ref:
+            h12 = 0.0  # target already at/below the diabatic upper bound
+        else:
+            hi = b0 - dG_barrier_ref + 1.0
+            for _ in range(40):
+                if barrier(alpha, hi) - dG_barrier_ref <= 0:
+                    break
+                hi *= 2.0
+            try:
+                h12 = brentq(
+                    lambda h, a=alpha: barrier(a, h) - dG_barrier_ref,
+                    0.0,
+                    hi,
+                    xtol=1e-4,
+                )
+            except ValueError:
+                h12 = 0.0
+
+        d_rxn, d_bar = rxn(alpha, h12), barrier(alpha, h12)
+        if abs(d_rxn - dG_rxn_ref) < tol and abs(d_bar - dG_barrier_ref) < tol:
+            return EVBCalibration(alpha, h12, d_rxn, d_bar, True)
+
+    return EVBCalibration(alpha, h12, d_rxn, d_bar, False)
+
+
+def ddg_barrier(mutant: EVBGapResult, reference: EVBGapResult) -> tuple[float, float]:
+    """ddG_dagger = dG_barrier(mutant) - dG_barrier(reference), with error.
+
+    Both results must be analyzed with the SAME calibrated (alpha, h12). The
+    relative barrier is the screening observable: systematic errors largely cancel
+    in the difference, and it maps to experiment via ddG_dagger ~ -RT ln(kcat_mut
+    / kcat_wt). Errors are combined in quadrature (use per-result bootstrap or
+    replica SEs).
+
+    Returns:
+        ``(ddG_dagger, error)`` in kJ/mol.
+    """
+    d = mutant.dG_barrier - reference.dG_barrier
+    err = float(np.hypot(mutant.dG_barrier_err, reference.dG_barrier_err))
+    return d, err
 
 
 def _logsumexp(x: np.ndarray) -> float:
@@ -1060,12 +1214,22 @@ class EVBMapping:
             fut.result()
         return out_files
 
-    def analyze(self, h12: float = 0.0, n_bins: int = 50) -> EVBGapResult:
+    def analyze(
+        self,
+        h12: float = 0.0,
+        n_bins: int = 50,
+        n_boot: int = 0,
+        alpha: float = 0.0,
+    ) -> EVBGapResult:
         """Reduce the per-window npz files to the energy-gap free energy.
 
         Args:
             h12: Off-diagonal coupling (0 = diabatic upper-bound barrier).
             n_bins: Number of energy-gap bins.
+            n_boot: Bootstrap resamples for the error bars (0 = none).
+            alpha: EVB diabat-2 gas-phase shift (kJ/mol); calibrate with
+                :func:`calibrate_evb`. Note this is unrelated to the Morse ``alpha``
+                width passed at construction.
 
         Returns:
             The :class:`EVBGapResult`.
@@ -1076,5 +1240,12 @@ class EVBMapping:
             v1.append(data['v1'])
             v2.append(data['v2'])
         return analyze_gap(
-            self.lambdas, v1, v2, temperature=self.temperature, h12=h12, n_bins=n_bins
+            self.lambdas,
+            v1,
+            v2,
+            temperature=self.temperature,
+            h12=h12,
+            n_bins=n_bins,
+            n_boot=n_boot,
+            alpha=alpha,
         )

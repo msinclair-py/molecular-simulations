@@ -326,7 +326,14 @@ class AuroraSettings(BaseComputeSettings):
                     available_accelerators=self.available_accelerators,
                     cpu_affinity='block',  # Assigns cpus in sequential order
                     prefetch_capacity=0,
-                    max_workers_per_node=12,
+                    # One worker per addressable accelerator; deriving this from
+                    # the list (rather than a hard 12) lets a caller dial down
+                    # concurrency to bound per-node thread oversubscription --
+                    # unthrottled, each Intel oneAPI GPU context spawns a
+                    # full-node thread pool and 12 at once exhausts the process
+                    # thread limit (std::system_error: Resource temporarily
+                    # unavailable). Pair with OMP_NUM_THREADS in worker_init.
+                    max_workers_per_node=len(self.available_accelerators),
                     cores_per_worker=16,
                     heartbeat_period=30,
                     heartbeat_threshold=300,
@@ -339,6 +346,10 @@ class AuroraSettings(BaseComputeSettings):
                         nodes_per_block=self.num_nodes,
                         account=self.account,
                         queue=self.queue,
+                        # Aurora PBS rejects jobs that do not declare the
+                        # filesystems they need; pass it (and any other #PBS
+                        # header lines) via scheduler_options.
+                        scheduler_options=self.scheduler_options,
                         walltime=self.walltime,
                     ),
                 ),

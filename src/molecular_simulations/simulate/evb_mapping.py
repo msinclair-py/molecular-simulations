@@ -470,6 +470,8 @@ def run_lambda_window(
     platform: str = 'CUDA',
     minimize: bool = True,
     seed: int | None = None,
+    init_state: PathLike | None = None,
+    out_state: PathLike | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Sample one mapping window and record the two diabatic energies.
 
@@ -477,6 +479,15 @@ def run_lambda_window(
     steps on the mapping potential V(lam). The energy gap V2 - V1 is the EVB
     reaction coordinate; recording V1 and V2 separately lets the analysis
     reweight to any target surface (diabatic or adiabatic).
+
+    Checkpointing (``init_state``/``out_state``): a single debug allocation cannot
+    equilibrate the stiff windows (the reactive crossing, the product endpoint),
+    so a window's sampling is extended across successive jobs. When ``init_state``
+    is given the context is restored from that serialized state (positions,
+    velocities, box) and minimization/equilibration are SKIPPED -- sampling
+    continues the existing trajectory. When ``out_state`` is given the final state
+    is serialized there for the next resume. The caller appends the returned
+    (v1, v2) to the window's accumulated samples (see :func:`_write_or_append_window`).
 
     Args:
         system: A dual-force-group system from :func:`build_mapping_system`.
@@ -486,32 +497,39 @@ def run_lambda_window(
         temperature: Temperature in K.
         friction: Langevin collision rate in 1/ps.
         dt: Timestep in ps (keep at 1 fs; the reactive bond is unconstrained).
-        n_equil: Equilibration steps (discarded).
+        n_equil: Equilibration steps (discarded; skipped when resuming).
         n_prod: Production steps.
         sample_interval: Steps between V1/V2 samples.
         platform: OpenMM platform name.
-        minimize: Whether to energy-minimize before equilibration.
+        minimize: Whether to energy-minimize before equilibration (fresh start only).
         seed: Random seed for the thermostat + initial velocities. Pass distinct
             seeds to generate independent replicas (see :func:`aggregate_replicas`);
             None draws a fresh nondeterministic seed each call.
+        init_state: Serialized OpenMM State to resume from (skips minimize/equil).
+        out_state: Path to serialize the final State to for a later resume.
 
     Returns:
-        ``(v1, v2)`` arrays of per-sample diabatic energies (kJ/mol).
+        ``(v1, v2)`` arrays of this segment's per-sample diabatic energies (kJ/mol).
     """
     integ = mapping_integrator(temperature, friction, dt, lam)
     if seed is not None:
         integ.setRandomNumberSeed(int(seed))
     context = mm.Context(system, integ, mm.Platform.getPlatformByName(platform))
-    if box_vectors is not None:
-        context.setPeriodicBoxVectors(*box_vectors)
-    context.setPositions(positions)
-    if minimize:
-        mm.LocalEnergyMinimizer.minimize(context, maxIterations=1000)
-    if seed is not None:
-        context.setVelocitiesToTemperature(temperature, int(seed))
+    if init_state is not None:
+        # Resume: restore positions/velocities/box and continue -- no minimize,
+        # no re-equilibration (the restored trajectory is already equilibrated).
+        context.setState(mm.XmlSerializer.deserialize(Path(init_state).read_text()))
     else:
-        context.setVelocitiesToTemperature(temperature)
-    integ.step(n_equil)
+        if box_vectors is not None:
+            context.setPeriodicBoxVectors(*box_vectors)
+        context.setPositions(positions)
+        if minimize:
+            mm.LocalEnergyMinimizer.minimize(context, maxIterations=1000)
+        if seed is not None:
+            context.setVelocitiesToTemperature(temperature, int(seed))
+        else:
+            context.setVelocitiesToTemperature(temperature)
+        integ.step(n_equil)
 
     n_samples = max(1, n_prod // sample_interval)
     v1 = np.empty(n_samples)
@@ -519,6 +537,10 @@ def run_lambda_window(
     for i in range(n_samples):
         integ.step(sample_interval)
         v1[i], v2[i] = diabatic_energies(context)
+
+    if out_state is not None:
+        final = context.getState(getPositions=True, getVelocities=True)
+        Path(out_state).write_text(mm.XmlSerializer.serialize(final))
     return v1, v2
 
 
@@ -999,6 +1021,25 @@ def _gap_observables(
 # ---------------------------------------------------------------------------
 
 
+def _write_or_append_window(
+    out_npz: PathLike, v1: np.ndarray, v2: np.ndarray, lam: float, append: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
+    """Write a window's (v1, v2) samples, or append them to an existing npz.
+
+    ``append`` (resume) concatenates the new segment onto the previously saved
+    samples so a window's statistics accumulate across jobs; the analysis then
+    sees one longer trajectory. Without an existing file, append is a no-op and
+    the samples are written fresh. Returns the (possibly concatenated) arrays.
+    """
+    out = Path(out_npz)
+    if append and out.exists():
+        prev = np.load(out)
+        v1 = np.concatenate([np.asarray(prev['v1']), np.asarray(v1)])
+        v2 = np.concatenate([np.asarray(prev['v2']), np.asarray(v2)])
+    np.savez(out, v1=v1, v2=v2, lam=lam)
+    return v1, v2
+
+
 @python_app
 def run_mapping_window(
     reactant_prmtop: str,
@@ -1023,19 +1064,32 @@ def run_mapping_window(
     soft_core: bool = False,
     sc_alpha: float = 0.5,
     seed: int | None = None,
+    resume: bool = False,
 ) -> str:
     """Parsl app: sample one mapping window and save (v1, v2) to ``out_npz``.
 
     Separate module-level app for serialization; rebuilds the dual-force-group
     system on the worker so only file paths cross the wire.
+
+    With ``resume=True``, if a prior segment left a checkpoint (``<out_npz>``
+    without extension + ``_state.xml``) the window continues from it and the new
+    samples are appended to the existing npz; otherwise it starts fresh. The
+    final state is always serialized so the next job can resume again.
     """
-    import numpy as np
+    import os
+
     from openmm import app
 
     from molecular_simulations.simulate.evb_mapping import (
+        _write_or_append_window,
         build_mapping_system,
         run_lambda_window,
     )
+
+    state_path = (
+        out_npz[:-4] + '_state.xml' if out_npz.endswith('.npz') else out_npz + '.state'
+    )
+    resuming = resume and os.path.exists(state_path) and os.path.exists(out_npz)
 
     inp = app.AmberInpcrdFile(coord_file)
     system = build_mapping_system(
@@ -1064,8 +1118,10 @@ def run_mapping_window(
         sample_interval=sample_interval,
         platform=platform,
         seed=seed,
+        init_state=state_path if resuming else None,
+        out_state=state_path,
     )
-    np.savez(out_npz, v1=v1, v2=v2, lam=lam)
+    _write_or_append_window(out_npz, v1, v2, lam, append=resuming)
     return out_npz
 
 
@@ -1189,7 +1245,7 @@ class EVBMapping:
             )
         return seq
 
-    def run(self, seed: int | None = None) -> list[str]:
+    def run(self, seed: int | None = None, resume: bool = False) -> list[str]:
         """Distribute the windows and wait for all to finish.
 
         Requires parsl to already be loaded by the caller (see the class
@@ -1200,6 +1256,10 @@ class EVBMapping:
                 are independent yet reproducible; pass distinct base seeds (with
                 distinct ``out_path``\\ s) to generate replicas for
                 :func:`aggregate_replicas`. None = nondeterministic.
+            resume: Continue windows from their saved checkpoints and append the
+                new samples to the existing per-window npz, rather than starting
+                fresh. Point at the same ``out_path`` across successive jobs to
+                accumulate sampling in the slow windows past a single walltime.
 
         Returns:
             The per-window npz paths (window order = lambda order).
@@ -1233,6 +1293,7 @@ class EVBMapping:
                     self.soft_core,
                     self.sc_alpha,
                     win_seed,
+                    resume,
                 )
             )
         for fut in futures:

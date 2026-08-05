@@ -156,6 +156,20 @@ def parse_args() -> argparse.Namespace:
         help='PBS filesystems resource -- Aurora rejects jobs that do not declare it.',
     )
     p.add_argument(
+        '--retries',
+        type=int,
+        default=2,
+        help='Parsl task retries -- a lost worker (e.g. a transient node blip) '
+        'reruns its window on a fresh worker instead of aborting the whole run.',
+    )
+    p.add_argument(
+        '--resume',
+        action='store_true',
+        help='Continue each window from its saved checkpoint in --out and append '
+        'the new samples, instead of starting fresh. Re-run with the same --out '
+        'across debug jobs to accumulate sampling in the slow windows.',
+    )
+    p.add_argument(
         '--worker-init',
         default='',
         help='Shell run on each worker before the app (activate your OpenMM env, module loads).',
@@ -223,6 +237,7 @@ def main() -> None:
         walltime=args.walltime,
         num_nodes=args.nodes,
         available_accelerators=[str(i) for i in range(args.accelerators)],
+        retries=args.retries,
         # Aurora PBS requires an explicit filesystems resource on every job.
         scheduler_options=f'#PBS -l filesystems={args.filesystems}',
         worker_init=args.worker_init,
@@ -253,7 +268,9 @@ def main() -> None:
                 soft_core=not args.no_soft_core,
                 sc_alpha=args.sc_alpha,
             )
-            evb.run(seed=args.seed + r)  # window i -> (seed+r)*1000 + i
+            evb.run(
+                seed=args.seed + r, resume=args.resume
+            )  # window i -> (seed+r)*1000 + i
             mappers.append(evb)
             print(f'[wt-barrier] replica {r} sampling complete', flush=True)
     parsl.clear()

@@ -536,3 +536,36 @@ class TestPerWindowSampling:
     def test_wrong_length_sequence_raises(self, tmp_path):
         with pytest.raises(ValueError, match='lambda windows'):
             self._mapping(tmp_path, n_prod=[10, 20])
+
+
+class TestCheckpointAppend:
+    """_write_or_append_window accumulates samples across resumes."""
+
+    def _fn(self):
+        from molecular_simulations.simulate.evb_mapping import (
+            _write_or_append_window,
+        )
+
+        return _write_or_append_window
+
+    def test_fresh_write(self, tmp_path):
+        p = tmp_path / 'window0.npz'
+        self._fn()(p, np.arange(5.0), np.arange(5.0) + 1, 0.3, append=False)
+        d = np.load(p)
+        assert len(d['v1']) == 5
+        assert float(d['lam']) == pytest.approx(0.3)
+
+    def test_append_concatenates_onto_existing(self, tmp_path):
+        p = tmp_path / 'window0.npz'
+        fn = self._fn()
+        fn(p, np.zeros(3), np.ones(3), 0.5, append=False)
+        _, v2 = fn(p, np.full(2, 9.0), np.full(2, 8.0), 0.5, append=True)
+        d = np.load(p)
+        assert len(d['v1']) == 5
+        assert list(d['v1']) == [0, 0, 0, 9, 9]
+        assert list(v2) == [1, 1, 1, 8, 8]
+
+    def test_append_without_existing_writes_fresh(self, tmp_path):
+        p = tmp_path / 'window0.npz'
+        self._fn()(p, np.zeros(3), np.ones(3), 0.5, append=True)
+        assert len(np.load(p)['v1']) == 3

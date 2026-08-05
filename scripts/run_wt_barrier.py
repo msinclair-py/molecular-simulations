@@ -84,6 +84,19 @@ def parse_args() -> argparse.Namespace:
         action='store_true',
         help='Evenly spaced windows instead of the default endpoint-dense (cosine) schedule.',
     )
+    p.add_argument(
+        '--crossing-dense',
+        action='store_true',
+        help='Schedule dense at both endpoints AND the crossing (--lam-cross), so '
+        'the barrier region -- where adjacent-window overlap is weakest -- is well '
+        'tiled. Overrides the default endpoint-dense schedule.',
+    )
+    p.add_argument(
+        '--lam-cross',
+        type=float,
+        default=0.5,
+        help='Crossing lambda to densify with --crossing-dense.',
+    )
     # -- sampling -----------------------------------------------------------
     p.add_argument(
         '--replicas', type=int, default=3, help='Independent seeded replicas.'
@@ -185,6 +198,7 @@ def make_schedule(args: argparse.Namespace) -> np.ndarray:
     for per-mutant screening.
     """
     from molecular_simulations.simulate.evb_mapping import (
+        crossing_dense_schedule,
         default_lambda_schedule,
         endpoint_dense_schedule,
     )
@@ -192,6 +206,10 @@ def make_schedule(args: argparse.Namespace) -> np.ndarray:
     if args.uniform:
         lams = default_lambda_schedule(args.n_windows)
         return args.lam_min + (args.lam_max - args.lam_min) * lams
+    if args.crossing_dense:
+        return crossing_dense_schedule(
+            args.n_windows, args.lam_min, args.lam_max, args.lam_cross
+        )
     return endpoint_dense_schedule(args.n_windows, args.lam_min, args.lam_max)
 
 

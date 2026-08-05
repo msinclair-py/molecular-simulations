@@ -432,6 +432,47 @@ def endpoint_dense_schedule(
     return lam_min + (lam_max - lam_min) * x
 
 
+def crossing_dense_schedule(
+    n_windows: int,
+    lam_min: float = 0.0,
+    lam_max: float = 1.0,
+    lam_cross: float = 0.5,
+) -> np.ndarray:
+    """Cosine-spaced windows dense at BOTH endpoints AND the crossing lam_cross.
+
+    :func:`endpoint_dense_schedule` clusters windows only at the two ends, which
+    leaves the reactive crossing -- where the diabatic gap changes fastest and
+    adjacent-window overlap is empirically weakest -- sparsely tiled, so BAR steps
+    across the barrier are the least converged. Splitting the range at
+    ``lam_cross`` and endpoint-densifying each half places clusters at
+    ``lam_min``, ``lam_cross`` and ``lam_max``, giving the barrier region the
+    resolution the basins already get.
+
+    Args:
+        n_windows: Total number of windows (>= 3).
+        lam_min: Reactant-side endpoint (default 0.0).
+        lam_max: Product-side endpoint (default 1.0).
+        lam_cross: Crossing to densify around, strictly inside the range.
+
+    Returns:
+        Increasing lambda values in ``[lam_min, lam_max]`` (inclusive), with
+        ``n_windows`` entries (the shared ``lam_cross`` point is not duplicated).
+
+    Raises:
+        ValueError: If ``lam_cross`` is not strictly inside ``(lam_min, lam_max)``.
+    """
+    if not lam_min < lam_cross < lam_max:
+        raise ValueError(
+            f'lam_cross={lam_cross} must lie strictly inside ({lam_min}, {lam_max}).'
+        )
+    # +1 in each half so the shared lam_cross endpoint dedupes back to n_windows.
+    n_lo = n_windows // 2 + 1
+    n_hi = n_windows - n_lo + 1
+    lo = endpoint_dense_schedule(n_lo, lam_min, lam_cross)
+    hi = endpoint_dense_schedule(n_hi, lam_cross, lam_max)
+    return np.unique(np.concatenate([lo, hi]))
+
+
 def ground_state_energy(v1: np.ndarray, v2: np.ndarray, h12: float) -> np.ndarray:
     """Adiabatic ground-state energy from two diabats and a constant coupling.
 

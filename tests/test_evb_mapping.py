@@ -20,6 +20,7 @@ from molecular_simulations.simulate.evb_mapping import (
     analyze_gap,
     bar,
     calibrate_evb,
+    crossing_dense_schedule,
     ddg_barrier,
     default_lambda_schedule,
     endpoint_dense_schedule,
@@ -536,6 +537,28 @@ class TestPerWindowSampling:
     def test_wrong_length_sequence_raises(self, tmp_path):
         with pytest.raises(ValueError, match='lambda windows'):
             self._mapping(tmp_path, n_prod=[10, 20])
+
+
+class TestCrossingDenseSchedule:
+    """Dense at both endpoints AND the crossing, unlike endpoint_dense."""
+
+    def test_count_endpoints_and_monotonic(self):
+        s = crossing_dense_schedule(12, 0.0, 1.0, 0.5)
+        assert len(s) == 12
+        assert s[0] == pytest.approx(0.0)
+        assert s[-1] == pytest.approx(1.0)
+        assert np.all(np.diff(s) > 0)  # strictly increasing (no dup crossing)
+        assert np.isclose(s, 0.5).any()  # crossing point present
+
+    def test_denser_at_crossing_than_endpoint_only(self):
+        band = lambda s: int(np.sum((s >= 0.35) & (s <= 0.65)))  # noqa: E731
+        cross = crossing_dense_schedule(20, 0.0, 1.0, 0.5)
+        endp = endpoint_dense_schedule(20, 0.0, 1.0)
+        assert band(cross) > band(endp)
+
+    def test_invalid_crossing_raises(self):
+        with pytest.raises(ValueError, match='strictly inside'):
+            crossing_dense_schedule(10, 0.0, 1.0, 1.5)
 
 
 class TestCheckpointAppend:

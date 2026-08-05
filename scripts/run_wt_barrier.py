@@ -164,7 +164,18 @@ def parse_args() -> argparse.Namespace:
         '--n-bins', type=int, default=50, help='Energy-gap bins for the PMF.'
     )
     # -- Aurora / PBS -------------------------------------------------------
-    p.add_argument('--account', required=True, help='PBS project/allocation.')
+    p.add_argument(
+        '--local',
+        action='store_true',
+        help='Run parsl on the nodes of an ALREADY-allocated PBS job (in-allocation '
+        'LocalProvider) instead of qsub-ing a block. Use when this driver is itself '
+        'launched inside a qsub job, so its OpenMM cold-import and orchestration run '
+        'on the (uncontended) allocation head node, not the login node. '
+        '--account/--queue/--walltime/--filesystems are then unused.',
+    )
+    p.add_argument(
+        '--account', default=None, help='PBS project/allocation (block mode).'
+    )
     p.add_argument('--queue', default='debug', help='PBS queue.')
     p.add_argument('--walltime', default='01:00:00', help='PBS walltime HH:MM:SS.')
     p.add_argument(
@@ -274,24 +285,39 @@ def main() -> None:
         flush=True,
     )
 
-    # This driver owns the parsl DFK (see EVBMapping docstring). One block of
-    # `--nodes` Aurora nodes, 12 windows/node concurrently across the GPU tiles.
+    # This driver owns the parsl DFK (see EVBMapping docstring). Either qsub a
+    # block of `--nodes` Aurora nodes, or -- with --local -- run on the nodes an
+    # enclosing PBS job already holds (keeps the cold-import off the login node).
     import parsl
 
-    from molecular_simulations.utils.parsl_settings import AuroraSettings
+    accels = [str(i) for i in range(args.accelerators)]
+    if args.local:
+        from molecular_simulations.utils.parsl_settings import AuroraLocalSettings
 
-    settings = AuroraSettings(
-        account=args.account,
-        queue=args.queue,
-        walltime=args.walltime,
-        num_nodes=args.nodes,
-        available_accelerators=[str(i) for i in range(args.accelerators)],
-        retries=args.retries,
-        # Aurora PBS requires an explicit filesystems resource on every job.
-        scheduler_options=f'#PBS -l filesystems={args.filesystems}',
-        worker_init=args.worker_init,
-    )
-    parsl_cfg = settings.config_factory(str(out / 'runinfo'))
+        settings = AuroraLocalSettings(
+            available_accelerators=accels,
+            nodes=args.nodes,
+            retries=args.retries,
+            worker_init=args.worker_init,
+        )
+        parsl_cfg = settings.config_factory(str(out))
+    else:
+        if not args.account:
+            raise SystemExit('--account is required unless --local.')
+        from molecular_simulations.utils.parsl_settings import AuroraSettings
+
+        settings = AuroraSettings(
+            account=args.account,
+            queue=args.queue,
+            walltime=args.walltime,
+            num_nodes=args.nodes,
+            available_accelerators=accels,
+            retries=args.retries,
+            # Aurora PBS requires an explicit filesystems resource on every job.
+            scheduler_options=f'#PBS -l filesystems={args.filesystems}',
+            worker_init=args.worker_init,
+        )
+        parsl_cfg = settings.config_factory(str(out / 'runinfo'))
 
     mappers: list[EVBMapping] = []
     with parsl.load(parsl_cfg):

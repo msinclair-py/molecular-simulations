@@ -111,6 +111,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         '--n-prod', type=int, default=500000, help='Production steps/window (1 fs).'
     )
+    p.add_argument(
+        '--deep-factor',
+        type=float,
+        default=1.0,
+        help='Multiply --n-prod for the stiff windows (lambda >= --deep-lam: the '
+        'crossing and product endpoint, which mix slowest and drive the dG_rxn / '
+        'dG_barrier scatter). 1.0 = uniform. Windows below the threshold keep '
+        '--n-prod, so a resume job spends its budget where it is needed.',
+    )
+    p.add_argument(
+        '--deep-lam',
+        type=float,
+        default=0.3,
+        help='Lambda at/above which a window gets the --deep-factor budget.',
+    )
     p.add_argument('--sample-interval', type=int, default=100)
     p.add_argument(
         '--platform',
@@ -235,11 +250,27 @@ def main() -> None:
         )
 
     lambdas = make_schedule(args)
+    # Per-window production budget: stiff windows (crossing + product endpoint,
+    # lambda >= deep_lam) get deep_factor x the steps; the fast basin windows keep
+    # the baseline. A scalar when deep_factor == 1 (uniform).
+    if args.deep_factor != 1.0:
+        deep = round(args.n_prod * args.deep_factor)
+        n_prod = [deep if lam >= args.deep_lam else args.n_prod for lam in lambdas]
+        n_deep = sum(lam >= args.deep_lam for lam in lambdas)
+    else:
+        n_prod = args.n_prod
+        n_deep = 0
+
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     print(
         f'[wt-barrier] {len(lambdas)} windows lambda={lambdas[0]:.3f}..{lambdas[-1]:.3f} '
-        f'x {args.replicas} replicas; donor={donor} acceptor={acceptor} reactive={reactive}',
+        f'x {args.replicas} replicas; donor={donor} acceptor={acceptor} reactive={reactive}'
+        + (
+            f'; {n_deep} deep windows (lambda>={args.deep_lam}) x{args.deep_factor} n_prod'
+            if n_deep
+            else ''
+        ),
         flush=True,
     )
 
@@ -273,7 +304,7 @@ def main() -> None:
                 lambdas=lambdas,
                 temperature=args.temperature,
                 n_equil=args.n_equil,
-                n_prod=args.n_prod,
+                n_prod=n_prod,
                 sample_interval=args.sample_interval,
                 platform=args.platform,
                 nonbonded_cutoff=args.nonbonded_cutoff,

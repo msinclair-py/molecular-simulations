@@ -14,6 +14,7 @@ from molecular_simulations.simulate.evb_mapping import (
     BARConvergenceWarning,
     EVBCalibration,
     EVBGapResult,
+    EVBMapping,
     GapSamplingWarning,
     aggregate_replicas,
     analyze_gap,
@@ -508,3 +509,30 @@ class TestEVBMappingAnalyze:
         res = evb.analyze(h12=0.0, n_bins=40)
         assert isinstance(res, EVBGapResult)
         assert res.dG_rxn == pytest.approx(0.0, abs=3.0)
+
+
+class TestPerWindowSampling:
+    """n_equil/n_prod may be a scalar (broadcast) or one value per window."""
+
+    def _mapping(self, tmp_path, **kw):
+        return EVBMapping(
+            reactant_prmtop=tmp_path / 'r.prmtop',
+            product_prmtop=tmp_path / 'p.prmtop',
+            coordinates=tmp_path / 'c.inpcrd',
+            out_path=tmp_path / 'windows',
+            n_windows=4,
+            **kw,
+        )
+
+    def test_scalar_broadcasts_to_every_window(self, tmp_path):
+        evb = self._mapping(tmp_path, n_equil=500, n_prod=1000)
+        assert evb.n_equil == [500, 500, 500, 500]
+        assert evb.n_prod == [1000, 1000, 1000, 1000]
+
+    def test_per_window_sequence_preserved(self, tmp_path):
+        evb = self._mapping(tmp_path, n_prod=[10, 20, 30, 40])
+        assert evb.n_prod == [10, 20, 30, 40]
+
+    def test_wrong_length_sequence_raises(self, tmp_path):
+        with pytest.raises(ValueError, match='lambda windows'):
+            self._mapping(tmp_path, n_prod=[10, 20])

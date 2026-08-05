@@ -37,11 +37,15 @@ import copy
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import openmm as mm
 from openmm import app, unit
 from parsl import python_app
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 PathLike = str | Path
 
@@ -1096,8 +1100,8 @@ class EVBMapping:
         temperature: Temperature in K.
         friction: Langevin collision rate in 1/ps.
         dt: Timestep in ps (1 fs; the reactive bond is unconstrained).
-        n_equil: Equilibration steps per window.
-        n_prod: Production steps per window.
+        n_equil: Equilibration steps -- a scalar (all windows) or one per window.
+        n_prod: Production steps -- a scalar (all windows) or one per window.
         sample_interval: Steps between V1/V2 samples.
         platform: OpenMM platform name.
         nonbonded_cutoff: PME real-space cutoff in nm.
@@ -1114,8 +1118,8 @@ class EVBMapping:
         temperature: float = 300.0,
         friction: float = 1.0,
         dt: float = 0.001,
-        n_equil: int = 20000,
-        n_prod: int = 200000,
+        n_equil: int | Sequence[int] = 20000,
+        n_prod: int | Sequence[int] = 200000,
         sample_interval: int = 100,
         platform: str = 'CUDA',
         nonbonded_cutoff: float = 1.0,
@@ -1135,6 +1139,13 @@ class EVBMapping:
         which is required for the diabatic energy gap to stay bounded. Set
         ``soft_core=True`` to also bound the reactive atom's endpoint nonbonded
         clash (needed to sample the reactant basin near lambda=0 cleanly).
+
+        ``n_equil``/``n_prod`` accept either a scalar (same for every window) or a
+        per-window sequence (one value per lambda). A per-window budget lets the
+        stiff, slow-mixing windows -- the reactive crossing and the product
+        endpoint, where the diabatic gap is largest and least equilibrated -- get
+        proportionally more sampling than the well-behaved basin windows, instead
+        of paying that cost uniformly.
         """
         self.reactant_prmtop = str(Path(reactant_prmtop).resolve())
         self.product_prmtop = str(Path(product_prmtop).resolve())
@@ -1158,11 +1169,25 @@ class EVBMapping:
         self.temperature = temperature
         self.friction = friction
         self.dt = dt
-        self.n_equil = n_equil
-        self.n_prod = n_prod
+        # int -> same budget every window; sequence -> one entry per lambda.
+        self.n_equil = self._per_window(n_equil, 'n_equil')
+        self.n_prod = self._per_window(n_prod, 'n_prod')
         self.sample_interval = sample_interval
         self.platform = platform
         self.nonbonded_cutoff = nonbonded_cutoff
+
+    def _per_window(self, value: int | Sequence[int], name: str) -> list[int]:
+        """Broadcast a scalar step count to every window, or validate a sequence."""
+        n = len(self.lambdas)
+        if isinstance(value, (int, np.integer)):
+            return [int(value)] * n
+        seq = [int(v) for v in value]
+        if len(seq) != n:
+            raise ValueError(
+                f'{name} has {len(seq)} entries but there are {n} lambda windows; '
+                'pass a single int or exactly one value per window.'
+            )
+        return seq
 
     def run(self, seed: int | None = None) -> list[str]:
         """Distribute the windows and wait for all to finish.
@@ -1194,8 +1219,8 @@ class EVBMapping:
                     self.temperature,
                     self.friction,
                     self.dt,
-                    self.n_equil,
-                    self.n_prod,
+                    self.n_equil[i],
+                    self.n_prod[i],
                     self.sample_interval,
                     self.platform,
                     self.nonbonded_cutoff,

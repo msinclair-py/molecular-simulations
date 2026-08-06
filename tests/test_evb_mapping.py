@@ -487,6 +487,65 @@ class TestSoftCore:
         )
         assert e_sc == pytest.approx(4.0, abs=0.5)
 
+    def test_coulomb_soft_core_bounds_charged_clash(self):
+        """With sc_beta > 0 the flip pair's Coulomb is softened too: the exception
+        chargeProd is zeroed and the contact energy stays finite instead of ~1/r."""
+        import openmm as mm
+        from openmm import unit
+
+        from molecular_simulations.simulate.evb_mapping import (
+            ONE_4PI_EPS0,
+            _soft_core_reactive_pairs,
+        )
+
+        system = mm.System()
+        system.addParticle(1.0)
+        system.addParticle(1.0)
+        system.setDefaultPeriodicBoxVectors(
+            mm.Vec3(5, 0, 0) * unit.nanometer,
+            mm.Vec3(0, 5, 0) * unit.nanometer,
+            mm.Vec3(0, 0, 5) * unit.nanometer,
+        )
+        nb = mm.NonbondedForce()
+        nb.setNonbondedMethod(mm.NonbondedForce.CutoffPeriodic)
+        nb.setCutoffDistance(1.0 * unit.nanometer)
+        nb.addParticle(0.8, 0.3, 0.5)
+        nb.addParticle(-1.0, 0.3, 0.5)
+        # reconcile adds the exception carrying the real interaction (chargeProd,
+        # sigma, epsilon); chargeProd = q_i*q_j = -0.8 e^2.
+        nb.addException(0, 1, -0.8, 0.3, 0.5)
+        system.addForce(nb)
+
+        sc_beta = 0.0025
+        _soft_core_reactive_pairs(
+            system, nb, reactive=0, pairs=[(0, 1)], sc_alpha=0.5, sc_beta=sc_beta
+        )
+
+        # both the exception's LJ and its Coulomb are zeroed (pure exclusion)...
+        _, _, q, _, eps = nb.getExceptionParameters(0)
+        assert q.value_in_unit(unit.elementary_charge**2) == pytest.approx(0.0)
+        assert eps.value_in_unit(unit.kilojoule_per_mole) == pytest.approx(0.0)
+
+        cbfs = [f for f in system.getForces() if isinstance(f, mm.CustomBondForce)]
+        assert len(cbfs) == 1
+        cbfs[0].setForceGroup(5)
+
+        ctx = mm.Context(
+            system, mm.VerletIntegrator(1e-3), mm.Platform.getPlatform('Reference')
+        )
+        # At contact a bare Coulomb -0.8*ke/r would diverge; soft-core plateaus at
+        # ke*chargeProd/sqrt(sc_beta) for the Coulomb part, plus the bounded LJ.
+        ctx.setPositions([mm.Vec3(0, 0, 0), mm.Vec3(0.0, 0, 0)] * unit.nanometer)
+        e_contact = (
+            ctx.getState(getEnergy=True, groups={5})
+            .getPotentialEnergy()
+            .value_in_unit(unit.kilojoule_per_mole)
+        )
+        coul_plateau = ONE_4PI_EPS0 * (-0.8) / sc_beta**0.5
+        lj_plateau = 4 * 0.5 * (1 / 0.5**2 - 1 / 0.5)  # 4 kJ/mol
+        assert e_contact == pytest.approx(coul_plateau + lj_plateau, abs=1.0)
+        assert np.isfinite(e_contact)
+
 
 class TestEVBMappingAnalyze:
     def test_reads_windows_and_reduces(self, tmp_path):

@@ -69,7 +69,6 @@ def build_mapping_system(
     nonbonded_cutoff: float = 1.0,
     soft_core: bool = False,
     sc_alpha: float = 0.5,
-    sc_beta: float = 0.0,
 ) -> mm.System:
     """Combine two diabatic AMBER topologies into one dual-force-group System.
 
@@ -109,12 +108,6 @@ def build_mapping_system(
             in that diabat (the Morse bond only bounds the *bonded* term). Opt-in
             prototype; off by default preserves the exact prior behaviour.
         sc_alpha: Soft-core offset (fraction of sigma^6); larger = softer plateau.
-        sc_beta: Coulomb soft-core offset in nm^2 (electrostatic endpoint fix). When
-            > 0, the flip pairs' Coulomb is also softened -- ``ke*q_iq_j /
-            sqrt(r^2 + sc_beta)`` -- so the diabatic energy gap stays finite as the
-            transferring atom approaches its non-bonded partner (LJ soft-core alone
-            leaves a steep ~1/r Coulomb term that still drives the product-endpoint
-            gap variance). 0 keeps Coulomb hard (LJ-only prototype behaviour).
 
     Returns:
         An OpenMM System whose group-1 energy is V1 and group-2 energy is V2.
@@ -167,12 +160,8 @@ def build_mapping_system(
         # just added. Keeps the diabatic energy finite at the endpoints (the
         # Morse bond only bounds the bonded reactive term). Prototype; opt-in.
         if soft_core and reactive is not None:
-            _soft_core_reactive_pairs(
-                react, nb_react, reactive, added_react, sc_alpha, sc_beta
-            )
-            _soft_core_reactive_pairs(
-                prod, nb_prod, reactive, added_prod, sc_alpha, sc_beta
-            )
+            _soft_core_reactive_pairs(react, nb_react, reactive, added_react, sc_alpha)
+            _soft_core_reactive_pairs(prod, nb_prod, reactive, added_prod, sc_alpha)
 
     # Reactant forces -> group 1.
     for force in react.getForces():
@@ -259,19 +248,14 @@ def _reconcile_exceptions(
     return added[id(nb_a)], added[id(nb_b)]
 
 
-#: OpenMM Coulomb constant 1/(4*pi*eps0) in kJ*nm/(mol*e^2).
-ONE_4PI_EPS0 = 138.935456
-
-
 def _soft_core_reactive_pairs(
     system: mm.System,
     nb: mm.NonbondedForce,
     reactive: int,
     pairs: list[tuple[int, int]],
     sc_alpha: float,
-    sc_beta: float = 0.0,
 ) -> None:
-    """Soft-core the LJ (and optionally Coulomb) of reactive-atom pairs (prototype).
+    """Soft-core the LJ of the given reactive-atom nonbonded pairs (prototype).
 
     The two-topology diabatic energy explodes at the endpoints because the
     transferring atom sits ~1 Angstrom from a partner it is *not* bonded to in
@@ -282,34 +266,17 @@ def _soft_core_reactive_pairs(
         V_sc(r) = 4 eps (u^2 - u),   u = sigma^6 / (sc_alpha*sigma^6 + r^6),
 
     which -> the true LJ at large r but plateaus at ``4 eps (1/sc_alpha^2 -
-    1/sc_alpha)`` as r -> 0.
-
-    **Electrostatic endpoint fix (``sc_beta > 0``).** LJ soft-core alone leaves the
-    pair's Coulomb as a bare ``ke*q_iq_j / r``, which is still steep near contact
-    and (for the charged transferring atom) is what keeps the product-endpoint gap
-    variance large. When ``sc_beta > 0`` the Coulomb is likewise moved into the
-    CustomBondForce and softened,
-
-        V_coul,sc(r) = ke * q_iq_j / sqrt(r^2 + sc_beta),
-
-    which -> the true ``ke*q_iq_j/r`` at large r but plateaus at
-    ``ke*q_iq_j / sqrt(sc_beta)`` as r -> 0, so the whole flip-pair interaction is
-    bounded. The exception's Coulomb chargeProd is zeroed in the NonbondedForce and
-    carried as a per-bond parameter here instead.
-
+    1/sc_alpha)`` as r -> 0. Coulomb on the pair is left intact (small; ~r^-1).
     Only the handful of flip pairs from :func:`_reconcile_exceptions` are touched,
-    so the physical basins (where these pairs are at normal range, u ~ (sigma/r)^6
-    and sqrt(r^2+sc_beta) ~ r) are essentially unchanged.
+    so the physical basins (where these pairs are at normal range, u ~ (sigma/r)^6)
+    are essentially unchanged.
 
     Args:
         system: System to add the soft-core CustomBondForce to (its own group).
-        nb: The diabat's NonbondedForce (its exception LJ -- and, when
-            ``sc_beta > 0``, Coulomb -- is zeroed in place).
+        nb: The diabat's NonbondedForce (its exception LJ is zeroed in place).
         reactive: Transferring atom index (pairs not involving it are ignored).
         pairs: Candidate (i, j) pairs (the reconcile-added flip pairs).
-        sc_alpha: LJ soft-core offset (nm^6 fraction of sigma^6); larger = softer.
-        sc_beta: Coulomb soft-core offset in nm^2; larger = softer. 0 leaves the
-            pair's Coulomb hard (LJ-only prototype behaviour).
+        sc_alpha: Soft-core offset (nm^6 fraction of sigma^6); larger = softer.
     """
     pairs = [(i, j) for (i, j) in pairs if reactive in (i, j)]
     if not pairs:
@@ -320,15 +287,10 @@ def _soft_core_reactive_pairs(
         i, j, *_ = nb.getExceptionParameters(k)
         by_pair[frozenset((i, j))] = k
 
-    soften_coul = sc_beta > 0.0
-    lj = '4*epsilon*(u*u - u); u = s6/(sc_alpha*s6 + r6); s6 = sigma^6; r6 = r^6'
-    expr = f'ke*chargeProd/sqrt(r*r + sc_beta) + {lj}' if soften_coul else lj
-    cbf = mm.CustomBondForce(expr)
+    cbf = mm.CustomBondForce(
+        '4*epsilon*(u*u - u); u = s6/(sc_alpha*s6 + r6); s6 = sigma^6; r6 = r^6'
+    )
     cbf.addGlobalParameter('sc_alpha', sc_alpha)
-    if soften_coul:
-        cbf.addGlobalParameter('sc_beta', sc_beta)
-        cbf.addGlobalParameter('ke', ONE_4PI_EPS0)
-        cbf.addPerBondParameter('chargeProd')
     cbf.addPerBondParameter('sigma')
     cbf.addPerBondParameter('epsilon')
 
@@ -339,19 +301,12 @@ def _soft_core_reactive_pairs(
             continue
         i, j, q, s, e = nb.getExceptionParameters(k)
         eps = e.value_in_unit(unit.kilojoule_per_mole)
-        qprod = q.value_in_unit(unit.elementary_charge**2)
-        # Nothing to soften if this is a pure exclusion (no LJ) and either Coulomb
-        # is being left hard or the pair carries no charge.
-        if eps <= 0.0 and not (soften_coul and qprod != 0.0):
-            continue
-        # Strip the hard LJ (always) and Coulomb (when softening it) from the
-        # exception; re-add them soft-cored in the CustomBondForce.
-        new_q = 0.0 * unit.elementary_charge**2 if soften_coul else q
-        nb.setExceptionParameters(k, i, j, new_q, s, 0.0 * unit.kilojoule_per_mole)
-        params = [s.value_in_unit(unit.nanometer), eps]
-        if soften_coul:
-            params = [qprod, *params]  # order matches chargeProd, sigma, epsilon
-        cbf.addBond(i, j, params)
+        if eps <= 0.0:
+            continue  # pure exclusion / no LJ to soften
+        # Strip the hard LJ from the exception (keep its Coulomb chargeProd)...
+        nb.setExceptionParameters(k, i, j, q, s, 0.0 * unit.kilojoule_per_mole)
+        # ...and re-add it soft-cored.
+        cbf.addBond(i, j, [s.value_in_unit(unit.nanometer), eps])
         n_added += 1
 
     if n_added:
@@ -1149,7 +1104,6 @@ def run_mapping_window(
     r0: float,
     soft_core: bool = False,
     sc_alpha: float = 0.5,
-    sc_beta: float = 0.0,
     seed: int | None = None,
     resume: bool = False,
 ) -> str:
@@ -1191,7 +1145,6 @@ def run_mapping_window(
         nonbonded_cutoff=nonbonded_cutoff,
         soft_core=soft_core,
         sc_alpha=sc_alpha,
-        sc_beta=sc_beta,
     )
     v1, v2 = run_lambda_window(
         system,
@@ -1275,7 +1228,6 @@ class EVBMapping:
         r0: float = 0.097,
         soft_core: bool = False,
         sc_alpha: float = 0.5,
-        sc_beta: float = 0.0,
     ):
         """Initialize the EVBMapping orchestrator.
 
@@ -1283,10 +1235,7 @@ class EVBMapping:
         evb_meta.json) trigger Morse-ification of each state's reactive bond,
         which is required for the diabatic energy gap to stay bounded. Set
         ``soft_core=True`` to also bound the reactive atom's endpoint nonbonded
-        clash (needed to sample the reactant basin near lambda=0 cleanly); pass
-        ``sc_beta > 0`` to additionally soften those pairs' Coulomb (the
-        electrostatic endpoint fix), which bounds the product-endpoint gap
-        variance that LJ soft-core alone leaves behind.
+        clash (needed to sample the reactant basin near lambda=0 cleanly).
 
         ``n_equil``/``n_prod`` accept either a scalar (same for every window) or a
         per-window sequence (one value per lambda). A per-window budget lets the
@@ -1308,7 +1257,6 @@ class EVBMapping:
         self.r0 = r0
         self.soft_core = soft_core
         self.sc_alpha = sc_alpha
-        self.sc_beta = sc_beta
 
         self.lambdas = (
             default_lambda_schedule(n_windows)
@@ -1385,7 +1333,6 @@ class EVBMapping:
                     self.r0,
                     self.soft_core,
                     self.sc_alpha,
-                    self.sc_beta,
                     win_seed,
                     resume,
                 )

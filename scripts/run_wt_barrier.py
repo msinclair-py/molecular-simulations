@@ -141,14 +141,7 @@ def parse_args() -> argparse.Namespace:
         '--sc-alpha',
         type=float,
         default=0.5,
-        help='LJ soft-core offset (larger = softer).',
-    )
-    p.add_argument(
-        '--sc-beta',
-        type=float,
-        default=0.0025,
-        help='Coulomb soft-core offset in nm^2 (electrostatic endpoint fix); '
-        '0 leaves flip-pair Coulomb hard.',
+        help='Soft-core offset (larger = softer).',
     )
     # -- Morse reactive bond (must match the build) -------------------------
     p.add_argument(
@@ -349,7 +342,6 @@ def main() -> None:
                 r0=args.r0,
                 soft_core=not args.no_soft_core,
                 sc_alpha=args.sc_alpha,
-                sc_beta=args.sc_beta,
             )
             evb.run(
                 seed=args.seed + r, resume=args.resume
@@ -370,9 +362,6 @@ def main() -> None:
         'lambda_max': float(lambdas[-1]),
         'replicas': int(args.replicas),
         'h12': 0.0,
-        'soft_core': not args.no_soft_core,
-        'sc_alpha': float(args.sc_alpha),
-        'sc_beta': float(args.sc_beta),
         'aggregate': agg,
         'per_replica': [
             {'dG_rxn': float(r.dG_rxn), 'dG_barrier': float(r.dG_barrier)}

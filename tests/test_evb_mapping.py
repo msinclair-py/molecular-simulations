@@ -367,6 +367,45 @@ class TestCalibrate:
         assert res.dG_rxn == pytest.approx(cal.dG_rxn, abs=0.5)
         assert res.dG_barrier == pytest.approx(cal.dG_barrier, abs=0.5)
 
+    def test_alpha_only_defers_h12(self):
+        """dG_barrier_ref=None calibrates alpha alone and keeps H12=0 (the diabatic
+        upper bound), converging on the dG_rxn match -- for when the barrier
+        reference (kcat) is not yet in hand."""
+        lams, v1s, v2s = _marcus_windows(13)
+        cal = calibrate_evb(lams, v1s, v2s, dG_rxn_ref=-18.0, n_bins=60, tol=1.0)
+        assert cal.converged
+        assert cal.h12 == 0.0  # H12 untouched
+        assert cal.dG_rxn == pytest.approx(-18.0, abs=1.0)
+
+    def test_bracket_finds_root_past_nan_window_edges(self):
+        """A dG_rxn target reachable only at a large alpha shift -- where the raw
+        valid-window edges are nan (a basin empty) -- still converges via the
+        finite-straddle bracket, instead of failing to start brentq."""
+        lams, v1s, v2s = _marcus_windows(14)
+        r0 = analyze_gap(lams, v1s, v2s, n_bins=60).dG_rxn
+        target = r0 - 40.0  # far from 0 -> alpha shift lands near the window edge
+        cal = calibrate_evb(lams, v1s, v2s, dG_rxn_ref=target, n_bins=60, tol=1.0)
+        assert cal.converged
+        assert cal.dG_rxn == pytest.approx(target, abs=1.0)
+
+    def test_finite_straddle_bracket_skips_nan_gap(self):
+        """The bracket scanner returns a finite adjacent pair straddling the target
+        and never brackets across a nan region."""
+        from molecular_simulations.simulate.evb_mapping import _finite_straddle_bracket
+
+        def f(x):
+            return (
+                float('nan') if x < 0.2 or x > 0.8 else 10.0 * x
+            )  # finite on [0.2,0.8]
+
+        br = _finite_straddle_bracket(f, 0.0, 1.0, target=5.0, n=41)  # root at x=0.5
+        assert br is not None
+        lo, hi = br
+        assert 0.2 <= lo < hi <= 0.8
+        assert (f(lo) - 5.0) * (f(hi) - 5.0) <= 0
+        # unreachable target -> None
+        assert _finite_straddle_bracket(f, 0.0, 1.0, target=99.0, n=41) is None
+
 
 class TestDDGBarrier:
     def test_difference_and_error(self):

@@ -906,7 +906,7 @@ def calibrate_evb(
     v1: list[np.ndarray],
     v2: list[np.ndarray],
     dG_rxn_ref: float,
-    dG_barrier_ref: float,
+    dG_barrier_ref: float | None = None,
     temperature: float = 300.0,
     n_bins: int = 50,
     max_iter: int = 20,
@@ -934,7 +934,10 @@ def calibrate_evb(
         v2: Per-window product diabatic energies.
         dG_rxn_ref: Target reaction free energy (kJ/mol).
         dG_barrier_ref: Target activation free energy (kJ/mol). Must be below the
-            diabatic (h12=0) barrier, which H12 can only lower.
+            diabatic (h12=0) barrier, which H12 can only lower. ``None`` (default)
+            calibrates ``alpha`` alone and leaves ``H12 = 0`` -- the diabatic
+            upper-bound barrier -- for when the barrier reference (e.g. from kcat)
+            is not yet in hand; ``converged`` then reflects only the dG_rxn match.
         temperature: Temperature in K.
         n_bins: Energy-gap bins.
         max_iter: Maximum alternating iterations.
@@ -959,49 +962,58 @@ def calibrate_evb(
 
     # alpha is only valid within (-max_gap, -min_gap): outside it the shifted gap
     # V2+alpha-V1 no longer straddles the crossing, a basin empties and dG_rxn is
-    # nan. Bracket brentq inside that window (inset off the degenerate edges).
+    # nan. The window *edges* are already nan for wide-gap data (a basin empties
+    # well before the extreme), so brentq cannot start from the raw edges even when
+    # a root sits inside. Scan the window for a finite sub-bracket that straddles
+    # the target; dG_rxn is ~independent of h12, so this is found once up front.
     all_gap = np.concatenate(
         [np.asarray(b) - np.asarray(a) for a, b in zip(v1, v2, strict=True)]
     )
     inset = 0.1 * float(np.max(all_gap) - np.min(all_gap))
     a_lo, a_hi = -float(np.max(all_gap)) + inset, -float(np.min(all_gap)) - inset
+    alpha_bracket = _finite_straddle_bracket(
+        lambda a: rxn(a, 0.0), a_lo, a_hi, dG_rxn_ref
+    )
 
     alpha, h12 = 0.0, 0.0
     d_rxn = d_bar = float('nan')
     for _ in range(max_iter):
-        if a_hi <= a_lo:
-            break
-        # alpha matches dG_rxn (monotone increasing over the valid window).
-        try:
-            alpha = brentq(
-                lambda a, h=h12: rxn(a, h) - dG_rxn_ref, a_lo, a_hi, xtol=1e-4
-            )
-        except ValueError:
+        if alpha_bracket is None:
             break  # reference dG_rxn unachievable with this sampling
+        # alpha matches dG_rxn (monotone increasing over the valid window).
+        alpha = brentq(
+            lambda a, h=h12: rxn(a, h) - dG_rxn_ref, *alpha_bracket, xtol=1e-4
+        )
 
         # h12 >= 0 matches dG_barrier (monotone decreasing; E_g = V - H12 at the
         # crossing, so the barrier drops ~H12). Expand the bound until it brackets.
-        b0 = barrier(alpha, 0.0)
-        if not np.isfinite(b0) or b0 <= dG_barrier_ref:
-            h12 = 0.0  # target already at/below the diabatic upper bound
+        # With no barrier reference, skip this entirely and keep the diabatic h12=0.
+        if dG_barrier_ref is None:
+            h12 = 0.0
         else:
-            hi = b0 - dG_barrier_ref + 1.0
-            for _ in range(40):
-                if barrier(alpha, hi) - dG_barrier_ref <= 0:
-                    break
-                hi *= 2.0
-            try:
-                h12 = brentq(
-                    lambda h, a=alpha: barrier(a, h) - dG_barrier_ref,
-                    0.0,
-                    hi,
-                    xtol=1e-4,
-                )
-            except ValueError:
-                h12 = 0.0
+            b0 = barrier(alpha, 0.0)
+            if not np.isfinite(b0) or b0 <= dG_barrier_ref:
+                h12 = 0.0  # target already at/below the diabatic upper bound
+            else:
+                hi = b0 - dG_barrier_ref + 1.0
+                for _ in range(40):
+                    if barrier(alpha, hi) - dG_barrier_ref <= 0:
+                        break
+                    hi *= 2.0
+                try:
+                    h12 = brentq(
+                        lambda h, a=alpha: barrier(a, h) - dG_barrier_ref,
+                        0.0,
+                        hi,
+                        xtol=1e-4,
+                    )
+                except ValueError:
+                    h12 = 0.0
 
         d_rxn, d_bar = rxn(alpha, h12), barrier(alpha, h12)
-        if abs(d_rxn - dG_rxn_ref) < tol and abs(d_bar - dG_barrier_ref) < tol:
+        rxn_ok = abs(d_rxn - dG_rxn_ref) < tol
+        bar_ok = dG_barrier_ref is None or abs(d_bar - dG_barrier_ref) < tol
+        if rxn_ok and bar_ok:
             return EVBCalibration(alpha, h12, d_rxn, d_bar, True)
 
     return EVBCalibration(alpha, h12, d_rxn, d_bar, False)
@@ -1027,6 +1039,36 @@ def ddg_barrier(mutant: EVBGapResult, reference: EVBGapResult) -> tuple[float, f
 def _logsumexp(x: np.ndarray) -> float:
     m = np.max(x)
     return float(m + np.log(np.sum(np.exp(x - m))))
+
+
+def _finite_straddle_bracket(
+    f, lo: float, hi: float, target: float, n: int = 41
+) -> tuple[float, float] | None:
+    """Scan ``[lo, hi]`` for an adjacent pair bracketing ``target`` on finite ``f``.
+
+    ``f`` (here dG_rxn as a function of alpha) is ``nan`` outside the window where
+    both basins are populated, and that ``nan`` region reaches *inside* the raw
+    ``(lo, hi)`` edges -- so brentq handed the raw edges sees a ``nan`` endpoint and
+    cannot start even though a root sits in the finite interior. Sampling ``n``
+    points and returning the first adjacent finite pair whose values straddle
+    ``target`` gives brentq a bracket it can actually use. A ``nan`` sample resets
+    the run so a bracket is never formed across the empty-basin gap.
+
+    Returns:
+        ``(x_left, x_right)`` bracketing the root, or ``None`` if no finite
+        adjacent pair straddles ``target`` (the target is unreachable).
+    """
+    xs = np.linspace(lo, hi, n)
+    prev_x = prev_y = None
+    for x in xs:
+        y = f(float(x))
+        if not np.isfinite(y):
+            prev_x = prev_y = None  # don't bracket across an empty-basin gap
+            continue
+        if prev_y is not None and (prev_y - target) * (y - target) <= 0:
+            return float(prev_x), float(x)
+        prev_x, prev_y = x, y
+    return None
 
 
 def _gap_observables(

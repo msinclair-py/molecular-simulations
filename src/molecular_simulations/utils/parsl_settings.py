@@ -8,7 +8,7 @@ import yaml
 from parsl.addresses import address_by_hostname
 from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
-from parsl.launchers import MpiExecLauncher
+from parsl.launchers import MpiExecLauncher, SimpleLauncher
 from parsl.providers import LocalProvider, PBSProProvider
 from pydantic import BaseModel, Field
 
@@ -95,9 +95,16 @@ class LocalSettings(BaseLocalSettings):
     """Settings for a single-node, GPU-pinned local executor."""
 
     label: str = 'gpu'
+    mpi_launcher: bool = True
 
     def config_factory(self, run_dir: PathLike) -> Config:
         """Create a Parsl configuration pinning workers to local GPUs.
+
+        By default this uses ``MpiExecLauncher`` with ``--cpu-bind``, which is
+        what ALCF-style nodes (e.g. Polaris) expect. On a plain single GPU box
+        the stock ``mpiexec`` rejects ``--cpu-bind`` and workers fail to
+        register; set ``mpi_launcher=False`` to fall back to ``SimpleLauncher``,
+        which launches workers directly with no MPI wrapper.
 
         Args:
             run_dir: Directory in which to store Parsl run files.
@@ -105,6 +112,11 @@ class LocalSettings(BaseLocalSettings):
         Returns:
             A Parsl Config with one GPU-affinity HighThroughputExecutor.
         """
+        launcher = (
+            MpiExecLauncher(bind_cmd='--cpu-bind', overrides='--depth=1 --ppn 1')
+            if self.mpi_launcher
+            else SimpleLauncher()
+        )
         return Config(
             run_dir=str(Path(run_dir) / 'runinfo'),
             retries=self.retries,
@@ -114,9 +126,7 @@ class LocalSettings(BaseLocalSettings):
                         nodes_per_block=self.nodes,
                         init_blocks=1,
                         max_blocks=1,
-                        launcher=MpiExecLauncher(
-                            bind_cmd='--cpu-bind', overrides='--depth=1 --ppn 1'
-                        ),
+                        launcher=launcher,
                         worker_init=self.worker_init,
                     ),
                     label=self.label,
@@ -316,7 +326,14 @@ class AuroraSettings(BaseComputeSettings):
                     available_accelerators=self.available_accelerators,
                     cpu_affinity='block',  # Assigns cpus in sequential order
                     prefetch_capacity=0,
-                    max_workers_per_node=12,
+                    # One worker per addressable accelerator; deriving this from
+                    # the list (rather than a hard 12) lets a caller dial down
+                    # concurrency to bound per-node thread oversubscription --
+                    # unthrottled, each Intel oneAPI GPU context spawns a
+                    # full-node thread pool and 12 at once exhausts the process
+                    # thread limit (std::system_error: Resource temporarily
+                    # unavailable). Pair with OMP_NUM_THREADS in worker_init.
+                    max_workers_per_node=len(self.available_accelerators),
                     cores_per_worker=16,
                     heartbeat_period=30,
                     heartbeat_threshold=300,
@@ -329,10 +346,70 @@ class AuroraSettings(BaseComputeSettings):
                         nodes_per_block=self.num_nodes,
                         account=self.account,
                         queue=self.queue,
+                        # Aurora PBS rejects jobs that do not declare the
+                        # filesystems they need; pass it (and any other #PBS
+                        # header lines) via scheduler_options.
+                        scheduler_options=self.scheduler_options,
                         walltime=self.walltime,
                     ),
                 ),
             ],
             run_dir=str(run_dir),
+            retries=self.retries,
+        )
+
+
+class AuroraLocalSettings(BaseLocalSettings):
+    """Aurora executor that runs INSIDE an existing PBS allocation.
+
+    The same HighThroughputExecutor as :class:`AuroraSettings` (one worker per
+    accelerator, ``--depth=208`` mpiexec so a single manager per node divides all
+    208 threads), but provisioned with :class:`LocalProvider` -- the workers run
+    on the nodes the job ALREADY holds rather than qsub-ing a fresh block. Use
+    this when the driver itself runs inside a qsub'd job (e.g. on the allocation's
+    head node): it keeps the slow OpenMM cold-import and parsl orchestration off
+    the (often contended) login node. Defaults to 6 tiles/node -- the concurrency
+    that stays under the per-node thread limit (see AuroraSettings).
+    """
+
+    label: str = 'htex'
+    available_accelerators: list[str] = [str(i) for i in range(6)]
+
+    def config_factory(self, run_dir: PathLike) -> Config:
+        """Create an in-allocation Parsl configuration for Aurora.
+
+        Args:
+            run_dir: Directory in which to store Parsl run files.
+
+        Returns:
+            A Parsl Config whose HighThroughputExecutor launches workers on the
+            current allocation's nodes via LocalProvider + MpiExecLauncher.
+        """
+        return Config(
+            executors=[
+                HighThroughputExecutor(
+                    label=self.label,
+                    available_accelerators=self.available_accelerators,
+                    cpu_affinity='block',
+                    prefetch_capacity=0,
+                    max_workers_per_node=len(self.available_accelerators),
+                    cores_per_worker=16,
+                    heartbeat_period=30,
+                    heartbeat_threshold=300,
+                    worker_debug=False,
+                    worker_port_range=self.worker_port_range,
+                    provider=LocalProvider(
+                        launcher=MpiExecLauncher(
+                            bind_cmd='--cpu-bind', overrides='--depth=208 --ppn 1'
+                        ),
+                        worker_init=self.worker_init,
+                        nodes_per_block=self.nodes,
+                        init_blocks=1,
+                        min_blocks=0,
+                        max_blocks=1,
+                    ),
+                ),
+            ],
+            run_dir=str(Path(run_dir) / 'runinfo'),
             retries=self.retries,
         )

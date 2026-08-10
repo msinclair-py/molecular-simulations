@@ -225,6 +225,23 @@ class TestAuroraSettings:
         # Aurora exposes its 12 GPU tiles as accelerator ids.
         assert len(executor.available_accelerators) == 12
 
+    def test_aurora_local_settings_in_allocation(self):
+        """AuroraLocalSettings uses LocalProvider (no qsub) with worker=accelerators."""
+        from molecular_simulations.utils.parsl_settings import AuroraLocalSettings
+
+        settings = AuroraLocalSettings(
+            available_accelerators=[str(i) for i in range(6)], nodes=2
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = settings.config_factory(run_dir=tmpdir)
+
+        assert isinstance(config, Config)
+        executor = config.executors[0]
+        assert isinstance(executor.provider, LocalProvider)
+        assert executor.provider.nodes_per_block == 2
+        assert len(executor.available_accelerators) == 6
+        assert executor.max_workers_per_node == 6
+
 
 class TestGetNodeCount:
     """Test suite for get_node_count scheduler-environment inference."""

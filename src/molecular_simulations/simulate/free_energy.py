@@ -13,7 +13,9 @@ from natsort import natsorted
 from openmm import (
     CustomBondForce,
     CustomCompoundBondForce,
+    CustomCVForce,
     HarmonicBondForce,
+    NonbondedForce,
 )
 from parsl import Config, python_app
 
@@ -763,6 +765,8 @@ def run_evb_window(
     dt: float,
     platform: str,
     restraint_sel: str | None,
+    morse_bond2: dict[str, int | float] | None = None,
+    h12: float | None = None,
 ) -> None:
     """Parsl python app. Separate module due to need for serialization."""
     evb = EVBCalculation(
@@ -777,6 +781,8 @@ def run_evb_window(
         dt=dt,
         platform=platform,
         restraint_sel=restraint_sel,
+        morse_bond2=morse_bond2,
+        h12=h12,
     )
 
     evb.run()
@@ -808,6 +814,8 @@ class EVB:
         n_windows: int = 50,
         reaction_coordinate: list[float] | None = None,
         restraint_sel: str | None = None,
+        second_morse: bool = False,
+        h12: float | None = None,
     ):
         """Initialize the EVB orchestrator.
 
@@ -840,6 +848,16 @@ class EVB:
                 donor/acceptor/reactive atom positions. Defaults to None.
             restraint_sel: Optional MDAnalysis selection string for backbone
                 restraints. Defaults to None.
+            second_morse: If True, also Morse-bond the reactive atom to the
+                acceptor (in addition to the donor) and nonbonded-exclude that
+                pair, so a symmetric D-H-A transfer has symmetric reactant and
+                product wells. Defaults to False (single donor-reactive Morse).
+            h12: Off-diagonal EVB coupling in kJ/mol. If set, the donor and
+                acceptor Morse terms are combined as the ground-state eigenvalue
+                of the 2x2 EVB matrix (true two-state EVB) instead of being
+                summed, which lowers/rounds the barrier at the diabatic
+                crossing. Implies the acceptor Morse pair (as second_morse).
+                Defaults to None (no coupling).
         """
         self.topology = Path(topology)
         self.coordinates = Path(coordinates)
@@ -864,6 +882,8 @@ class EVB:
         self.platform = platform
         self.restraint_sel = restraint_sel
         self.n_windows = n_windows
+        self.second_morse = second_morse
+        self.h12 = h12
 
         self.prepare_inputs(
             donor_atom, acceptor_atom, reactive_atom, reaction_coordinate
@@ -899,6 +919,7 @@ class EVB:
         a2 = u.select_atoms(reactor)
 
         self.morse_atoms = [a0.ix[0], a2.ix[0]]
+        self.acceptor_morse_atoms = [a1.ix[0], a2.ix[0]]
         self.umbrella_atoms = [a0.ix[0], a1.ix[0], a2.ix[0]]
 
         if rc is None:
@@ -976,6 +997,8 @@ class EVB:
                     dt=self.dt,
                     platform=self.platform,
                     restraint_sel=self.restraint_sel,
+                    morse_bond2=self.morse_bond2,
+                    h12=self.h12,
                 )
             )
 
@@ -1791,6 +1814,30 @@ class EVB:
             'r0': self.r0,
         }
 
+    @property
+    def morse_bond2(self) -> dict[str, Any] | None:
+        """Second (acceptor-reactive) Morse bond for a symmetric transfer.
+
+        Returns None unless ``second_morse`` or ``h12`` was requested (an H12
+        coupling needs the acceptor Morse term to mix against). Uses the same
+        well parameters as the donor-reactive bond so the two ends are
+        equivalent.
+
+        Returns:
+            dict | None: Morse bond parameters (atom_i, atom_j, D_e, alpha, r0)
+            for the acceptor-reactive pair, or None for a single Morse bond.
+        """
+        if not (self.second_morse or self.h12 is not None):
+            return None
+
+        return {
+            'atom_i': self.acceptor_morse_atoms[0],
+            'atom_j': self.acceptor_morse_atoms[1],
+            'D_e': self.D_e,
+            'alpha': self.alpha,
+            'r0': self.r0,
+        }
+
 
 class EVBCalculation:
     """Runs a single EVB window."""
@@ -1808,6 +1855,8 @@ class EVBCalculation:
         dt: float = 0.002,
         platform: str = 'CUDA',
         restraint_sel: str | None = None,
+        morse_bond2: dict | None = None,
+        h12: float | None = None,
     ):
         """Initialize a single EVB window calculation.
 
@@ -1826,6 +1875,16 @@ class EVBCalculation:
             platform: OpenMM platform name. Defaults to 'CUDA'.
             restraint_sel: Optional MDAnalysis selection string for backbone
                 restraints. Defaults to None.
+            morse_bond2: Optional second Morse bond (same key schema as
+                morse_bond) for the acceptor-reactive pair. When supplied the
+                reactive atom is Morse-bonded to *both* donor and acceptor and
+                the acceptor-reactive pair is also excluded from the
+                NonbondedForce, mirroring the donor-reactive bond so a symmetric
+                D-H-A transfer stays symmetric. Defaults to None (single Morse).
+            h12: Optional off-diagonal EVB coupling in kJ/mol. When set together
+                with morse_bond2, the two Morse terms are combined as the
+                ground-state eigenvalue of the 2x2 EVB matrix (true two-state
+                EVB) rather than summed. Defaults to None.
         """
         self.sim_engine = Simulator(
             path=topology.parent,
@@ -1851,6 +1910,8 @@ class EVBCalculation:
         self.restraint_sel = restraint_sel
         self.umbrella = umbrella
         self.morse_bond = morse_bond
+        self.morse_bond2 = morse_bond2
+        self.h12 = h12
 
     def prepare(self):
         """Generates simulation object containing all custom forces to compute
@@ -1866,9 +1927,40 @@ class EVBCalculation:
             system, self.morse_bond['atom_i'], self.morse_bond['atom_j']
         )
 
-        # add various custom forces to system
-        morse_bond = self.morse_bond_force(**self.morse_bond)
-        system.addForce(morse_bond)
+        # Add the reactive bonded term(s). Three modes, in order of fidelity:
+        #   1. h12 set + acceptor pair -> true two-state EVB: the donor and
+        #      acceptor Morse diabats are mixed as the ground-state eigenvalue
+        #      of the 2x2 EVB matrix, which lowers/rounds the barrier.
+        #   2. acceptor pair only     -> symmetric double Morse (the two Morse
+        #      terms are simply summed).
+        #   3. neither                -> single donor-reactive Morse.
+        # Modes 1 and 2 also nonbonded-exclude the acceptor-reactive pair to
+        # match the donor pair (already excluded via its original topology bond)
+        # so a symmetric D-H-A transfer stays symmetric.
+        if self.h12 is not None and self.morse_bond2 is not None:
+            coupled = self.evb_coupled_force(
+                atom_donor=self.morse_bond['atom_i'],
+                atom_acceptor=self.morse_bond2['atom_i'],
+                atom_reactive=self.morse_bond['atom_j'],
+                D_e=self.morse_bond['D_e'],
+                alpha=self.morse_bond['alpha'],
+                r0=self.morse_bond['r0'],
+                h12=self.h12,
+            )
+            system.addForce(coupled)
+            self.exclude_nonbonded(
+                system, self.morse_bond2['atom_i'], self.morse_bond2['atom_j']
+            )
+        else:
+            morse_bond = self.morse_bond_force(**self.morse_bond)
+            system.addForce(morse_bond)
+            if self.morse_bond2 is not None:
+                morse_bond2 = self.morse_bond_force(**self.morse_bond2)
+                system.addForce(morse_bond2)
+                self.exclude_nonbonded(
+                    system, self.morse_bond2['atom_i'], self.morse_bond2['atom_j']
+                )
+
         ddbonds_umb = self.umbrella_force(**self.umbrella)
         system.addForce(ddbonds_umb)
         path_force = self.path_restraint(**self.umbrella)
@@ -2018,6 +2110,94 @@ class EVBCalculation:
         force.addBond(atom_i, atom_j)
 
         return force
+
+    @staticmethod
+    def evb_coupled_force(
+        atom_donor: int,
+        atom_acceptor: int,
+        atom_reactive: int,
+        D_e: float,
+        alpha: float,
+        r0: float,
+        h12: float,
+    ) -> CustomCVForce:
+        """Two-state EVB ground-state surface from two Morse diabats.
+
+        Builds the ground-state adiabatic energy of the 2x2 EVB Hamiltonian
+
+            H = [[V1, H12], [H12, V2]]
+
+        whose lower eigenvalue is::
+
+            E = 0.5 * (V1 + V2) - sqrt(0.25 * (V1 - V2) ^ 2 + H12 ^ 2)
+
+        where ``V1`` is the donor-reactive Morse potential (diabatic state 1,
+        proton bonded to the donor) and ``V2`` the acceptor-reactive Morse
+        potential (state 2). The common force-field terms cancel from the
+        off-diagonal and enter additively, so only the two reactive Morse bonds
+        need mixing here. A positive ``H12`` lowers and rounds the barrier at the
+        diabatic crossing (V1 = V2); ``H12 = 0`` recovers ``min(V1, V2)`` (a
+        cusped crossing with no coupling).
+
+        Implemented as a ``CustomCVForce`` whose two collective variables are the
+        Morse bonds; OpenMM differentiates the eigenvalue expression for forces.
+        The Morse constants are baked into each CV's energy string so the two
+        share no global-parameter names.
+
+        Args:
+            atom_donor: Donor atom index (bonded to reactive in state 1).
+            atom_acceptor: Acceptor atom index (bonded to reactive in state 2).
+            atom_reactive: Transferring atom index (shared by both states).
+            D_e: Morse well depth in kJ/mol.
+            alpha: Morse width parameter in nm^-1.
+            r0: Morse equilibrium distance in nm.
+            h12: Off-diagonal EVB coupling in kJ/mol.
+
+        Returns:
+            CustomCVForce evaluating the EVB ground-state energy.
+        """
+
+        def _morse(a: int, b: int) -> CustomBondForce:
+            f = CustomBondForce(f'{D_e} * (1 - exp(-{alpha} * (r-{r0}))) ^ 2')
+            f.addBond(a, b)
+            return f
+
+        v1 = _morse(atom_donor, atom_reactive)
+        v2 = _morse(atom_acceptor, atom_reactive)
+
+        force = CustomCVForce('0.5*(v1+v2) - sqrt(0.25*(v1-v2)^2 + H12^2)')
+        force.addGlobalParameter('H12', h12)
+        force.addCollectiveVariable('v1', v1)
+        force.addCollectiveVariable('v2', v2)
+
+        return force
+
+    @staticmethod
+    def exclude_nonbonded(system, atom_i: int, atom_j: int) -> None:
+        """Add a full nonbonded exclusion between two atoms.
+
+        Used when a Morse bond is added between a pair that was NOT bonded in the
+        original topology (e.g. the acceptor-reactive pair of a symmetric second
+        Morse bond). Without this the pair would keep its full Coulomb/LJ
+        interaction while the donor-reactive pair -- excluded via its original
+        topology bond -- would not, breaking the intended symmetry. Sets the
+        charge product and epsilon to zero so the pair interacts only through the
+        Morse potential.
+
+        Args:
+            system: OpenMM System object containing forces.
+            atom_i: Index of first atom in the pair.
+            atom_j: Index of second atom in the pair.
+
+        Returns:
+            None. Modifies system in place.
+        """
+        for force_idx in range(system.getNumForces()):
+            force = system.getForce(force_idx)
+            if isinstance(force, NonbondedForce):
+                force.addException(atom_i, atom_j, 0.0, 1.0, 0.0, replace=True)
+                print(f'Excluded nonbonded interaction between {atom_i} and {atom_j}')
+                break
 
     @staticmethod
     def remove_harmonic_bond(system, atom_i: int, atom_j: int) -> None:

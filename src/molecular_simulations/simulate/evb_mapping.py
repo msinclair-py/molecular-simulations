@@ -57,15 +57,49 @@ REACTANT_GROUP = 1
 PRODUCT_GROUP = 2
 
 
+def _morse_alpha_r0(
+    removed: tuple[float, float] | None,
+    D_e: float,
+    alpha: float | None,
+    r0: float | None,
+) -> tuple[float, float]:
+    """Resolve the Morse ``(alpha, r0)`` for one reactive bond.
+
+    Explicit ``alpha``/``r0`` override; otherwise they are derived from the
+    harmonic bond being replaced (``removed = (r0_bond, k_bond)`` from
+    :meth:`EVBCalculation.remove_harmonic_bond`): ``r0`` is the bond's equilibrium
+    length and ``alpha = sqrt(k / (2*D_e))`` matches the harmonic curvature at the
+    minimum. This keeps the diabatic surface force-field-consistent instead of
+    using a hardcoded width (too steep -> the two diabats cross too high -> an
+    inflated diabatic barrier that a physical H12 cannot bridge).
+
+    Raises:
+        ValueError: if a parameter must be derived but the bond was absent or was
+            a constraint (no force constant), so there is nothing to derive from.
+    """
+    if alpha is None or r0 is None:
+        if removed is None:
+            raise ValueError(
+                'alpha/r0 must be derived from the replaced harmonic bond, but no '
+                'harmonic bond was found for the reactive pair (a constraint, or '
+                'the atoms are not bonded). Pass explicit alpha and r0, or build '
+                'the system with constraints=None so the reactive bond is harmonic.'
+            )
+        r0_bond, k_bond = removed
+        alpha = float(np.sqrt(k_bond / (2.0 * D_e))) if alpha is None else alpha
+        r0 = r0_bond if r0 is None else r0
+    return alpha, r0
+
+
 def build_mapping_system(
     reactant_prmtop: PathLike,
     product_prmtop: PathLike,
     donor: int | None = None,
     acceptor: int | None = None,
     reactive: int | None = None,
-    D_e: float = 460.0,
-    alpha: float = 22.0,
-    r0: float = 0.097,
+    D_e: float = 392.46,
+    alpha: float | None = None,
+    r0: float | None = None,
     nonbonded_cutoff: float = 1.0,
     soft_core: bool = False,
     sc_alpha: float = 0.5,
@@ -97,9 +131,18 @@ def build_mapping_system(
         donor: Donor atom index (bonded to reactive in the reactant state).
         acceptor: Acceptor atom index (bonded to reactive in the product state).
         reactive: Transferring atom index.
-        D_e: Morse well depth in kJ/mol.
-        alpha: Morse width parameter in nm^-1.
-        r0: Morse equilibrium distance in nm.
+        D_e: Morse well depth in kJ/mol -- the bond dissociation energy, from QM
+            or an ML predictor (e.g. ALFABET). A harmonic bond carries no
+            dissociation energy, so this is the one Morse parameter that cannot be
+            taken from the force field. Default 392.46 (a C-H bond, 93.8 kcal/mol).
+        alpha: Morse width in nm^-1, or None (default) to DERIVE it per reactive
+            bond from the force field: ``alpha = sqrt(k / (2*D_e))`` where k is the
+            harmonic force constant of the bond being replaced. Deriving keeps the
+            Morse curvature at the minimum consistent with the original force field
+            (a hardcoded alpha that is too steep inflates the diabatic crossing
+            barrier). Pass a float to override for all reactive bonds.
+        r0: Morse equilibrium distance in nm, or None (default) to use each
+            replaced bond's own equilibrium length. Pass a float to override.
         nonbonded_cutoff: PME real-space cutoff in nm.
         soft_core: If True (and transfer atoms supplied), replace the hard LJ of
             the reactive atom's diabat-flipping nonbonded pairs with a bounded
@@ -141,11 +184,13 @@ def build_mapping_system(
     # diabatic energy stays bounded when the transferring atom is far from its
     # partner (otherwise the energy gap explodes and the windows never overlap).
     if donor is not None and acceptor is not None and reactive is not None:
-        EVBCalculation.remove_harmonic_bond(react, donor, reactive)
-        react.addForce(EVBCalculation.morse_bond_force(donor, reactive, D_e, alpha, r0))
-        EVBCalculation.remove_harmonic_bond(prod, acceptor, reactive)
+        removed_react = EVBCalculation.remove_harmonic_bond(react, donor, reactive)
+        a_r, r_r = _morse_alpha_r0(removed_react, D_e, alpha, r0)
+        react.addForce(EVBCalculation.morse_bond_force(donor, reactive, D_e, a_r, r_r))
+        removed_prod = EVBCalculation.remove_harmonic_bond(prod, acceptor, reactive)
+        a_p, r_p = _morse_alpha_r0(removed_prod, D_e, alpha, r0)
         prod.addForce(
-            EVBCalculation.morse_bond_force(acceptor, reactive, D_e, alpha, r0)
+            EVBCalculation.morse_bond_force(acceptor, reactive, D_e, a_p, r_p)
         )
 
     # OpenMM requires all NonbondedForces in a System to share one exclusion-pair
@@ -1142,8 +1187,8 @@ def run_mapping_window(
     acceptor: int | None,
     reactive: int | None,
     D_e: float,
-    alpha: float,
-    r0: float,
+    alpha: float | None,
+    r0: float | None,
     soft_core: bool = False,
     sc_alpha: float = 0.5,
     seed: int | None = None,
@@ -1265,9 +1310,9 @@ class EVBMapping:
         donor: int | None = None,
         acceptor: int | None = None,
         reactive: int | None = None,
-        D_e: float = 460.0,
-        alpha: float = 22.0,
-        r0: float = 0.097,
+        D_e: float = 392.46,
+        alpha: float | None = None,
+        r0: float | None = None,
         soft_core: bool = False,
         sc_alpha: float = 0.5,
     ):

@@ -145,13 +145,25 @@ def parse_args() -> argparse.Namespace:
     )
     # -- Morse reactive bond (must match the build) -------------------------
     p.add_argument(
-        '--D-e', type=float, default=460.0, help='Morse well depth (kJ/mol).'
+        '--D-e',
+        type=float,
+        default=392.46,
+        help='Morse well depth / bond dissociation energy (kJ/mol), from QM or '
+        'ALFABET. Default 392.46 = a C-H bond (93.8 kcal/mol).',
     )
     p.add_argument(
-        '--morse-alpha', type=float, default=22.0, help='Morse width (nm^-1).'
+        '--morse-alpha',
+        type=float,
+        default=None,
+        help='Morse width (nm^-1). Default None: derive per bond from the force '
+        'field as sqrt(k/(2*D_e)). Pass a value to override.',
     )
     p.add_argument(
-        '--r0', type=float, default=0.097, help='Morse equilibrium distance (nm).'
+        '--r0',
+        type=float,
+        default=None,
+        help="Morse equilibrium distance (nm). Default None: use each bond's own "
+        'equilibrium length. Pass a value to override.',
     )
     p.add_argument(
         '--nonbonded-cutoff',

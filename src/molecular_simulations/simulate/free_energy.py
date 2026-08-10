@@ -16,6 +16,7 @@ from openmm import (
     CustomCVForce,
     HarmonicBondForce,
     NonbondedForce,
+    unit,
 )
 from parsl import Config, python_app
 
@@ -2200,13 +2201,19 @@ class EVBCalculation:
                 break
 
     @staticmethod
-    def remove_harmonic_bond(system, atom_i: int, atom_j: int) -> None:
-        """Remove the bond/constraint between two atoms.
+    def remove_harmonic_bond(system, atom_i: int, atom_j: int):
+        """Remove the bond/constraint between two atoms, returning its parameters.
 
         This is necessary when replacing a harmonic bond with a Morse potential
         to avoid double-counting the bonded interaction. The method handles both:
         1. Harmonic bonds (sets force constant to zero)
         2. SHAKE/RATTLE constraints (removes the constraint entirely)
+
+        The removed harmonic bond's equilibrium length and force constant are
+        returned so a physically consistent Morse potential can be built from them
+        (r0 = length, alpha = sqrt(k / (2*D_e))) rather than from hardcoded
+        defaults. Constraints carry no force constant, so a removed constraint
+        returns ``None``.
 
         Args:
             system: OpenMM System object containing forces.
@@ -2214,19 +2221,28 @@ class EVBCalculation:
             atom_j: Index of second atom in the bond.
 
         Returns:
-            None. Modifies system in place.
+            ``(r0, k)`` of the removed harmonic bond -- r0 in nm, k in
+            kJ/mol/nm^2 (OpenMM native units) -- or ``None`` if no harmonic bond
+            was found (a constraint-only or absent bond). Modifies system in place.
         """
         target_pair = {atom_i, atom_j}
         found_bond = False
         found_constraint = False
+        bond_r0 = bond_k = None
 
         # First, check for harmonic bond and zero it out
         for force_idx in range(system.getNumForces()):
             force = system.getForce(force_idx)
             if isinstance(force, HarmonicBondForce):
                 for bond_idx in range(force.getNumBonds()):
-                    p1, p2, length, _k = force.getBondParameters(bond_idx)
+                    p1, p2, length, k = force.getBondParameters(bond_idx)
                     if {p1, p2} == target_pair:
+                        # Capture the bond's parameters before zeroing it, so the
+                        # Morse replacement can be made force-field consistent.
+                        bond_r0 = length.value_in_unit(unit.nanometer)
+                        bond_k = k.value_in_unit(
+                            unit.kilojoule_per_mole / unit.nanometer**2
+                        )
                         # Zero out the force constant, keeping equilibrium length
                         force.setBondParameters(bond_idx, p1, p2, length, 0.0)
                         print(
@@ -2254,3 +2270,5 @@ class EVBCalculation:
             print(
                 f'Warning: No harmonic bond or constraint found between atoms {atom_i} and {atom_j}'
             )
+
+        return (bond_r0, bond_k) if found_bond else None

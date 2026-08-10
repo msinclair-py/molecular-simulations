@@ -133,6 +133,42 @@ class TestGroundState:
         assert np.all(ground_state_energy(v1, v2, 30.0) <= np.minimum(v1, v2) + 1e-9)
 
 
+class TestMorseParams:
+    """Deriving the Morse (alpha, r0) from the replaced harmonic bond."""
+
+    def test_derives_alpha_and_r0_from_bond(self):
+        """alpha=None,r0=None -> alpha=sqrt(k/(2*D_e)), r0=bond length."""
+        from molecular_simulations.simulate.evb_mapping import _morse_alpha_r0
+
+        D_e = 392.46
+        k = 138323.0  # kJ/mol/nm^2 (AMBER C-H)
+        alpha, r0 = _morse_alpha_r0((0.109, k), D_e, alpha=None, r0=None)
+        assert alpha == pytest.approx(np.sqrt(k / (2 * D_e)))
+        assert alpha == pytest.approx(13.275, abs=0.01)  # documented C-H value
+        assert r0 == pytest.approx(0.109)
+
+    def test_explicit_values_override_derivation(self):
+        from molecular_simulations.simulate.evb_mapping import _morse_alpha_r0
+
+        alpha, r0 = _morse_alpha_r0((0.109, 138323.0), 392.46, alpha=22.0, r0=0.097)
+        assert alpha == 22.0 and r0 == 0.097
+
+    def test_partial_override_derives_the_other(self):
+        from molecular_simulations.simulate.evb_mapping import _morse_alpha_r0
+
+        alpha, r0 = _morse_alpha_r0((0.11, 138323.0), 392.46, alpha=15.0, r0=None)
+        assert alpha == 15.0  # overridden
+        assert r0 == pytest.approx(0.11)  # derived from the bond
+
+    def test_raises_when_no_bond_to_derive_from(self):
+        from molecular_simulations.simulate.evb_mapping import _morse_alpha_r0
+
+        with pytest.raises(ValueError, match='derived from the replaced'):
+            _morse_alpha_r0(None, 392.46, alpha=None, r0=None)
+        # but explicit values need no bond
+        assert _morse_alpha_r0(None, 392.46, alpha=13.0, r0=0.109) == (13.0, 0.109)
+
+
 class TestSchedule:
     def test_endpoints_and_length(self):
         s = default_lambda_schedule(11)

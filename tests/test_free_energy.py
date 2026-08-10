@@ -819,12 +819,29 @@ class TestEVBCalculationRemoveHarmonicBond:
         bond_force.addBond(0, 1, 0.1, 1000.0)  # length=0.1nm, k=1000 kJ/mol/nm^2
         system.addForce(bond_force)
 
-        EVBCalculation.remove_harmonic_bond(system, 0, 1)
+        removed = EVBCalculation.remove_harmonic_bond(system, 0, 1)
 
         # Check force constant is now zero (OpenMM returns Quantity with units)
         _p1, _p2, length, k = bond_force.getBondParameters(0)
         assert k.value_in_unit(kilojoules_per_mole / nanometers**2) == 0.0
         assert length.value_in_unit(nanometers) == pytest.approx(0.1)
+        # ...and the removed bond's (r0, k) are returned for Morse derivation.
+        assert removed is not None
+        r0, k_bond = removed
+        assert r0 == pytest.approx(0.1)
+        assert k_bond == pytest.approx(1000.0)
+
+    def test_remove_harmonic_bond_returns_none_for_constraint(self) -> None:
+        """A removed SHAKE constraint carries no force constant -> returns None."""
+        from openmm import System
+
+        from molecular_simulations.simulate.free_energy import EVBCalculation
+
+        system = System()
+        system.addParticle(1.0)
+        system.addParticle(1.0)
+        system.addConstraint(0, 1, 0.1)
+        assert EVBCalculation.remove_harmonic_bond(system, 0, 1) is None
 
     def test_remove_harmonic_bond_removes_constraint(self) -> None:
         """Test that remove_harmonic_bond removes SHAKE constraints."""

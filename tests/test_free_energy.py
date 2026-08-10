@@ -140,7 +140,7 @@ class TestEVBInit:
             assert evb.k == 160000.0
             assert evb.k_path == 100.0
             assert evb.D_e == 392.46
-            assert evb.alpha == 13.275
+            assert evb.alpha == 18.77
             assert evb.r0 == 0.109
             assert evb.platform == 'CUDA'
             assert evb.restraint_sel is None
@@ -488,7 +488,7 @@ class TestEVBCalculationInit:
             'atom_i': 0,
             'atom_j': 2,
             'D_e': 392.46,
-            'alpha': 13.275,
+            'alpha': 18.77,
             'r0': 0.1,
         }
 
@@ -531,7 +531,7 @@ class TestEVBCalculationInit:
             'atom_i': 0,
             'atom_j': 2,
             'D_e': 392.46,
-            'alpha': 13.275,
+            'alpha': 18.77,
             'r0': 0.1,
         }
 
@@ -569,7 +569,7 @@ class TestEVBCalculationInit:
             'atom_i': 0,
             'atom_j': 2,
             'D_e': 392.46,
-            'alpha': 13.275,
+            'alpha': 18.77,
             'r0': 0.1,
         }
 
@@ -610,7 +610,7 @@ class TestEVBCalculationInit:
             'atom_i': 0,
             'atom_j': 2,
             'D_e': 392.46,
-            'alpha': 13.275,
+            'alpha': 18.77,
             'r0': 0.1,
         }
 

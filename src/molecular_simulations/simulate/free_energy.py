@@ -809,7 +809,7 @@ class EVB:
         k: float = 160000.0,  # Umbrella force constant (kJ/mol/nm^2)
         k_path: float = 100.0,  # Path restraint force constant (kJ/mol)
         D_e: float = 392.46,  # Morse well depth (kJ/mol) - from BDE
-        alpha: float = 13.275,  # Morse width parameter (nm^-1) - computed from sqrt(k_bond/(2*D_e))
+        alpha: float = 18.77,  # Morse width (nm^-1) = sqrt(k_openmm/(2*D_e)); k_openmm=2*k_amber
         r0: float = 0.109,  # Equilibrium bond distance (nm)
         platform: str = 'CUDA',
         n_windows: int = 50,
@@ -839,7 +839,7 @@ class EVB:
             k: Umbrella force constant in kJ/mol/nm^2. Defaults to 160000.0.
             k_path: Path restraint force constant in kJ/mol. Defaults to 100.0.
             D_e: Morse well depth in kJ/mol. Defaults to 392.46.
-            alpha: Morse width parameter in nm^-1. Defaults to 13.275.
+            alpha: Morse width parameter in nm^-1. Defaults to 18.77.
             r0: Equilibrium bond distance in nm. Defaults to 0.109.
             platform: OpenMM platform name. Defaults to 'CUDA'.
             n_windows: Number of umbrella windows to generate when an explicit
@@ -1787,20 +1787,27 @@ class EVB:
         computed using QM or obtained from ML predictions such as ALFABET
         (https://bde.ml.nrel.gov). Must be in kJ/mol for OpenMM.
 
-        alpha is the potential well width computed from the harmonic force
-        constant via the Taylor expansion of the second derivative::
+        alpha is the potential well width, matched to the harmonic bond's
+        curvature at the minimum. The Morse second derivative at r0 is
+        ``2*D_e*alpha^2``; OpenMM's HarmonicBondForce is ``V = 1/2 k (r-r0)^2``
+        with curvature ``k``, so matching gives::
 
-            alpha = sqrt(k_bond / (2 * D_e))
+            alpha = sqrt(k / (2 * D_e))  # k in OpenMM units
 
-        Unit conversions from AMBER frcmod (kcal/mol/A^2) to OpenMM (kJ/mol/nm^2)::
+        CRUCIAL unit note: OpenMM's HarmonicBondForce force constant is TWICE the
+        AMBER frcmod value, because AMBER writes ``V = k_amber (r-r0)^2`` (no 1/2)::
 
-            k_openmm = k_amber * 4.184 * 100
+            k_openmm = k_amber * 4.184 * 100 * 2
 
-        Example calculation for C-H bond::
+        Example calculation for a C-H bond::
 
-            D_e = 93.8 kcal/mol = 392.46 kJ/mol
-            k_bond = 330.6 kcal/(mol*A^2) = 138323 kJ/(mol*nm^2)
-            alpha = sqrt(138323 / (2 * 392.46)) = 13.275 nm^-1
+            D_e     = 93.8 kcal/mol            = 392.46 kJ/mol
+            k_amber = 330.6 kcal/(mol*A^2)     -> k_openmm = 276646 kJ/(mol*nm^2)
+            alpha   = sqrt(276646 / (2 * 392.46)) = 18.77 nm^-1
+
+        (build_mapping_system now derives alpha/r0 this way automatically from the
+        bond it replaces -- reading OpenMM's already-doubled k -- so this manual
+        conversion is only for the single-topology defaults here.)
 
         r0 is the equilibrium bond distance in nm.
 

@@ -39,10 +39,7 @@ The package is organized around three stages that mirror the lifecycle of an MD 
 - **Simulate.** OpenMM-based drivers standardizing equilibration and production protocols with checkpoint/restart, straightforward injection of custom forces, constant-pH MD, Empirical Valence Bond (EVB) free-energy calculations [@warshel1980evb], umbrella sampling with MBAR/WHAM free-energy estimation [@shirts2008mbar; @kumar1992wham], and coarse-grained/multi-resolution simulation.
 - **Analyze.** Automated routines for conformational clustering, protein–protein interaction characterization, interaction-energy fingerprinting, covariance-based attractive/repulsive interaction detection [@golcuk2025practical], solvent-accessible surface area via the Shrake–Rupley algorithm [@shrake1973sasa], parallel MM-PBSA binding free energies [@miller2012mmpbsa], and interface scoring — ipTM [@evans2021afmultimer; @zhang2004tmscore], ipSAE [@dunbrack2025res], pDockQ [@bryant2022pdockq], pDockQ2 [@zhu2023pdockq2], and LIS [@kim2024lis].
 
-A recurring emphasis is providing analyses that are useful but not straightforwardly available out of the box, such as per-residue interaction-energy decomposition in OpenMM. [@case2023ambertools; @eastman2024openmm8; @babuji2019parsl; @von2025software]
-
 The package also ships agent-loadable *skills* — self-contained tool descriptions, one per stage — so it can be driven directly by language-model agents and tool-calling frameworks without a bespoke wrapper.
-As a demonstration of its utility, *molecular-simulations* was recently integrated in an agentic framework, StructBioReasoner, which utilizes the scalability and flexibility of the package as the backbone for its simulation and analysis agents. [@sinclair2026scalable]
 
 # Statement of need
 
@@ -52,9 +49,9 @@ Each of these steps carries its own conventions and failure modes, and the glue 
 This ad hoc approach makes it difficult to scale from a single workstation run to a production campaign on an HPC cluster or cloud resource while preserving reproducibility and provenance.
 
 The problem is compounded by the layer at which most researchers work.
-Preparation is typically driven through AmberTools' interactive utilities, execution through hand-written OpenMM scripts, and analysis through a separate stack (MDAnalysis, cpptraj, in-house code), with data marshalled between them by convention rather than by contract.
+Preparation is typically driven through AmberTools' interactive utilities, execution through hand-written OpenMM scripts, and analysis through a separate stack (MDAnalysis, cpptraj, in-house code).
 Reproducing a result months later, or handing a campaign to a collaborator, then depends on tacit knowledge of which script was run in which order with which arguments.
-As datasets and the number of systems under study grow, this friction becomes the dominant cost of a project rather than the science itself.
+As datasets and the number of systems under study grow, this friction can become the dominant cost of a project rather than the science itself.
 
 *molecular-simulations* addresses this need by providing:
 
@@ -81,27 +78,24 @@ These tools prioritize data management over MD-specific functionality; for insta
 Unlike orchestration-focused tools, it includes system builders (explicit/implicit solvent, ligand parameterization), standardized simulation protocols with custom force injection, and integrated analysis routines (clustering, MM-PBSA, interaction fingerprinting, interface scoring).
 The use of Parsl for workflow execution provides scheduler-agnostic HPC support (SLURM, PBS, AWS, Google Cloud, and others) while maintaining a simple Python API, enabling users to scale from local prototyping to production campaigns with minimal code changes.
 
-None of the tools above delivers the specific combination this package targets: AMBER/OpenMM system preparation, GPU MD with in-process custom-force and free-energy support, *and* the analysis routines needed to interpret an interaction, all callable from one Python API and portable across schedulers.
-Reaching that combination by composing existing tools would mean gluing AmberTools preparation, hand-written OpenMM drivers, a separate analysis stack, and a single-scheduler orchestrator across four contracts and their failure modes — precisely the ad hoc pipeline described above.
-We therefore chose to build a cohesive toolkit rather than contribute another orchestration layer on top of that fragmentation; the scholarly contribution is the integrated, reproducible arc from structure to interpreted result, together with analyses (e.g., per-residue interaction-energy decomposition in OpenMM) that are otherwise not available out of the box.
+None of the tools above delivers the specific combination this package targets: AMBER/OpenMM system preparation, GPU MD with in-process custom-force and free-energy support, and the analysis routines needed to interpret an interaction, all callable from one Python API and portable across schedulers.
+Composing existing tools to reach that combination would mean gluing together four separate contracts and failure modes — precisely the ad hoc pipeline described above — so we built a cohesive toolkit instead; the scholarly contribution is the integrated, reproducible arc from structure to interpreted result, together with analyses (e.g., per-residue interaction-energy decomposition in OpenMM) that are otherwise not available out of the box.
 
 # Software design
 
 The central design decision is to separate the lifecycle into three loosely coupled stages — build, simulate, analyze — that communicate through files in standard formats (AMBER topologies/coordinates, OpenMM checkpoints, trajectories) rather than through shared in-memory state.
-This costs some end-to-end type safety, but it buys composability and provenance: any stage can be run, inspected, or replaced independently, a campaign can resume from disk after interruption, and outputs interoperate with the wider ecosystem (cpptraj, MDAnalysis, VMD) instead of being locked inside the package.
 
-OpenMM was chosen as the simulation engine specifically because it is Python-native and exposes forces as first-class objects.
+OpenMM was chosen as the simulation engine specifically because it is performant, Python-native, and enables easy extension and adoption of new algorithms and techniques.
 This makes it possible to inject custom forces, per-residue energy decomposition, constant-pH moves, and EVB/umbrella-sampling terms in-process.
 AMBER/AmberTools handles preparation for the same reason of leverage — we standardize and script community-validated tooling rather than reimplement force-field assignment and solvation.
 
 For execution we adopt Parsl instead of a bespoke scheduler wrapper or a single-allocation model.
-Resource specifications live in reusable configuration objects that are decoupled from the scientific code, so the same build/simulate/analyze program runs unchanged on a laptop or across many PBS/SLURM/cloud allocations; scaling out is a change of configuration, not of logic.
-The simulation drivers deliberately ship opinionated equilibration/production protocols with checkpoint/restart as defaults, while preserving escape hatches (custom force injection, overridable protocol steps) — trading maximal configurability for reproducible, correct-by-default behavior that a non-specialist can run and a specialist can extend.
+Resource specifications live in reusable configuration objects that are decoupled from the scientific code, so the same build/simulate/analyze program runs unchanged on a laptop or across many PBS/SLURM/cloud allocations.
+The simulation drivers deliberately ship opinionated equilibration/production protocols with checkpoint/restart as defaults, while preserving adapters (custom force injection, overridable protocol steps) — trading maximal configurability for reproducible, correct-by-default behavior that a non-specialist can run and a specialist can extend.
+This is not meant to replace OpenMM: for complex, bespoke simulations it remains best practice to write one's own protocol, which can still benefit from our analysis suite and Parsl distribution framework.
 
-Anticipating that agentic frameworks and tool-calling interfaces are becoming a standard way to drive scientific software, the package also bundles a set of *skills* — self-contained `SKILL.md` documents (one per build, simulate, analyze, and HPC-deployment task) carrying name/description frontmatter and worked usage examples that an agent loads on demand when a task matches.
-Because each skill maps onto the same single-API stage boundaries described above, the package is adoptable as an agent tool without a bespoke wrapper: the human-facing Python API and the machine-facing tool description share one contract.
-Combined with the correct-by-default protocols and the Parsl configuration objects, this lowers the expertise barrier substantially: an agent equipped with the skills can turn a natural-language request into a correct build→simulate→analyze campaign that fans out across HPC allocations, so a non-expert need not hand-write `tleap` inputs, tune OpenMM equilibration protocols, or author scheduler submission scripts to run production MD on a cluster.
-This is the mechanism through which the toolkit was integrated into the StructBioReasoner agentic framework (see Research impact statement), and it lowers the cost of exposing the package to other frameworks and language-model agents as the surrounding tooling standardizes.
+Anticipating that agentic frameworks and tool-calling interfaces are becoming a standard way to drive scientific software, the package also bundles a set of *skills* — self-contained `SKILL.md` documents (one per build, simulate, analyze, and HPC-deployment task) that an agent loads on demand, sharing the same stage boundaries and one contract with the human-facing Python API.
+Combined with the grounded protocols and Parsl configuration objects, this lowers the expertise barrier substantially: an agent equipped with the skills can turn a natural-language request into a correct build→simulate→analyze campaign across HPC allocations without hand-written `tleap` inputs, OpenMM protocols, or scheduler scripts — the mechanism behind its integration into StructBioReasoner (see Research impact statement).
 
 # Research impact statement
 

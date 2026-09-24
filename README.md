@@ -36,7 +36,31 @@ A comprehensive Python toolkit for building, running, and analyzing molecular dy
 
 ## Installation
 
-Install from PyPI:
+> **Note:** `molecular-simulations` requires **AmberTools** (for system building with `tleap`), which is **not distributed on PyPI**. AmberTools must be installed separately via a conda-forge-based package manager (Anaconda/Miniconda, Mamba, or Pixi) before installing this package with `pip`.
+
+### Using conda / mamba
+
+```bash
+conda create -n molsim python=3.12
+conda activate molsim
+conda install -c conda-forge ambertools openmm
+pip install molecular-simulations
+```
+
+`mamba` is a drop-in replacement for `conda` (`mamba create ...`, `mamba install ...`) and resolves environments much faster.
+
+### Using pixi
+
+```bash
+pixi init molsim
+cd molsim
+pixi add python=3.12 ambertools openmm
+pixi add --pypi molecular-simulations
+```
+
+### Installing the package alone from PyPI
+
+If AmberTools is already available in your environment (or you only need OpenMM-based simulation/analysis features without system building), you can install just the Python package:
 
 ```bash
 pip install molecular-simulations
@@ -202,7 +226,7 @@ etc.
 - MDAnalysis ≥ 2.7
 - Parsl ≥ 2024.1.29
 - NumPy, SciPy, scikit-learn, Polars
-- ambertools
+- AmberTools (not available on PyPI — install via conda/mamba/pixi, see [Installation](#installation))
 - Optional: RDKit, OpenBabel (for ligand parameterization)
 
 ## Known Issues

@@ -36,7 +36,9 @@ A comprehensive Python toolkit for building, running, and analyzing molecular dy
 
 ## Installation
 
-> **Note:** `molecular-simulations` requires [**AmberTools**](https://ambermd.org/AmberTools.php) (for system building with `tleap`), which is **not distributed on PyPI**. AmberTools must be installed separately via a conda-forge-based package manager (Anaconda/Miniconda, Mamba, or Pixi) before installing this package with `pip`.
+> **Note:** `molecular-simulations` uses [**AmberTools**](https://ambermd.org/AmberTools.php) (for system building with `tleap`), which is **not distributed on PyPI**. If you don't already have an AmberTools installation to point at, the easiest way to get one is via a conda-forge-based package manager (Anaconda/Miniconda, Mamba, or Pixi) alongside `pip install molecular-simulations`.
+>
+> If you already have AmberTools installed elsewhere (e.g. a shared cluster module, an existing conda env, or a source build), you don't need a second copy — just set the `AMBERHOME` environment variable, or pass `amberhome='/path/to/amber'` directly to the relevant classes (`ExplicitSolvent`, `MMPBSA`, etc.), and skip straight to `pip install molecular-simulations` below.
 
 ### Using conda / mamba
 
@@ -61,7 +63,7 @@ pixi add --pypi molecular-simulations
 
 ### Installing the package alone from PyPI
 
-If AmberTools is already available in your environment (or you only need OpenMM-based simulation/analysis features without system building), you can install just the Python package:
+If you already have AmberTools available (via `AMBERHOME`/`amberhome=...`, see above) or only need OpenMM-based simulation/analysis features without system building, you can install just the Python package:
 
 ```bash
 pip install molecular-simulations
@@ -227,7 +229,7 @@ etc.
 - MDAnalysis ≥ 2.7
 - Parsl ≥ 2024.1.29
 - NumPy, SciPy, scikit-learn, Polars
-- AmberTools (not available on PyPI — install via conda/mamba/pixi, see [Installation](#installation))
+- AmberTools (not available on PyPI — install via conda/mamba/pixi, or point at an existing install via `AMBERHOME`; see [Installation](#installation))
 - Optional: RDKit, OpenBabel (for ligand parameterization)
 
 ## Known Issues

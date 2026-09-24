@@ -99,7 +99,7 @@ class PPInteractions:
         self.cov_cutoff = cov_cutoff
         self.sb = sb_cutoff
         self.hb_d = hbond_cutoff
-        self.hb_a = hbond_angle * 180 / np.pi
+        self.hb_a = np.radians(hbond_angle)
         self.hydr = hydrophobic_cutoff
         self.plot = plot
 
@@ -476,6 +476,8 @@ class PPInteractions:
 
         Checks whether there is a defined hydrogen bond between any
         donor and acceptor atoms using distance and angle criteria.
+        Donor/acceptor pairs belonging to the same residue are skipped,
+        since this method only evaluates inter-residue hydrogen bonds.
         Returns early when a valid H-bond is detected.
 
         Args:
@@ -489,6 +491,9 @@ class PPInteractions:
             pos1 = d.position
             hpos = [atom.position for atom in d.bonded_atoms if 'H' in atom.type]
             for a in acceptor.atoms:
+                if a.resindex == d.resindex:
+                    continue
+
                 pos3 = a.position
 
                 if np.linalg.norm(pos3 - pos1) <= self.hb_d:

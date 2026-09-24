@@ -7,6 +7,23 @@ Releases from 0.4.4 onward are generated automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). This project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.2](https://github.com/msinclair-py/molecular-simulations/compare/v0.5.1...v0.5.2) (2026-09-24)
+
+
+### Bug Fixes
+
+* **analysis:** correct hbond angle unit conversion and skip intra-residue hbonds ([54fa833](https://github.com/msinclair-py/molecular-simulations/commit/54fa83363b96b82f26e298908bf29d0fbb3672ef))
+* **analysis:** correct hbond angle unit conversion and skip intra-residue hbonds ([a2dadc1](https://github.com/msinclair-py/molecular-simulations/commit/a2dadc1e99aede350f26b54500dca863e6f6b89e))
+
+
+### Documentation
+
+* clarify AmberTools is not installable via PyPI ([ebb35e9](https://github.com/msinclair-py/molecular-simulations/commit/ebb35e96473113a064cca0e6140b3e29af5c1a1e))
+* clarify AmberTools is not on PyPI, add conda/pixi install examples ([688b070](https://github.com/msinclair-py/molecular-simulations/commit/688b0700f2182d76794c1c7d5e9b3cf43b9f1300))
+* quote optional-dependency specifiers in pip/conda install commands ([1e02352](https://github.com/msinclair-py/molecular-simulations/commit/1e023526706089e400188adc030256446d0b9ec4)), closes [#36](https://github.com/msinclair-py/molecular-simulations/issues/36)
+* soften AmberTools install language, mention AMBERHOME ([667cb94](https://github.com/msinclair-py/molecular-simulations/commit/667cb9407a3bc2a3f41d64dace0caec3e92edf93))
+* use official dacase AmberTools channel and link ambermd.org ([964d6fb](https://github.com/msinclair-py/molecular-simulations/commit/964d6fbdab0cd4d2f77c03e20ec91092cdaf0a6e))
+
 ## [0.5.1](https://github.com/msinclair-py/molecular-simulations/compare/v0.5.0...v0.5.1) (2026-07-09)
 
 

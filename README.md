@@ -72,13 +72,13 @@ pip install molecular-simulations
 For small molecule support (requires RDKit and OpenBabel):
 
 ```bash
-pip install molecular-simulations[ligand]
+pip install "molecular-simulations[ligand]"
 ```
 
 For development:
 
 ```bash
-pip install molecular-simulations[dev]
+pip install "molecular-simulations[dev]"
 ```
 
 ## Quick Start

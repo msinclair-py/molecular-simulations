@@ -16,7 +16,7 @@ and `.inpcrd` coordinate files that the `run-simulations` workflow expects.
   `AMBERHOME` is unset, construction raises `ValueError`. You can also pass
   `amberhome='/path/to/amber'` explicitly.
 - Ligand support (`ComplexBuilder`, `LigandBuilder`) needs the optional extras:
-  `pip install molecular-simulations[ligand]` (RDKit + OpenBabel). These are
+  `pip install "molecular-simulations[ligand]"` (RDKit + OpenBabel). These are
   imported lazily — if missing, only the protein-only builders are available.
 
 ## Output convention

@@ -33,7 +33,7 @@ For parameterizing small molecules with GAFF2, you'll need RDKit and OpenBabel:
 
 .. code-block:: console
 
-   $ pip install molecular-simulations[ligand]
+   $ pip install "molecular-simulations[ligand]"
 
 **Development Installation**
 
@@ -41,7 +41,7 @@ For development and testing:
 
 .. code-block:: console
 
-   $ pip install molecular-simulations[dev]
+   $ pip install "molecular-simulations[dev]"
 
 Installing with Conda
 ---------------------
@@ -53,7 +53,7 @@ To install on a CUDA-enabled machine:
 
    $ conda create -n molsim python=3.11
    $ conda activate molsim
-   $ conda install -c conda-forge openmm[cuda] ambertools
+   $ conda install -c conda-forge "openmm[cuda]" ambertools
    $ pip install molecular-simulations
 
 Installing from Source
@@ -65,7 +65,7 @@ To install the latest development version:
 
    $ git clone https://github.com/msinclair-py/molecular-simulations.git
    $ cd molecular-simulations
-   $ pip install -e .[dev]
+   $ pip install -e ".[dev]"
 
 Verifying Installation
 ----------------------

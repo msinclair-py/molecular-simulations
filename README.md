@@ -36,25 +36,26 @@ A comprehensive Python toolkit for building, running, and analyzing molecular dy
 
 ## Installation
 
-> **Note:** `molecular-simulations` requires **AmberTools** (for system building with `tleap`), which is **not distributed on PyPI**. AmberTools must be installed separately via a conda-forge-based package manager (Anaconda/Miniconda, Mamba, or Pixi) before installing this package with `pip`.
+> **Note:** `molecular-simulations` requires [**AmberTools**](https://ambermd.org/AmberTools.php) (for system building with `tleap`), which is **not distributed on PyPI**. AmberTools must be installed separately via a conda-forge-based package manager (Anaconda/Miniconda, Mamba, or Pixi) before installing this package with `pip`.
 
 ### Using conda / mamba
 
 ```bash
 conda create -n molsim python=3.12
 conda activate molsim
-conda install -c conda-forge ambertools openmm
+conda install -c dacase -c conda-forge ambertools-dac openmm
 pip install molecular-simulations
 ```
 
-`mamba` is a drop-in replacement for `conda` (`mamba create ...`, `mamba install ...`) and resolves environments much faster.
+`dacase::ambertools-dac` is the official channel maintained by the AmberTools developers and tracks the current AmberTools release; the community-maintained `conda-forge::ambertools` package also works if you prefer to stay on a single channel. `mamba` is a drop-in replacement for `conda` (`mamba create ...`, `mamba install ...`) and resolves environments much faster.
 
 ### Using pixi
 
 ```bash
 pixi init molsim
 cd molsim
-pixi add python=3.12 ambertools openmm
+pixi workspace channel add dacase
+pixi add python=3.12 ambertools-dac openmm
 pixi add --pypi molecular-simulations
 ```
 

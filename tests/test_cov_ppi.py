@@ -192,7 +192,7 @@ class TestPPInteractions:
         assert not ppi.plot
 
     def test_ppinteractions_hbond_angle_conversion(self, two_chain_pdb, tmp_path):
-        """Test that hbond angle is converted on construction."""
+        """Test that hbond angle (degrees) is converted to radians on construction."""
         from molecular_simulations.analysis.cov_ppi import PPInteractions
 
         ppi = PPInteractions(
@@ -203,7 +203,7 @@ class TestPPInteractions:
             plot=False,
         )
 
-        expected_angle = 30.0 * 180 / np.pi
+        expected_angle = np.radians(30.0)
         assert np.isclose(ppi.hb_a, expected_angle)
 
     def test_res_map(self, saltbridge_ppi):
@@ -325,6 +325,60 @@ class TestEvaluateHBond:
 
         # First frame has the amine donating to the carboxylate -> a hydrogen bond
         assert result == 1
+
+
+class TestEvaluateHBondSameResidue:
+    """evaluate_hbond must skip donor/acceptor pairs from the same residue (issue #35)."""
+
+    def _linear_donor_acceptor_universe(self):
+        """Real 2-residue MDAnalysis Universe with a perfectly linear D-H...A geometry.
+
+        Atom 0 (N, resindex 0) is bonded to atom 1 (H). Atoms 2 and 3 are both
+        acceptors sitting collinear with the N-H bond (angle = 0, well within
+        the 30 degree cutoff) at 3.0 A from the donor (within the 3.5 A cutoff).
+        Atom 2 shares the donor's residue (resindex 0); atom 3 belongs to a
+        second residue (resindex 1).
+        """
+        import MDAnalysis as mda
+        from MDAnalysis.coordinates.memory import MemoryReader
+
+        u = mda.Universe.empty(
+            4,
+            n_residues=2,
+            atom_resindex=[0, 0, 0, 1],
+            residue_segindex=[0, 0],
+            trajectory=True,
+        )
+        u.add_TopologyAttr('name', ['N', 'H', 'O1', 'O2'])
+        u.add_TopologyAttr('type', ['N', 'H', 'O', 'O'])
+        u.add_TopologyAttr('resname', ['RES', 'RES'])
+        u.add_TopologyAttr('resid', [1, 2])
+        u.add_TopologyAttr('chainID', ['A', 'A', 'A', 'A'])
+        u.add_bonds([(0, 1)])
+
+        coords = np.array(
+            [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [3.0, 0.0, 0.0], [3.0, 0.0, 0.0]]]
+        )
+        u.load_new(coords, format=MemoryReader)
+        return u
+
+    def test_same_residue_pair_is_skipped(self, saltbridge_ppi):
+        """A same-residue donor/acceptor pair is ignored even with valid geometry."""
+        u = self._linear_donor_acceptor_universe()
+
+        donor = u.atoms[[0]]
+        same_residue_acceptor = u.atoms[[2]]
+
+        assert saltbridge_ppi.evaluate_hbond(donor, same_residue_acceptor) == 0
+
+    def test_different_residue_pair_is_counted(self, saltbridge_ppi):
+        """The identical geometry is counted once donor and acceptor differ in residue."""
+        u = self._linear_donor_acceptor_universe()
+
+        donor = u.atoms[[0]]
+        other_residue_acceptor = u.atoms[[3]]
+
+        assert saltbridge_ppi.evaluate_hbond(donor, other_residue_acceptor) == 1
 
 
 class TestAnalyzeHydrophobic:

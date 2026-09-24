@@ -19,7 +19,7 @@ Getting Started
 
    .. code-block:: console
 
-      $ pip install -e .[dev]
+      $ pip install -e ".[dev]"
 
 4. Create a branch for your changes:
 

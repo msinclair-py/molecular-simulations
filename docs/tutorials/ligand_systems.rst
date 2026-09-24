@@ -9,7 +9,7 @@ This tutorial covers working with systems containing small molecule ligands.
    
    .. code-block:: console
    
-      $ pip install molecular-simulations[ligand]
+      $ pip install "molecular-simulations[ligand]"
 
 Prerequisites
 -------------

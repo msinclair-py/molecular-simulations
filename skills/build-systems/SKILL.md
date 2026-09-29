@@ -15,9 +15,10 @@ and `.inpcrd` coordinate files that the `run-simulations` workflow expects.
   builder resolves `tleap`/`cpptraj`/`antechamber` under `$AMBERHOME/bin`. If
   `AMBERHOME` is unset, construction raises `ValueError`. You can also pass
   `amberhome='/path/to/amber'` explicitly.
-- Ligand support (`ComplexBuilder`, `LigandBuilder`) needs the optional extras:
-  `pip install "molecular-simulations[ligand]"` (RDKit + OpenBabel). These are
-  imported lazily — if missing, only the protein-only builders are available.
+- Ligand support (`ComplexBuilder`, `LigandBuilder`, `LigandSolutionBuilder`) needs
+  the optional extras: `pip install "molecular-simulations[ligand]"` (RDKit +
+  OpenBabel). These are imported lazily — if missing, only the protein-only
+  builders are available.
 
 ## Output convention
 
@@ -90,6 +91,26 @@ builder.build()
 
 To parameterize a ligand on its own, use `LigandBuilder(path, lig, lig_number=0)`
 and call `parameterize_ligand()`.
+
+## Ligand in solution
+
+`LigandSolutionBuilder` creates a periodic OPC-water box for a ligand without a
+protein. It writes the standard `system.prmtop` and `system.inpcrd` files, so
+pass its output directory directly to `Simulator`.
+
+```python
+from molecular_simulations.build import LigandSolutionBuilder
+
+builder = LigandSolutionBuilder(
+    path='/path/to/outputs',
+    lig='ligand.sdf',
+    padding=10.0,
+)
+builder.build()
+```
+
+Pass `lig_param_prefix='/path/to/params/ligand'` to reuse pre-computed GAFF2
+`.frcmod`/`.lib`/`.mol2` files.
 
 ## Helpers (`molecular_simulations.build`)
 

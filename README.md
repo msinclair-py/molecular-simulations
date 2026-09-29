@@ -17,7 +17,7 @@ A comprehensive Python toolkit for building, running, and analyzing molecular dy
 - **Explicit solvent systems** with OPC water model
 - **Implicit solvent** support for faster calculations
 - **Small molecule parameterization** via GAFF2
-
+- **Ligand-only solution systems** for LIE calculations
 ### ⚡ Simulation Engine
 - **OpenMM integration** (v8.0+) with GPU acceleration
 - **Advanced simulations** Constant-pH and Empirical Valence Bond

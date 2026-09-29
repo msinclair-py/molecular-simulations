@@ -1,0 +1,40 @@
+# EVB umbrella-sampling validation reference values.
+#
+# This is the analogue of hewl_reference_pka.csv for the EVB free-energy
+# machinery (scripts/benchmark_evb.py). Unlike the constant-pH benchmark, most
+# of these references are EXACT-BY-CONSTRUCTION rather than experimental: they
+# are analytic properties of a KNOWN underlying potential of mean force (PMF)
+# that synthetic umbrella data are drawn from, so the "right answer" is not in
+# doubt -- what is being validated is that EVBAnalyzer's equilibration ->
+# overlap -> MBAR/WHAM -> PMF pipeline recovers it.
+#
+# *** IMPORTANT ***
+#  - The `flat`, `harmonic` and `double_well` rows are ANALYTIC self-consistency
+#    checks (benchmark_evb.py selftest). Their ref_value/tol must stay in sync
+#    with the analytic constants used by the generator (A_BARRIER, K0_HARMONIC
+#    in benchmark_evb.py); the selftest reads them from here as the source of
+#    truth and asserts recovery within `tol`.
+#  - The `proton_transfer` rows describe the symmetric PHYSICAL benchmark
+#    (benchmark_evb.py build/run/analyze). By symmetry the reaction free energy
+#    of a symmetric D-H-A transfer is exactly zero, so |dG_rxn| is the primary
+#    validation metric. The barrier is REPORTED, not asserted: build uses a
+#    symmetric double-Morse PMF (proton Morse-bonded to both oxygens) with no
+#    off-diagonal H12 coupling, so the absolute barrier depends on the empirical
+#    Morse parameters and is not a force-field-free reference. Do not quote it as
+#    a validated number.
+#
+# columns:
+#   case        - benchmark case / system
+#   observable  - quantity extracted from the recovered PMF
+#   ref_value   - expected value (NaN = reported only, not asserted)
+#   tol         - absolute tolerance for pass/fail (NaN = not asserted)
+#   units       - units of ref_value/tol
+#   note        - provenance / meaning
+case,observable,ref_value,tol,units,note
+flat,pmf_range,0.0,3.5,kJ/mol,flat underlying potential -> recovered PMF should be flat (max-min small; tol covers WHAM edge-bin noise)
+harmonic,pmf_rmse,0.0,1.5,kJ/mol,recover the analytic parabola 0.5*K0*rc^2 (RMSE about the analytic curve)
+double_well,barrier,20.0,3.0,kJ/mol,analytic symmetric double-well barrier height A between the two minima
+double_well,dG_rxn,0.0,1.5,kJ/mol,symmetric double well -> reaction free energy is exactly zero
+double_well,pmf_asymmetry,0.0,1.5,kJ/mol,recovered PMF must be symmetric about rc=0 (RMS of PMF(rc)-PMF(-rc))
+proton_transfer,dG_rxn,0.0,4.0,kJ/mol,symmetric physical D-H-A transfer -> ~0 by symmetry (finite-sampling tolerance)
+proton_transfer,barrier,NaN,NaN,kJ/mol,reported only; double-Morse PMF barrier is parameter dependent w/o H12 coupling (see header)

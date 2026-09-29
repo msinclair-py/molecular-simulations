@@ -7,14 +7,16 @@ for molecular dynamics simulations.
 Classes:
     LigandError: Custom exception for ligand parameterization failures.
     LigandBuilder: Parameterize ligands with GAFF2 force field.
-    PLINDERBuilder: Build complexes from PLINDER database entries.
-    ComplexBuilder: Build general protein-ligand complex systems.
+    LigandSolutionBuilder: Build ligand-only explicit-solvent systems.
+    ComplexBuilder: Build protein-ligand complex systems.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 from openbabel import pybel  # ty: ignore[unresolved-import]
@@ -72,7 +74,12 @@ class LigandBuilder:
     """
 
     def __init__(
-        self, path: PathLike, lig: PathLike, lig_number: int = 0, file_prefix: str = ''
+        self,
+        path: PathLike,
+        lig: PathLike,
+        lig_number: int = 0,
+        file_prefix: str = '',
+        amberhome: str | None = None,
     ):
         """Initialize the LigandBuilder."""
         self.path = Path(path)
@@ -80,10 +87,11 @@ class LigandBuilder:
         self.ln = lig_number
         self.out_lig = self.path / f'{file_prefix}{Path(lig).stem}'
 
-        if 'AMBERHOME' in os.environ:
-            amberhome = Path(os.environ['AMBERHOME'])
-        else:
+        if amberhome is None:
+            amberhome = os.environ.get('AMBERHOME')
+        if amberhome is None:
             raise ValueError('AMBERHOME is not set in env vars!')
+        amberhome = Path(amberhome)
 
         self.antechamber = str(amberhome / 'bin' / 'antechamber')
         self.parmchk2 = str(amberhome / 'bin' / 'parmchk2')
@@ -206,6 +214,152 @@ class LigandBuilder:
             outfile.write(inp)
 
         return leap_file, leap_log
+
+
+class LigandSolutionBuilder:
+    """Build a GAFF2-parameterized ligand in explicit solvent.
+
+    The builder produces ``system.prmtop`` and ``system.inpcrd`` in ``path``;
+    these files can be passed directly to :class:`~molecular_simulations.simulate.Simulator`.
+
+    Args:
+        path: Directory path for output files.
+        lig: Path to the ligand input file.
+        padding: Box padding in Angstroms. Defaults to 10.0.
+        lig_param_prefix: Prefix of pre-computed ``.frcmod``, ``.lib``, and
+            ``.mol2`` files. When omitted, parameters are generated with
+            :class:`LigandBuilder`.
+        amberhome: Path to the AmberTools installation. Defaults to ``AMBERHOME``.
+        debug: Whether to retain the generated tleap input. Defaults to False.
+        delete_temp_file: Whether to remove temporary tleap input. Defaults to True.
+    """
+
+    def __init__(
+        self,
+        path: PathLike,
+        lig: PathLike,
+        padding: float = 10.0,
+        lig_param_prefix: PathLike | None = None,
+        amberhome: str | None = None,
+        debug: bool = False,
+        delete_temp_file: bool = True,
+    ):
+        self.path = Path(path).resolve()
+        self.path.mkdir(exist_ok=True, parents=True)
+        self.lig = Path(lig).resolve()
+        self.pad = padding
+        self.build_dir = self.path / 'build'
+        self.out = self.path / 'system.pdb'
+        self.debug = debug
+        self.delete = delete_temp_file
+        self.water_box = 'OPCBOX'
+
+        if amberhome is None:
+            amberhome = os.environ.get('AMBERHOME')
+        if amberhome is None:
+            raise ValueError('AMBERHOME is not set in env vars!')
+        self.amberhome = Path(amberhome)
+        self.tleap = str(self.amberhome / 'bin' / 'tleap')
+
+        if lig_param_prefix is None:
+            self.lig_param_prefix: Path | None = None
+        else:
+            self.lig_param_prefix = Path(lig_param_prefix).resolve()
+
+    def build(self) -> None:
+        """Parameterize the ligand when needed and build its periodic solution."""
+        self.build_dir.mkdir(exist_ok=True, parents=True)
+        original_directory = Path.cwd()
+        try:
+            os.chdir(self.build_dir)
+            if self.lig_param_prefix is None:
+                self.lig_param_prefix = self.process_ligand()
+            assert self.lig_param_prefix is not None
+            self.assemble_system(self.lig_param_prefix)
+        finally:
+            os.chdir(original_directory)
+
+    def process_ligand(self) -> Path:
+        """Stage and parameterize the ligand with GAFF2."""
+        if self.lig.parent != self.build_dir:
+            shutil.copy(self.lig, self.build_dir)
+        ligand_builder = LigandBuilder(
+            self.build_dir, self.lig.name, amberhome=str(self.amberhome)
+        )
+        ligand_builder.parameterize_ligand()
+        return ligand_builder.out_lig
+
+    def assemble_system(self, ligand: Path) -> None:
+        """Write and execute tleap input for a periodic ligand solution."""
+        mol2 = Path(f'{ligand}.mol2')
+        dim = self.get_ligand_extent(mol2)
+        num_ions = ExplicitSolvent.get_ion_numbers(dim**3)
+        out_top = self.out.with_suffix('.prmtop')
+        out_coor = self.out.with_suffix('.inpcrd')
+        tleap_input = f"""source leaprc.gaff2
+source leaprc.water.opc
+loadamberparams {ligand}.frcmod
+loadoff {ligand}.lib
+LIG = loadmol2 {mol2}
+setbox LIG centers
+set LIG box {{{dim} {dim} {dim}}}
+solvatebox LIG {self.water_box} {{0 0 0}}
+addions LIG Na+ 0
+addions LIG Cl- 0
+addIonsRand LIG Na+ {num_ions} Cl- {num_ions}
+savepdb LIG {self.out}
+saveamberparm LIG {out_top} {out_coor}
+quit
+"""
+        if self.debug:
+            self.debug_tleap(tleap_input)
+        else:
+            self.temp_tleap(tleap_input)
+
+    def get_ligand_extent(self, mol2: Path) -> int:
+        """Return the cubic box dimension enclosing the MOL2 coordinates."""
+        coordinates: list[tuple[float, float, float]] = []
+        in_atoms = False
+        for line in mol2.read_text().splitlines():
+            if line == '@<TRIPOS>ATOM':
+                in_atoms = True
+                continue
+            if in_atoms and line.startswith('@<TRIPOS>'):
+                break
+            if in_atoms and line:
+                fields = line.split()
+                coordinates.append(tuple(map(float, fields[2:5])))
+        if not coordinates:
+            raise LigandError(f'No atom coordinates found in {mol2}')
+        axes = zip(*coordinates, strict=True)
+        return int(max(max(axis) - min(axis) for axis in axes) + 2 * self.pad)
+
+    def debug_tleap(self, inp: str) -> None:
+        """Write persistent tleap input and execute it."""
+        leap_file = self.path / 'tleap.in'
+        leap_file.write_text(inp)
+        subprocess.run(
+            [self.tleap, '-f', str(leap_file)],
+            cwd=self.path,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def temp_tleap(self, inp: str) -> None:
+        """Execute tleap with a temporary input file."""
+        with tempfile.NamedTemporaryFile(
+            mode='w+', suffix='.in', delete=self.delete, dir=self.path
+        ) as temp_file:
+            temp_file.write(inp)
+            temp_file.flush()
+            subprocess.run(
+                [self.tleap, '-f', temp_file.name],
+                cwd=self.path,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
 
 class ComplexBuilder(ExplicitSolvent):

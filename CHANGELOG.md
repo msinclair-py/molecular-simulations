@@ -7,6 +7,14 @@ Releases from 0.4.4 onward are generated automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). This project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.0](https://github.com/msinclair-py/molecular-simulations/compare/v0.5.2...v0.6.0) (2026-09-29)
+
+
+### Features
+
+* **build:** support ligand solution systems ([edf2ac1](https://github.com/msinclair-py/molecular-simulations/commit/edf2ac16e1cbad0e3db111755a66dec96aadea94))
+* **build:** support ligand solution systems ([4ed4ae6](https://github.com/msinclair-py/molecular-simulations/commit/4ed4ae69eab4321af3100538ab0ac7ea9deea6d1))
+
 ## [0.5.2](https://github.com/msinclair-py/molecular-simulations/compare/v0.5.1...v0.5.2) (2026-09-24)
 
 

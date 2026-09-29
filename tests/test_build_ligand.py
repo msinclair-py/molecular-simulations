@@ -595,7 +595,52 @@ class TestLigandBuilderParameterizeError:
             builder.parameterize_ligand()
 
 
+# LigandSolutionBuilder -- real tleap input generation (stub binary)
 # ============================================================================
+
+
+@requires_openbabel
+class TestLigandSolutionBuilder:
+    """Ligand-only explicit-solvent assembly using pre-computed parameters."""
+
+    def test_build_writes_periodic_solution_input(self, tmp_path, fake_amberhome):
+        from molecular_simulations.build.build_ligand import LigandSolutionBuilder
+
+        params = tmp_path / 'params' / 'methanol.v1'
+        params.parent.mkdir()
+        Path(f'{params}.mol2').write_text(
+            '@<TRIPOS>MOLECULE\nMETHANOL\n\n@<TRIPOS>ATOM\n'
+            '1 C1 0.000 0.000 0.000 C.3 1 LG0 0.0\n'
+            '2 O1 4.000 0.000 0.000 O.3 1 LG0 0.0\n'
+            '@<TRIPOS>BOND\n1 1 2 1\n'
+        )
+        Path(f'{params}.frcmod').touch()
+        Path(f'{params}.lib').touch()
+
+        builder = LigandSolutionBuilder(
+            path=tmp_path,
+            lig=tmp_path / 'methanol.sdf',
+            lig_param_prefix=params,
+            padding=10.0,
+            debug=True,
+        )
+        builder.build()
+
+        content = (tmp_path / 'tleap.in').read_text()
+        assert 'source leaprc.gaff2' in content
+        assert 'source leaprc.water.opc' in content
+        assert f'loadamberparams {params}.frcmod' in content
+        assert f'loadoff {params}.lib' in content
+        assert f'LIG = loadmol2 {params}.mol2' in content
+        assert 'set LIG box {24 24 24}' in content
+        assert 'solvatebox LIG OPCBOX {0 0 0}' in content
+        assert 'addions LIG Na+ 0' in content
+        assert 'addions LIG Cl- 0' in content
+        assert 'saveamberparm LIG' in content
+        assert str(tmp_path / 'system.prmtop') in content
+        assert str(tmp_path / 'system.inpcrd') in content
+
+
 # ComplexBuilder -- construction and non-binary orchestration (real)
 # ============================================================================
 

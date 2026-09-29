@@ -6,7 +6,7 @@ from .build_evb import EVBBuilder, EVBBuildError
 from .evb_align import AlignedPair, AlignmentError, DiabaticPairAligner, Transfer
 
 with contextlib.suppress(ImportError):
-    from .build_ligand import ComplexBuilder, LigandBuilder
+    from .build_ligand import ComplexBuilder, LigandBuilder, LigandSolutionBuilder
 
 PathLike = Path | str
 

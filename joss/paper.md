@@ -123,5 +123,7 @@ All AI generated code and text has been reviewed and validated by the authors.
 
 *molecular-simulations* builds on the open-source scientific Python ecosystem and depends on:
 AmberTools for system preparation, OpenMM for the simulation engine, Parsl for scalable workflow execution, MDAnalysis and MDTraj for trajectory analysis, scikit-learn for clustering, and NumPy and SciPy for the underlying numerical routines. [@case2023ambertools; @eastman2024openmm8; @babuji2019parsl; @michaud2011mdanalysis; @gowers2016mdanalysis; @mcgibbon2015mdtraj; @pedregosa2011scikit; @harris2020numpy; @virtanen2020scipy]
+This work was supported by the U.S. Department of Energy under contract DE-AC02-06CH11357 at Argonne National Laboratory.
+Additionally the development of this software was supported by the Advanced Research Projects Agency for Health (ARPA-H), DoE Office of Advanced Scientific Computing Research (ASCR) and Biological and Environmental Research (BER).
 
 # References

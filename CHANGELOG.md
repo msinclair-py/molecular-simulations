@@ -7,6 +7,16 @@ Releases from 0.4.4 onward are generated automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). This project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.6.1](https://github.com/msinclair-py/molecular-simulations/compare/v0.6.0...v0.6.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **analysis:** pass a column mapping to seaborn in CovariancePPI.make_plot ([338e993](https://github.com/msinclair-py/molecular-simulations/commit/338e99335e86f69a5e57571060d1e167c7c02b2d))
+* **analysis:** respect sel1/sel2 in PPInteractions and fix interaction metrics ([#53](https://github.com/msinclair-py/molecular-simulations/issues/53)) ([ec9c2a0](https://github.com/msinclair-py/molecular-simulations/commit/ec9c2a0448ea86eb522a142a70fa3f25aa8f02fb))
+* **mmpbsa:** correct component split, CRD box, frame count and summary stats ([7aed9a2](https://github.com/msinclair-py/molecular-simulations/commit/7aed9a2a038de6821a66085823e676124c3b5c30))
+* **mmpbsa:** correct component split, CRD box, frame count and summary stats ([20a35d2](https://github.com/msinclair-py/molecular-simulations/commit/20a35d2473991b60df53e40470095d1f338c2736))
+
 ## [0.6.0](https://github.com/msinclair-py/molecular-simulations/compare/v0.5.2...v0.6.0) (2026-09-29)
 
 

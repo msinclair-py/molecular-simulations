@@ -15,6 +15,7 @@ and with a small on-disk "flaky" helper script (to exercise retry/backoff). No
 
 import importlib.util
 import json
+import re
 import shutil
 import sys
 import textwrap
@@ -77,6 +78,19 @@ SAMPLE_PB_MDOUT = """ BOND  =       10.0  ANGLE   =       20.0  DIHED      =    
 """
 
 SAMPLE_SASA = '#Frame SASA\n1 1000.0\n2 1100.0\n'
+
+
+def _double_bonded(mdout: str) -> str:
+    """Complex mdout whose bonded terms equal receptor + ligand (2x sample)."""
+    out = []
+    for line in mdout.splitlines(keepends=True):
+        for key in ('BOND', 'ANGLE', 'DIHED', '1-4 VDW', '1-4 EEL'):
+            match = re.search(rf'{re.escape(key)}\s*=\s*(-?[\d.]+)', line)
+            if match:
+                val = float(match.group(1))
+                line = line.replace(match.group(0), f'{key} = {2 * val:10.1f}')
+        out.append(line)
+    return ''.join(out)
 
 
 def _build_mmpbsa(tmp_path, fake_amberhome, **kwargs):
@@ -517,8 +531,11 @@ class TestOutputAnalyzerParseOutputs:
         monkeypatch.chdir(tmp_path)
 
         for system in ['complex', 'receptor', 'ligand']:
-            (tmp_path / f'{system}_gb.mdout').write_text(SAMPLE_GB_MDOUT)
-            (tmp_path / f'{system}_pb.mdout').write_text(SAMPLE_PB_MDOUT)
+            gb, pb = SAMPLE_GB_MDOUT, SAMPLE_PB_MDOUT
+            if system == 'complex':
+                gb, pb = _double_bonded(gb), _double_bonded(pb)
+            (tmp_path / f'{system}_gb.mdout').write_text(gb)
+            (tmp_path / f'{system}_pb.mdout').write_text(pb)
             (tmp_path / f'{system}_surf.dat').write_text(SAMPLE_SASA)
 
         analyzer = OutputAnalyzer(path=str(tmp_path), surface_tension=0.0072)
@@ -540,10 +557,77 @@ class TestOutputAnalyzerParseOutputs:
         assert receptor_pb['EPB'].to_list() == [-22.0, -23.0]
 
         # Binding free energy populated and summary/report files written for real.
+        # Bonded terms cancel; PB ΔG per frame is -(VDWAALS + EEL + EPB +
+        # ECAVITY) = 160.0 and 162.5 -> mean 161.25, sample std 1.25*sqrt(2).
+        assert analyzer.n_frames == 2
         assert analyzer.free_energy is not None
-        assert np.allclose(analyzer.free_energy, [78.75, 1.25])
+        assert np.allclose(analyzer.free_energy, [161.25, 1.25 * np.sqrt(2)])
         assert (tmp_path / 'statistics.json').exists()
         assert (tmp_path / 'deltaG.txt').exists()
+
+
+class TestFailedSasaFrames:
+    """cpptraj molsurf writes -1.0 for a failed frame and exits 0 (issue #51)."""
+
+    def test_read_sasa_failed_frame_is_nan(self, tmp_path):
+        from molecular_simulations.simulate.mmpbsa import OutputAnalyzer
+
+        sasa_file = tmp_path / 'complex_surf.dat'
+        sasa_file.write_text('#Frame MSURF_00001\n1 4838.1\n2 4886.7\n3 -1.0\n')
+
+        esurf = OutputAnalyzer(path=str(tmp_path)).read_sasa(sasa_file).to_numpy()
+
+        assert np.allclose(esurf[:2], [4838.1 * 0.0072, 4886.7 * 0.0072])
+        assert np.isnan(esurf[2])
+
+    @staticmethod
+    def _write_outputs(path, complex_sasa):
+        for system in ['complex', 'receptor', 'ligand']:
+            gb, pb = SAMPLE_GB_MDOUT, SAMPLE_PB_MDOUT
+            sasa = SAMPLE_SASA
+            if system == 'complex':
+                gb, pb, sasa = _double_bonded(gb), _double_bonded(pb), complex_sasa
+            (path / f'{system}_gb.mdout').write_text(gb)
+            (path / f'{system}_pb.mdout').write_text(pb)
+            (path / f'{system}_surf.dat').write_text(sasa)
+
+    def test_failed_frame_dropped_from_every_system(self, tmp_path, monkeypatch):
+        import polars as pl
+
+        from molecular_simulations.simulate.mmpbsa import OutputAnalyzer
+
+        monkeypatch.chdir(tmp_path)
+        self._write_outputs(tmp_path, '#Frame SASA\n1 1000.0\n2 -1.0\n')
+
+        analyzer = OutputAnalyzer(path=str(tmp_path), log=False)
+        with pytest.warns(UserWarning, match=r'Dropping 1 frame.*\[1\]'):
+            analyzer.parse_outputs()
+
+        # Frame 2 removed from complex, receptor and ligand alike.
+        assert analyzer.n_frames == 1
+        for theory in (analyzer.gb, analyzer.pb):
+            for system in analyzer.systems:
+                rows = theory.filter(pl.col('system') == system)
+                assert rows['BOND'].to_list() in ([10.0], [20.0])
+        assert not analyzer.gb['ESURF'].is_nan().any()
+
+    def test_all_frames_failed_raises(self, tmp_path, monkeypatch):
+        from molecular_simulations.simulate.mmpbsa import OutputAnalyzer
+
+        monkeypatch.chdir(tmp_path)
+        self._write_outputs(tmp_path, '#Frame SASA\n1 -1.0\n2 -1.0\n')
+
+        with pytest.raises(ValueError, match='failed for every frame'):
+            OutputAnalyzer(path=str(tmp_path), log=False).parse_outputs()
+
+    def test_frame_count_mismatch_raises(self, tmp_path, monkeypatch):
+        from molecular_simulations.simulate.mmpbsa import OutputAnalyzer
+
+        monkeypatch.chdir(tmp_path)
+        self._write_outputs(tmp_path, '#Frame SASA\n1 1000.0\n')
+
+        with pytest.raises(ValueError, match='Frame count mismatch for complex'):
+            OutputAnalyzer(path=str(tmp_path), log=False).parse_outputs()
 
 
 class TestOutputAnalyzerGenerateSummary:
@@ -654,14 +738,61 @@ class TestOutputAnalyzerGenerateSummary:
         assert np.isclose(rec_gb['VDWAALS']['std'], 0.0)
         assert np.isclose(rec_gb['VDWAALS']['err'], 0.0)
         assert np.isclose(rec_gb['EEL']['mean'], -100.0)
-        # G gas pools VDWAALS + EEL over both frames -> mean of [-10,-10,-100,-100].
-        assert np.isclose(rec_gb['G gas']['mean'], -55.0)
-        # G solv pools EGB + ESURF -> mean of [-20,-20,5,5].
-        assert np.isclose(rec_gb['G solv']['mean'], -7.5)
-        # 'total' pools every energy column for the system.
-        assert np.isclose(
-            rec_gb['total']['mean'], np.mean([-10, -10, -100, -100, -20, -20, 5, 5])
+        # Composites are per-frame sums: G gas = VDWAALS + EEL = -110.
+        assert np.isclose(rec_gb['G gas']['mean'], -110.0)
+        assert np.isclose(rec_gb['G gas']['std'], 0.0)
+        # G solv = EGB + ESURF = -15.
+        assert np.isclose(rec_gb['G solv']['mean'], -15.0)
+        # 'total' sums every energy column per frame.
+        assert np.isclose(rec_gb['total']['mean'], -125.0)
+
+
+class TestSummaryPerFrameStatistics:
+    """Composite energies in statistics.json are per-frame sums (issue #51)."""
+
+    def test_composites_match_per_frame_sums(self, tmp_path, monkeypatch):
+        import polars as pl
+
+        from molecular_simulations.simulate.mmpbsa import OutputAnalyzer
+
+        monkeypatch.chdir(tmp_path)
+        rng = np.random.default_rng(0)
+        n = 10
+        frames = {
+            system: {
+                'VDWAALS': rng.normal(-50, 3, n),
+                'EEL': rng.normal(-300, 5, n),
+                'EGB': rng.normal(-60, 2, n),
+                'ESURF': rng.normal(10, 0.1, n),
+            }
+            for system in ('receptor', 'ligand', 'complex')
+        }
+        analyzer = OutputAnalyzer(path=str(tmp_path), log=False)
+        analyzer.gb = pl.concat(
+            [pl.DataFrame({**d, 'system': [s] * n}) for s, d in frames.items()]
         )
+        analyzer.pb = analyzer.gb.rename({'EGB': 'EPB', 'ESURF': 'ECAVITY'})
+        analyzer.contributions = {
+            'G gas': ['VDWAALS', 'EEL'],
+            'G solv': ['EGB', 'ESURF', 'EPB', 'ECAVITY'],
+        }
+        analyzer.check_bonded_terms()  # no bonded columns; sets n_frames
+        assert analyzer.n_frames == n
+
+        analyzer.generate_summary()
+        stats = json.loads(Path('statistics.json').read_text())
+
+        cpx = frames['complex']
+        expected = {
+            'G gas': cpx['VDWAALS'] + cpx['EEL'],
+            'G solv': cpx['EGB'] + cpx['ESURF'],
+            'total': cpx['VDWAALS'] + cpx['EEL'] + cpx['EGB'] + cpx['ESURF'],
+        }
+        for key, per_frame in expected.items():
+            got = stats['complex']['gb'][key]
+            assert np.isclose(got['mean'], per_frame.mean())
+            assert np.isclose(got['std'], per_frame.std(ddof=1))
+            assert np.isclose(got['err'], per_frame.std(ddof=1) / np.sqrt(n))
 
 
 class TestOutputAnalyzerCheckBondedTerms:
@@ -701,8 +832,9 @@ class TestOutputAnalyzerCheckBondedTerms:
         # Must not raise; also computes derived frame counts.
         analyzer.check_bonded_terms()
 
-        assert analyzer.n_frames == analyzer.gb.height
-        assert np.isclose(analyzer.square_root_N, np.sqrt(analyzer.n_frames))
+        # One frame per system, not the three stacked rows.
+        assert analyzer.n_frames == 1
+        assert np.isclose(analyzer.square_root_N, 1.0)
         # RESTRAINT is stripped by check_bonded_terms.
         assert 'RESTRAINT' not in analyzer.gb.columns
         assert 'RESTRAINT' not in analyzer.pb.columns
@@ -720,6 +852,19 @@ class TestOutputAnalyzerCheckBondedTerms:
         with pytest.raises(
             ValueError, match=r'Bonded terms for receptor \+ ligand != complex!'
         ):
+            analyzer.check_bonded_terms()
+
+    @pytest.mark.parametrize('delta', [+5.0, -5.0])
+    def test_bonded_mismatch_caught_either_sign(self, tmp_path, delta):
+        import polars as pl
+
+        analyzer = self._analyzer(tmp_path)
+        analyzer.gb = self._consistent_df().with_columns(
+            pl.Series('BOND', [10.0, 5.0, 15.0 + delta])
+        )
+        analyzer.pb = self._consistent_df()
+
+        with pytest.raises(ValueError, match='Bonded terms'):
             analyzer.check_bonded_terms()
 
 
@@ -943,6 +1088,71 @@ class TestFileHandlerInit:
         assert len(files) == 3
         prefixes = [f[0].name for f in files]
         assert prefixes == ['complex', 'receptor', 'ligand']
+
+
+class TestFileHandlerCpptrajScripts:
+    """Inspect the cpptraj scripts FileHandler issues (issue #51).
+
+    A stand-in ``cpptraj`` appends every input script it is given to a log and
+    reports a frame count, so the full chunked path runs without AmberTools.
+    """
+
+    @staticmethod
+    def _recording_cpptraj(tmp_path):
+        log = tmp_path / 'cpptraj_calls.log'
+        binary = tmp_path / 'cpptraj'
+        binary.write_text(
+            f'#!/bin/bash\ncat "$2" >> {log}\necho "----" >> {log}\n'
+            'echo "Total frames: 4"\n'
+        )
+        binary.chmod(0o755)
+        return binary, log
+
+    def _scripts(self, tmp_path, n_chunks):
+        from molecular_simulations.simulate.mmpbsa import FileHandler
+
+        binary, log = self._recording_cpptraj(tmp_path)
+        (tmp_path / 'system.prmtop').write_text('placeholder')
+        (tmp_path / 'traj.dcd').write_text('placeholder')
+        FileHandler(
+            top=tmp_path / 'system.prmtop',
+            traj=tmp_path / 'traj.dcd',
+            path=tmp_path,
+            sels=[':1-85', ':86-98'],  # [receptor, ligand]
+            first=0,
+            last=-1,
+            stride=1,
+            cpptraj_binary=binary,
+            n_chunks=n_chunks,
+        )
+        return log.read_text().splitlines()
+
+    @staticmethod
+    def _stripped_before(lines, write_cmd, target):
+        """Selection stripped in the block that writes ``target``."""
+        idx = next(
+            i for i, ln in enumerate(lines) if ln.startswith(write_cmd) and target in ln
+        )
+        strip = next(ln for ln in reversed(lines[:idx]) if 'strip' in ln)
+        return strip.split()[-1]
+
+    def test_receptor_keeps_receptor_selection(self, tmp_path):
+        lines = self._scripts(tmp_path, n_chunks=1)
+
+        # receptor.* = complex minus ligand; ligand.* = complex minus receptor.
+        assert self._stripped_before(lines, 'parmwrite', 'receptor.prmtop') == ':86-98'
+        assert self._stripped_before(lines, 'parmwrite', 'ligand.prmtop') == ':1-85'
+        assert self._stripped_before(lines, 'trajout', 'receptor.crd') == ':86-98'
+        assert self._stripped_before(lines, 'trajout', 'ligand.crd') == ':1-85'
+
+    @pytest.mark.parametrize('n_chunks', [1, 2])
+    def test_crd_trajectories_written_without_box(self, tmp_path, n_chunks):
+        lines = self._scripts(tmp_path, n_chunks=n_chunks)
+
+        crd_writes = [ln for ln in lines if ln.startswith('trajout') and ' crd' in ln]
+        # 3 component CRDs, plus one per system per chunk when splitting.
+        assert len(crd_writes) == 3 + (3 * n_chunks if n_chunks > 1 else 0)
+        assert all(' crd nobox' in ln for ln in crd_writes)
 
 
 # ============================================================================

@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import time
+import warnings
 from concurrent.futures import ALL_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
@@ -800,15 +801,48 @@ class OutputAnalyzer:
         self.gb = pl.DataFrame()
         self.pb = pl.DataFrame()
 
+        gbs, pbs = {}, {}
         for system in self.systems:
             E_sasa = self.read_sasa(self.path / f'{system}_surf.dat')
             E_gb = self.read_GB(self.path / f'{system}_gb.mdout', system)
             E_pb = self.read_PB(self.path / f'{system}_pb.mdout', system)
 
-            E_gb = E_gb.drop('ESURF').with_columns(E_sasa)
+            lengths = {E_sasa.len(), E_gb.height, E_pb.height}
+            if len(lengths) != 1:
+                raise ValueError(
+                    f'Frame count mismatch for {system}: SASA {E_sasa.len()}, '
+                    f'GB {E_gb.height}, PB {E_pb.height}'
+                )
 
-            self.gb = pl.concat([self.gb, E_gb], how='vertical')
-            self.pb = pl.concat([self.pb, E_pb], how='vertical')
+            gbs[system] = E_gb.drop('ESURF').with_columns(E_sasa)
+            pbs[system] = E_pb
+
+        n_frames = {gb.height for gb in gbs.values()}
+        if len(n_frames) != 1:
+            raise ValueError(
+                'Frame count mismatch between systems: '
+                + ', '.join(f'{s} {gb.height}' for s, gb in gbs.items())
+            )
+
+        # A failed SASA frame in any one system invalidates that frame for all
+        # three, since ΔG is computed frame by frame.
+        failed = np.zeros(n_frames.pop(), dtype=bool)
+        for gb in gbs.values():
+            failed |= gb['ESURF'].is_nan().to_numpy()
+
+        if failed.all():
+            raise ValueError('SASA calculation failed for every frame.')
+        if failed.any():
+            warnings.warn(
+                f'Dropping {failed.sum()} frame(s) with failed SASA calculations '
+                f'(frame indices {np.flatnonzero(failed).tolist()}).',
+                stacklevel=2,
+            )
+
+        keep = pl.Series(~failed)
+        for system in self.systems:
+            self.gb = pl.concat([self.gb, gbs[system].filter(keep)], how='vertical')
+            self.pb = pl.concat([self.pb, pbs[system].filter(keep)], how='vertical')
 
         all_cols = list(set(self.gb.columns + self.pb.columns))
         self.contributions = {
@@ -823,15 +857,20 @@ class OutputAnalyzer:
     def read_sasa(self, _file: PathLike) -> pl.Series:
         """Read cpptraj SASA calculation results.
 
+        cpptraj's molsurf writes -1.0 for a frame where the surface calculation
+        failed (and still exits cleanly), so any non-positive or non-finite area
+        is returned as NaN for parse_outputs to drop.
+
         Args:
             _file: Path to SASA data file.
 
         Returns:
-            Polars Series of rescaled SASA energies.
+            Polars Series of rescaled SASA energies, NaN for failed frames.
         """
         df = pd.read_csv(_file, sep=r'\s+')
-        sasa = df.iloc[:, -1].to_numpy(dtype=float) * self.surften + self.offset
-        return pl.Series('ESURF', sasa)
+        sasa = df.iloc[:, -1].to_numpy(dtype=float)
+        energy = np.where(sasa > 0, sasa * self.surften + self.offset, np.nan)
+        return pl.Series('ESURF', energy)
 
     def read_GB(self, _file: PathLike, system: str) -> pl.DataFrame:
         """Read GB mdout file and parse energy terms.
@@ -930,7 +969,7 @@ class OutputAnalyzer:
             c = c.select(pl.col([col for col in c.columns if col in bonded])).to_numpy()
 
             diffs = np.array(c - b - a)
-            if np.where(diffs >= self.tolerance)[0].size > 0:
+            if np.any(np.abs(diffs) >= self.tolerance):
                 raise ValueError('Bonded terms for receptor + ligand != complex!')
 
         remove = ['RESTRAINT', 'EDISPER']
@@ -941,7 +980,8 @@ class OutputAnalyzer:
             pl.col([col for col in self.pb.columns if col not in remove])
         )
 
-        self.n_frames = self.gb.height
+        # gb stacks all three systems; N is the per-system frame count.
+        self.n_frames = self.gb.filter(pl.col('system') == 'complex').height
         self.square_root_N = np.sqrt(self.n_frames)
 
     def generate_summary(self) -> None:
@@ -962,32 +1002,36 @@ class OutputAnalyzer:
 
                     stats[col] = {'mean': mean, 'std': stdev, 'err': err}
 
+                # Composite energies are summed per frame before averaging.
                 for energy, contributors in self.contributions.items():
-                    pooled_data = (
+                    per_frame = (
                         sys.select(
                             pl.col([col for col in sys.columns if col in contributors])
                         )
                         .to_numpy()
-                        .flatten()
+                        .sum(axis=1)
                     )
+                    stats[energy] = self._summarize(per_frame)
 
-                    stats[energy] = {
-                        'mean': np.mean(pooled_data),
-                        'std': np.std(pooled_data),
-                        'err': np.std(pooled_data) / self.square_root_N,
-                    }
-
-                total_data = sys.to_numpy().flatten()
-                stats['total'] = {
-                    'mean': np.mean(total_data),
-                    'std': np.std(total_data),
-                    'err': np.std(total_data) / self.square_root_N,
-                }
+                stats['total'] = self._summarize(sys.to_numpy().sum(axis=1))
 
                 full_statistics[system][level] = stats
 
         with open('statistics.json', 'w') as fout:
             json.dump(full_statistics, fout, indent=4)
+
+    def _summarize(self, per_frame: np.ndarray) -> dict[str, float]:
+        """Mean, sample standard deviation and standard error of a series.
+
+        Args:
+            per_frame: One value per frame.
+
+        Returns:
+            Dictionary with 'mean', 'std' and 'err' keys.
+        """
+        mean = float(np.mean(per_frame))
+        std = float(np.std(per_frame, ddof=1)) if per_frame.size > 1 else 0.0
+        return {'mean': mean, 'std': std, 'err': std / self.square_root_N}
 
     def compute_dG(self) -> None:
         """Compute binding free energy (ΔG) for GB and PB methods."""
@@ -1002,8 +1046,10 @@ class OutputAnalyzer:
                     theory.filter(pl.col('system') == system).drop('system').to_numpy()
                 )
 
+            # Sample standard deviation, matching statistics.json.
+            ddof = 1 if diff_arr.shape[0] > 1 else 0
             means = np.mean(diff_arr, axis=0)
-            stds = np.std(diff_arr, axis=0)
+            stds = np.std(diff_arr, axis=0, ddof=ddof)
             errs = stds / self.square_root_N
 
             gas_solv_phase = []
@@ -1018,17 +1064,19 @@ class OutputAnalyzer:
 
                 diff_cols.append(energy)
                 means = np.concatenate((means, [np.mean(contribution)]))
-                stds = np.concatenate((stds, [np.std(contribution)]))
+                stds = np.concatenate((stds, [np.std(contribution, ddof=ddof)]))
                 errs = np.concatenate(
-                    (errs, [np.std(contribution) / self.square_root_N])
+                    (errs, [np.std(contribution, ddof=ddof) / self.square_root_N])
                 )
 
             diff_cols.append('∆G Binding')
             total = np.sum(np.vstack(gas_solv_phase), axis=0)
 
             means = np.concatenate((means, [np.mean(total)]))
-            stds = np.concatenate((stds, [np.std(total)]))
-            errs = np.concatenate((errs, [np.std(total) / self.square_root_N]))
+            stds = np.concatenate((stds, [np.std(total, ddof=ddof)]))
+            errs = np.concatenate(
+                (errs, [np.std(total, ddof=ddof) / self.square_root_N])
+            )
 
             data = np.vstack((means, stds, errs))
 
@@ -1181,7 +1229,11 @@ class FileHandler:
                 self.trajectory_chunks[system] = [traj]
 
     def prepare_topologies(self) -> None:
-        """Slice sub-topologies for complex, receptor, and ligand."""
+        """Slice sub-topologies for complex, receptor, and ligand.
+
+        selections is [receptor, ligand]; each component is made by stripping
+        the *other* selection from the complex.
+        """
         self.topologies = [
             self.path / 'complex.prmtop',
             self.path / 'receptor.prmtop',
@@ -1196,12 +1248,12 @@ class FileHandler:
             'run',
             'clear all',
             f'parm {self.topologies[0]}',
-            f'parmstrip {self.selections[0]}',
+            f'parmstrip {self.selections[1]}',
             f'parmwrite out {self.topologies[1]}',
             'run',
             'clear all',
             f'parm {self.topologies[0]}',
-            f'parmstrip {self.selections[1]}',
+            f'parmstrip {self.selections[0]}',
             f'parmwrite out {self.topologies[2]}',
             'run',
             'quit',
@@ -1234,21 +1286,21 @@ class FileHandler:
             'strip :WAT,Na+,Cl*',
             'autoimage',
             'rmsd !(:WAT,Cl*,CIO,Cs+,IB,K*,Li+,MG*,Na+,Rb+,CS,RB,NA,F,CL) mass first',
-            f'trajout {self.trajectories[0]} crd {frame_control}',
+            f'trajout {self.trajectories[0]} crd nobox {frame_control}',
             f'trajout {self.pdbs[0]} pdb onlyframes 1',
             'run',
             'clear all',
             f'parm {self.topologies[0]}',
             f'trajin {self.trajectories[0]}',
-            f'strip {self.selections[0]}',
-            f'trajout {self.trajectories[1]} crd',
+            f'strip {self.selections[1]}',
+            f'trajout {self.trajectories[1]} crd nobox',
             f'trajout {self.pdbs[1]} pdb onlyframes 1',
             'run',
             'clear all',
             f'parm {self.topologies[0]}',
             f'trajin {self.trajectories[0]}',
-            f'strip {self.selections[1]}',
-            f'trajout {self.trajectories[2]} crd',
+            f'strip {self.selections[0]}',
+            f'trajout {self.trajectories[2]} crd nobox',
             f'trajout {self.pdbs[2]} pdb onlyframes 1',
             'run',
             'quit',
@@ -1357,7 +1409,7 @@ class FileHandler:
                 script_content = [
                     f'parm {top}',
                     f'trajin {traj} {start_frame} {end_frame}',
-                    f'trajout {chunk_traj} crd',
+                    f'trajout {chunk_traj} crd nobox',
                     'run',
                     'quit',
                 ]

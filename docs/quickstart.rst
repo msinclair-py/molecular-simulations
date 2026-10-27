@@ -134,9 +134,9 @@ Analyze hydrogen bonds, salt bridges, and hydrophobic contacts:
    ppi = PPInteractions(
        top="/path/to/topology.prmtop",
        traj="/path/to/trajectory.dcd",
-       out="/path/to/outputs/",
-       sel1="chainID A",
-       sel2="chainID B",
+       out="/path/to/outputs/ppi_results.json",
+       sel1="resid 1-85",  # prmtop has no chain IDs; select by residue
+       sel2="resid 86-98",
    )
    ppi.run()
 

@@ -590,7 +590,11 @@ class PPInteractions:
         """
         _fig, ax = plt.subplots(1, 1, figsize=(6, 5))
 
-        sns.barplot(data=data, x='Residue Pair', y=column, ax=ax)
+        # seaborn reads non-pandas frames via the __dataframe__ protocol, which
+        # polars 2 dropped; a plain mapping of columns works on any version.
+        sns.barplot(
+            data=data.to_dict(as_series=False), x='Residue Pair', y=column, ax=ax
+        )
 
         ax.set_xlabel('Residue Pair', fontsize=fs)
         ax.set_ylabel('Probability', fontsize=fs)

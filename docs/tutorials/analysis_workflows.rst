@@ -29,6 +29,11 @@ Combine multiple analysis tools to fully characterize a binding interface:
    # Load universe for MDAnalysis-based analyses
    u = mda.Universe(str(top), str(traj))
 
+   # AMBER prmtop files carry no chain or segment IDs, so select each
+   # partner by residue range (adjust to your system)
+   target_sel = "resid 1-85"
+   binder_sel = "resid 86-98"
+
 Step 1: Interaction Energy Fingerprinting
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -39,8 +44,8 @@ Identify residues with strong energetic contributions:
    fp = Fingerprinter(
        topology=str(top),
        trajectory=str(traj),
-       target_selection="segid A",
-       binder_selection="segid B",
+       target_selection=target_sel,
+       binder_selection=binder_sel,
    )
    fp.run()
    fp.save(out / "fingerprint.npz")
@@ -68,9 +73,9 @@ Characterize specific interaction types:
    ppi = PPInteractions(
        top=str(top),
        traj=str(traj),
-       out=str(out),
-       sel1="segid A",
-       sel2="segid B",
+       out=str(out / "ppi_results.json"),
+       sel1=target_sel,
+       sel2=binder_sel,
        hbond_cutoff=3.5,
        sb_cutoff=6.0,
        hydrophobic_cutoff=8.0,
@@ -94,8 +99,8 @@ Calculate interface burial upon complex formation:
    complex_sasa.run()
 
    # For interface residues, compare to isolated chains
-   chain_a = u.select_atoms("segid A")
-   chain_b = u.select_atoms("segid B")
+   chain_a = u.select_atoms(target_sel)
+   chain_b = u.select_atoms(binder_sel)
 
    # Buried surface area = SASA(A) + SASA(B) - SASA(complex)
 
@@ -106,7 +111,7 @@ Identify buried vs exposed residues:
 
 .. code-block:: python
 
-   rsasa = RelativeSASA(u, selection="segid A")
+   rsasa = RelativeSASA(u, selection=target_sel)
    rsasa.run()
 
    # Residues with relative SASA < 0.25 are typically buried
@@ -133,7 +138,7 @@ Process multiple trajectories efficiently:
        fp = Fingerprinter(
            topology=str(top),
            trajectory=str(traj),
-           target_selection="segid A",
+           target_selection=target_sel,
        )
        fp.run()
        fp.save(out / "fingerprint.npz")

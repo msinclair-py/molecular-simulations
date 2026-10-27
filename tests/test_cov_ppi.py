@@ -890,6 +890,19 @@ class TestSelectionsRespected:
         # Only Lys has a C-alpha in resids 1-2 (ACE has none).
         assert C.shape == (1, 1)
 
+    @pytest.mark.parametrize('sel', ['resname ACE', 'resname ACE NME'])
+    def test_termini_only_selection_raises(self, correlated_trajectory, tmp_path, sel):
+        ppi = _ppi(correlated_trajectory, tmp_path, sel1=sel)
+
+        with pytest.raises(ValueError, match=f"'{sel}' contains no C-alpha atoms"):
+            ppi.get_covariance()
+
+    def test_capped_chain_selection_is_accepted(self, correlated_trajectory, tmp_path):
+        """Caps inside a larger selection are fine; only Lys/Asp contribute."""
+        ppi = _ppi(correlated_trajectory, tmp_path, sel1='chainID A', sel2='chainID B')
+
+        assert ppi.get_covariance().shape == (1, 1)
+
     def test_topology_without_chain_ids(self, test_data_dir, tmp_path):
         """tleap prmtops carry no chainIDs; residue selections must still work."""
         amber = test_data_dir / 'amber'

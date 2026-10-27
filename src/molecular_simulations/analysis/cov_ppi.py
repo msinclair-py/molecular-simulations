@@ -197,9 +197,20 @@ class PPInteractions:
 
         Returns:
             Covariance matrix with shape (N_residues_sel1, N_residues_sel2).
+
+        Raises:
+            ValueError: If a selection contains no C-alpha atoms, e.g. one
+                that selects only terminal caps such as ACE or NME.
         """
         p1_ca = self.u.select_atoms(f'({self.sel1}) and name CA')
         p2_ca = self.u.select_atoms(f'({self.sel2}) and name CA')
+        for sel, ca in ((self.sel1, p1_ca), (self.sel2, p2_ca)):
+            if ca.n_atoms == 0:
+                raise ValueError(
+                    f'Selection {sel!r} contains no C-alpha atoms (terminal caps '
+                    'such as ACE/NME have none); covariance is computed on C-alpha '
+                    'atoms.'
+                )
 
         N = p1_ca.n_residues
         M = p2_ca.n_residues

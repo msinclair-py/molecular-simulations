@@ -213,9 +213,10 @@ class TestPPInteractions:
 
         saltbridge_ppi.res_map(ag1, ag2)
 
-        # Chain A starts at resid 1 (ACE), chain B at resid 4 (ACE)
-        assert saltbridge_ppi.mapping['ag1'][0] == 1
-        assert saltbridge_ppi.mapping['ag2'][0] == 4
+        # Maps to residue indices (0-based, unique across chains): chain A
+        # starts at resindex 0 (ACE, resid 1), chain B at resindex 3 (ACE, resid 4)
+        assert saltbridge_ppi.mapping['ag1'][0] == 0
+        assert saltbridge_ppi.mapping['ag2'][0] == 3
 
     def test_interpret_covariance(self, saltbridge_ppi):
         """Test interpret_covariance splits positive/negative correlations."""
@@ -435,10 +436,11 @@ class TestComputeInteractions:
 
     def test_compute_interactions(self, traj_ppi):
         """compute_interactions scores the real Lys(2)-Asp(5) interface."""
-        result = traj_ppi.compute_interactions(2, 5)
+        # Arguments are residue indices: Lys resid 2 -> 1, Asp resid 5 -> 4
+        result = traj_ppi.compute_interactions(1, 4)
 
         assert isinstance(result, dict)
-        # Key format is 'A_<aa><resid>-B_<aa><resid>'
+        # Key format is '<chain>_<aa><resid>-<chain>_<aa><resid>'
         assert 'A_K2-B_D5' in result
         scores = result['A_K2-B_D5']
         assert set(scores) == {'hydrophobic', 'hbond', 'saltbridge'}
@@ -571,7 +573,7 @@ class TestPPInteractionsComputeInteractions:
 
     def test_compute_interactions_returns_data(self, traj_ppi):
         """compute_interactions returns a dict keyed by the residue pair."""
-        result = traj_ppi.compute_interactions(2, 5)
+        result = traj_ppi.compute_interactions(1, 4)
 
         assert isinstance(result, dict)
         key = next(iter(result))
@@ -625,8 +627,9 @@ class TestPPInteractionsAnalyzeSaltbridgeWithTrajectory:
         result = traj_ppi.analyze_saltbridge(lys, asp)
 
         assert isinstance(result, float)
-        # Present in the first frame, broken as chain B drifts away
-        assert result == 0.2
+        # Closest NZ-OD distance is 3.42, 4.58, 5.75, 6.93, 8.11 A over the five
+        # frames, so the bridge holds (< 6 A) in the first three.
+        assert result == 0.6
 
 
 class TestPPInteractionsRunWithPlot:
@@ -746,26 +749,25 @@ class TestInterpretCovarianceAlreadySeen:
     """Exercise the 'already seen' skip arms of interpret_covariance."""
 
     def test_positive_pair_already_seen_is_skipped(self, saltbridge_ppi):
-        """A reversed positive pair already in `seen` is not re-added (264->261)."""
-        # Overlapping resid namespaces so cell (1,1) yields (2,1), the reverse
-        # of (1,2) added by cell (0,0) -> hits the 'already seen' skip.
+        """A reversed positive pair already in `seen` is not re-added."""
+        # Overlapping selections share residues 1 and 2: cell (1,1) yields
+        # (2,1), the same residue pair as (1,2); (1,1)/(2,2) are self-pairs.
         saltbridge_ppi.mapping = {'ag1': {0: 1, 1: 2}, 'ag2': {0: 2, 1: 1}}
         cov = np.array([[0.5, 0.5], [0.5, 0.5]])
 
         positive, negative = saltbridge_ppi.interpret_covariance(cov)
 
-        # (2,1) is skipped, so only three unique pairs survive.
-        assert positive == [(1, 2), (1, 1), (2, 2)]
+        assert positive == [(1, 2)]
         assert negative == []
 
     def test_negative_pair_already_seen_is_skipped(self, saltbridge_ppi):
-        """A reversed negative pair already in `seen` is not re-added (273->270)."""
+        """A reversed negative pair already in `seen` is not re-added."""
         saltbridge_ppi.mapping = {'ag1': {0: 1, 1: 2}, 'ag2': {0: 2, 1: 1}}
         cov = np.array([[-0.5, -0.5], [-0.5, -0.5]])
 
         positive, negative = saltbridge_ppi.interpret_covariance(cov)
 
-        assert negative == [(1, 2), (1, 1), (2, 2)]
+        assert negative == [(1, 2)]
         assert positive == []
 
 
@@ -812,3 +814,178 @@ class TestAnalyzeHydrophobicNoContact:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+# ============================================================================
+# Selections drive the whole analysis (issue #50)
+# ============================================================================
+
+
+@pytest.fixture
+def correlated_trajectory(two_chain_pdb, tmp_path):
+    """Two-chain trajectory where both chains jitter together.
+
+    The committed DCD only moves chain B, so its C-alpha covariance is zero and
+    no residue pair is ever analyzed. Rigidly shifting the whole complex by the
+    same random offset each frame gives a positive Lys/Asp covariance.
+    """
+    import MDAnalysis as mda
+
+    u = mda.Universe(str(two_chain_pdb))
+    x0 = u.atoms.positions.copy()
+    rng = np.random.default_rng(0)
+    dcd = tmp_path / 'correlated.dcd'
+    with mda.Writer(str(dcd), u.atoms.n_atoms) as w:
+        for _ in range(10):
+            u.atoms.positions = x0 + rng.normal(0.0, 0.3, 3)
+            w.write(u.atoms)
+    return {'top': two_chain_pdb, 'traj': dcd}
+
+
+def _ppi(files, tmp_path, **kwargs):
+    from molecular_simulations.analysis.cov_ppi import PPInteractions
+
+    return PPInteractions(
+        top=str(files['top']),
+        traj=str(files['traj']),
+        out=tmp_path / 'results.json',
+        plot=False,
+        **kwargs,
+    )
+
+
+class TestSelectionsRespected:
+    """sel1/sel2 define the covariance matrix and the analyzed residues."""
+
+    def test_default_chains_find_salt_bridge(self, correlated_trajectory, tmp_path):
+        ppi = _ppi(correlated_trajectory, tmp_path)
+        ppi.run()
+
+        results = json.loads((tmp_path / 'results.json').read_text())
+        assert set(results['positive']) == {'A_K2-B_D5'}
+        assert results['positive']['A_K2-B_D5']['saltbridge'] > 0.0
+
+    def test_swapped_selections(self, correlated_trajectory, tmp_path):
+        """Previously an IndexError: covariance came from chain A/B regardless."""
+        ppi = _ppi(correlated_trajectory, tmp_path, sel1='chainID B', sel2='chainID A')
+        ppi.run()
+
+        results = json.loads((tmp_path / 'results.json').read_text())
+        assert set(results['positive']) == {'B_D5-A_K2'}
+
+    def test_residue_range_selections(self, correlated_trajectory, tmp_path):
+        ppi = _ppi(correlated_trajectory, tmp_path, sel1='resid 1-3', sel2='resid 4-6')
+        ppi.run()
+
+        results = json.loads((tmp_path / 'results.json').read_text())
+        assert set(results['positive']) == {'A_K2-B_D5'}
+
+    def test_or_selection_is_parenthesized(self, correlated_trajectory, tmp_path):
+        """'resid 1 or resid 2' must not become 'resid 1 or (resid 2 and name CA)'."""
+        ppi = _ppi(
+            correlated_trajectory, tmp_path, sel1='resid 1 or resid 2', sel2='resid 5'
+        )
+        C = ppi.get_covariance()
+
+        # Only Lys has a C-alpha in resids 1-2 (ACE has none).
+        assert C.shape == (1, 1)
+
+    @pytest.mark.parametrize('sel', ['resname ACE', 'resname ACE NME'])
+    def test_termini_only_selection_raises(self, correlated_trajectory, tmp_path, sel):
+        ppi = _ppi(correlated_trajectory, tmp_path, sel1=sel)
+
+        with pytest.raises(ValueError, match=f"'{sel}' contains no C-alpha atoms"):
+            ppi.get_covariance()
+
+    def test_capped_chain_selection_is_accepted(self, correlated_trajectory, tmp_path):
+        """Caps inside a larger selection are fine; only Lys/Asp contribute."""
+        ppi = _ppi(correlated_trajectory, tmp_path, sel1='chainID A', sel2='chainID B')
+
+        assert ppi.get_covariance().shape == (1, 1)
+
+    def test_topology_without_chain_ids(self, test_data_dir, tmp_path):
+        """tleap prmtops carry no chainIDs; residue selections must still work."""
+        amber = test_data_dir / 'amber'
+        ppi = _ppi(
+            {'top': amber / 'lys_asp.prmtop', 'traj': amber / 'lys_asp.inpcrd'},
+            tmp_path,
+            sel1='resname LYS',
+            sel2='resname ASP',
+        )
+
+        assert ppi.get_covariance().shape == (1, 1)
+        # No chain IDs -> labels fall back to one-letter code + resID.
+        assert set(ppi.compute_interactions(1, 2)) == {'K2-D3'}
+
+    @staticmethod
+    def _renumbered(two_chain_pdb, tmp_path):
+        """Two-chain PDB with chain B renumbered 1-3, plus a correlated DCD."""
+        import MDAnalysis as mda
+
+        u = mda.Universe(str(two_chain_pdb))
+        x0 = u.atoms.positions.copy()
+        chain_b = u.select_atoms('chainID B').residues
+        chain_b.resids = chain_b.resids - 3
+        top = tmp_path / 'renumbered.pdb'
+        u.atoms.write(str(top))
+        dcd = tmp_path / 'renumbered.dcd'
+        rng = np.random.default_rng(0)
+        with mda.Writer(str(dcd), u.atoms.n_atoms) as w:
+            for _ in range(10):
+                u.atoms.positions = x0 + rng.normal(0.0, 0.3, 3)
+                w.write(u.atoms)
+        return {'top': top, 'traj': dcd}
+
+    def test_chains_numbered_from_one_keep_all_pairs(self, two_chain_pdb, tmp_path):
+        """Shared resIDs across selections no longer collapse distinct pairs."""
+        import MDAnalysis as mda
+
+        files = self._renumbered(two_chain_pdb, tmp_path)
+        ppi = _ppi(files, tmp_path)
+        first_atoms = [
+            mda.AtomGroup([r.atoms[0] for r in ppi.u.select_atoms(sel).residues[:2]])
+            for sel in ('chainID A', 'chainID B')
+        ]
+        ppi.res_map(*first_atoms)
+        positive, _ = ppi.interpret_covariance(np.ones((2, 2)))
+
+        # Both sides are resids [1, 2]; keyed by resID the reversed (2, 1) was
+        # dropped as a duplicate of (1, 2), leaving 3 of the 4 pairs.
+        assert positive == [(0, 3), (0, 4), (1, 3), (1, 4)]
+
+        ppi.run()
+        results = json.loads((tmp_path / 'results.json').read_text())
+        assert set(results['positive']) == {'A_K2-B_D2'}
+
+
+class TestInteractionMetrics:
+    """Salt-bridge distance and carbon detection (issue #50 follow-ups)."""
+
+    def test_saltbridge_uses_closest_charged_atoms(self, saltbridge_ppi):
+        """3.42 A NZ-OD contact: the old norm-of-differences metric gave 5.43 A."""
+        saltbridge_ppi.sb = 4.0
+        lys = saltbridge_ppi.u.select_atoms('resname LYS')
+        asp = saltbridge_ppi.u.select_atoms('resname ASP')
+
+        assert saltbridge_ppi.analyze_saltbridge(lys, asp) == 1.0
+
+    def test_amber_hc_hydrogens_are_not_carbons(self, test_data_dir):
+        import MDAnalysis as mda
+
+        from molecular_simulations.analysis.cov_ppi import PPInteractions
+
+        amber = test_data_dir / 'amber'
+        u = mda.Universe(str(amber / 'lys_asp.prmtop'), str(amber / 'lys_asp.inpcrd'))
+        lys = u.select_atoms('resname LYS')
+
+        carbons = {a.name for a in lys if PPInteractions._is_carbon(a)}
+        assert carbons == {'C', 'CA', 'CB', 'CG', 'CD', 'CE'}
+        # ff19SB types the C-alpha 'XC' and aliphatic hydrogens 'HC'.
+        assert lys.select_atoms('name CA').types[0] == 'XC'
+        assert 'HC' in set(lys.types)
+
+    def test_is_carbon_falls_back_to_name(self):
+        from molecular_simulations.analysis.cov_ppi import PPInteractions
+
+        assert PPInteractions._is_carbon(SimpleNamespace(element='', name='CB'))
+        assert not PPInteractions._is_carbon(SimpleNamespace(element='', name='HB2'))

@@ -36,7 +36,8 @@ class PPInteractions:
         u: MDAnalysis Universe object.
         n_frames: Number of frames in the trajectory.
         out: Output path for results.
-        mapping: Residue index to resID mapping for both selections.
+        mapping: Covariance-matrix index to residue index (resindex)
+            mapping for both selections.
 
     Args:
         top: Path to topology file.
@@ -136,19 +137,20 @@ class PPInteractions:
         interaction is engaged.
 
         Args:
-            res1: ResID for a residue in sel1.
-            res2: ResID for a residue in sel2.
+            res1: Residue index (``resindex``) of a residue in sel1.
+            res2: Residue index (``resindex``) of a residue in sel2.
 
         Returns:
             Nested dictionary containing the results of each interaction
-            type. Keys are residue pair names, values are dictionaries
-            mapping interaction type to probability.
+            type. Keys are residue pair names (e.g. ``'A_K2-B_D5'``, or
+            ``'K2-D5'`` when the topology has no chain IDs), values are
+            dictionaries mapping interaction type to probability.
         """
-        grp1 = self.u.select_atoms(f'{self.sel1} and resid {res1}')
-        grp2 = self.u.select_atoms(f'{self.sel2} and resid {res2}')
-        r1 = convert_aa_code(grp1.resnames[0])
-        r2 = convert_aa_code(grp2.resnames[0])
-        name = f'A_{r1}{res1}-B_{r2}{res2}'
+        residue1 = self.u.residues[res1]
+        residue2 = self.u.residues[res2]
+        grp1 = residue1.atoms
+        grp2 = residue2.atoms
+        name = f'{self._residue_label(residue1)}-{self._residue_label(residue2)}'
 
         data = {name: {label: 0.0 for label in ['hydrophobic', 'hbond', 'saltbridge']}}
         function_calls, labels = self.identify_interaction_type(
@@ -159,6 +161,24 @@ class PPInteractions:
             data[name][label] = call(grp1, grp2)
 
         return data
+
+    @staticmethod
+    def _residue_label(residue: mda.core.groups.Residue) -> str:
+        """Label a residue by one-letter code and resID, prefixed by chain ID.
+
+        Args:
+            residue: Residue to label.
+
+        Returns:
+            Label such as ``'A_K2'``, or ``'K2'`` when the topology has no
+            chain IDs (e.g. AMBER prmtop files).
+        """
+        label = f'{convert_aa_code(residue.resname)}{residue.resid}'
+        if hasattr(residue.atoms, 'chainIDs'):
+            chain = residue.atoms.chainIDs[0].strip()
+            if chain:
+                label = f'{chain}_{label}'
+        return label
 
     def get_covariance(self) -> np.ndarray:
         """Compute the positional covariance matrix between selections.
@@ -177,11 +197,22 @@ class PPInteractions:
 
         Returns:
             Covariance matrix with shape (N_residues_sel1, N_residues_sel2).
-        """
-        p1_ca = self.u.select_atoms('chainID A and name CA')
-        N = p1_ca.n_residues
 
-        p2_ca = self.u.select_atoms('chainID B and name CA')
+        Raises:
+            ValueError: If a selection contains no C-alpha atoms, e.g. one
+                that selects only terminal caps such as ACE or NME.
+        """
+        p1_ca = self.u.select_atoms(f'({self.sel1}) and name CA')
+        p2_ca = self.u.select_atoms(f'({self.sel2}) and name CA')
+        for sel, ca in ((self.sel1, p1_ca), (self.sel2, p2_ca)):
+            if ca.n_atoms == 0:
+                raise ValueError(
+                    f'Selection {sel!r} contains no C-alpha atoms (terminal caps '
+                    'such as ACE/NME have none); covariance is computed on C-alpha '
+                    'atoms.'
+                )
+
+        N = p1_ca.n_residues
         M = p2_ca.n_residues
 
         self.res_map(p1_ca, p2_ca)
@@ -223,21 +254,21 @@ class PPInteractions:
         return C
 
     def res_map(self, ag1: mda.AtomGroup, ag2: mda.AtomGroup) -> None:
-        """Create mapping from covariance matrix indices to resIDs.
+        """Create mapping from covariance matrix indices to residue indices.
 
-        Maps covariance matrix indices to AtomGroup resIDs to ensure
-        correct residue pairs are examined.
+        Maps covariance matrix indices to residue indices (``resindex``),
+        which, unlike resIDs, are unique across chains.
 
         Args:
             ag1: AtomGroup of the first selection.
             ag2: AtomGroup of the second selection.
         """
         mapping = {'ag1': {}, 'ag2': {}}
-        for i, resid in enumerate(ag1.resids):
-            mapping['ag1'][i] = resid
+        for i, resindex in enumerate(ag1.resindices):
+            mapping['ag1'][i] = int(resindex)
 
-        for i, resid in enumerate(ag2.resids):
-            mapping['ag2'][i] = resid
+        for i, resindex in enumerate(ag2.resindices):
+            mapping['ag2'][i] = int(resindex)
 
         self.mapping = mapping
 
@@ -251,7 +282,9 @@ class PPInteractions:
 
         Returns:
             Tuple of two lists: (positive_pairs, negative_pairs).
-            Each pair is a tuple of (resID_sel1, resID_sel2).
+            Each pair is a tuple of (resindex_sel1, resindex_sel2). A pair
+            seen in either order (possible when the selections overlap) is
+            kept once, and a residue is never paired with itself.
         """
         pos_corr = np.where(cov_mat > 0.0)
         neg_corr = np.where(cov_mat < 0.0)
@@ -261,7 +294,7 @@ class PPInteractions:
         for i in range(len(pos_corr[0])):
             res1 = self.mapping['ag1'][pos_corr[0][i]]
             res2 = self.mapping['ag2'][pos_corr[1][i]]
-            if (res1, res2) not in seen:
+            if res1 != res2 and (res1, res2) not in seen:
                 positive.append((res1, res2))
                 seen.add((res1, res2))
                 seen.add((res2, res1))
@@ -270,7 +303,7 @@ class PPInteractions:
         for i in range(len(neg_corr[0])):
             res1 = self.mapping['ag1'][neg_corr[0][i]]
             res2 = self.mapping['ag2'][neg_corr[1][i]]
-            if (res1, res2) not in seen:
+            if res1 != res2 and (res1, res2) not in seen:
                 negative.append((res1, res2))
                 seen.add((res1, res2))
                 seen.add((res2, res1))
@@ -337,7 +370,9 @@ class PPInteractions:
     def analyze_saltbridge(self, res1: mda.AtomGroup, res2: mda.AtomGroup) -> float:
         """Calculate salt bridge occupancy between two residues.
 
-        Uses a simple distance cutoff to determine salt bridge formation.
+        A frame counts as a salt bridge when the closest pair of charged-group
+        atoms (Lys NZ, Arg NH1/NH2, Asp OD1/OD2, Glu OE1/OE2) is within the
+        cutoff.
 
         Args:
             res1: AtomGroup for a residue from selection 1.
@@ -372,7 +407,7 @@ class PPInteractions:
 
         n_frames = 0
         for _ts in self.u.trajectory:
-            dist = np.linalg.norm(grp1.positions - grp2.positions)
+            dist = distance_array(grp1.positions, grp2.positions).min()
             if dist < self.sb:
                 n_frames += 1
 
@@ -417,11 +452,11 @@ class PPInteractions:
         h2 = self.u.select_atoms('resname DUMMY')
 
         for atom in res1.atoms:
-            if 'C' in atom.type:
+            if self._is_carbon(atom):
                 h1 += atom
 
         for atom in res2.atoms:
-            if 'C' in atom.type:
+            if self._is_carbon(atom):
                 h2 += atom
 
         n_frames = 0
@@ -431,6 +466,25 @@ class PPInteractions:
                 n_frames += 1
 
         return n_frames / self.n_frames
+
+    @staticmethod
+    def _is_carbon(atom: mda.core.groups.Atom) -> bool:
+        """Whether an atom is a carbon.
+
+        Atom types are not reliable for this (Amber's aliphatic hydrogen
+        type is ``HC``; ff19SB's C-alpha type is ``XC``), so the element is
+        used, falling back to the atom name when no element is available.
+
+        Args:
+            atom: Atom to test.
+
+        Returns:
+            True if the atom is a carbon.
+        """
+        element = getattr(atom, 'element', '') or ''
+        if element:
+            return element.upper() == 'C'
+        return atom.name.upper().startswith('C')
 
     def survey_donors_acceptors(
         self, res1: mda.AtomGroup, res2: mda.AtomGroup

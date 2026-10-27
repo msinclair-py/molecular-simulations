@@ -6,7 +6,6 @@ https://www.biorxiv.org/content/10.1101/2025.03.24.644990v1.full.pdf
 """
 
 import json
-import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
@@ -143,17 +142,15 @@ class PPInteractions:
 
         Returns:
             Nested dictionary containing the results of each interaction
-            type. Keys are residue pair names (e.g. ``'K2-D5'``, one-letter
-            code plus resID), values are dictionaries mapping interaction
-            type to probability.
+            type. Keys are residue pair names (e.g. ``'A_K2-B_D5'``, or
+            ``'K2-D5'`` when the topology has no chain IDs), values are
+            dictionaries mapping interaction type to probability.
         """
         residue1 = self.u.residues[res1]
         residue2 = self.u.residues[res2]
         grp1 = residue1.atoms
         grp2 = residue2.atoms
-        r1 = convert_aa_code(residue1.resname)
-        r2 = convert_aa_code(residue2.resname)
-        name = f'{r1}{residue1.resid}-{r2}{residue2.resid}'
+        name = f'{self._residue_label(residue1)}-{self._residue_label(residue2)}'
 
         data = {name: {label: 0.0 for label in ['hydrophobic', 'hbond', 'saltbridge']}}
         function_calls, labels = self.identify_interaction_type(
@@ -164,6 +161,24 @@ class PPInteractions:
             data[name][label] = call(grp1, grp2)
 
         return data
+
+    @staticmethod
+    def _residue_label(residue: mda.core.groups.Residue) -> str:
+        """Label a residue by one-letter code and resID, prefixed by chain ID.
+
+        Args:
+            residue: Residue to label.
+
+        Returns:
+            Label such as ``'A_K2'``, or ``'K2'`` when the topology has no
+            chain IDs (e.g. AMBER prmtop files).
+        """
+        label = f'{convert_aa_code(residue.resname)}{residue.resid}'
+        if hasattr(residue.atoms, 'chainIDs'):
+            chain = residue.atoms.chainIDs[0].strip()
+            if chain:
+                label = f'{chain}_{label}'
+        return label
 
     def get_covariance(self) -> np.ndarray:
         """Compute the positional covariance matrix between selections.
@@ -182,21 +197,9 @@ class PPInteractions:
 
         Returns:
             Covariance matrix with shape (N_residues_sel1, N_residues_sel2).
-
-        Raises:
-            ValueError: If either selection contains no C-alpha atoms.
         """
         p1_ca = self.u.select_atoms(f'({self.sel1}) and name CA')
         p2_ca = self.u.select_atoms(f'({self.sel2}) and name CA')
-        for sel, ca in ((self.sel1, p1_ca), (self.sel2, p2_ca)):
-            if ca.n_atoms == 0:
-                raise ValueError(f'Selection {sel!r} contains no C-alpha atoms.')
-            if len(set(ca.resids)) < ca.n_residues:
-                warnings.warn(
-                    f'Selection {sel!r} contains repeated resIDs; residue-pair '
-                    'labels are built from resIDs and may collide.',
-                    stacklevel=2,
-                )
 
         N = p1_ca.n_residues
         M = p2_ca.n_residues

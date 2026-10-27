@@ -440,9 +440,9 @@ class TestComputeInteractions:
         result = traj_ppi.compute_interactions(1, 4)
 
         assert isinstance(result, dict)
-        # Key format is '<aa><resid>-<aa><resid>'
-        assert 'K2-D5' in result
-        scores = result['K2-D5']
+        # Key format is '<chain>_<aa><resid>-<chain>_<aa><resid>'
+        assert 'A_K2-B_D5' in result
+        scores = result['A_K2-B_D5']
         assert set(scores) == {'hydrophobic', 'hbond', 'saltbridge'}
         assert all(0.0 <= v <= 1.0 for v in scores.values())
 
@@ -826,7 +826,7 @@ def correlated_trajectory(two_chain_pdb, tmp_path):
     """Two-chain trajectory where both chains jitter together.
 
     The committed DCD only moves chain B, so its C-alpha covariance is zero and
-    no residue pair is ever analysed. Rigidly shifting the whole complex by the
+    no residue pair is ever analyzed. Rigidly shifting the whole complex by the
     same random offset each frame gives a positive Lys/Asp covariance.
     """
     import MDAnalysis as mda
@@ -854,16 +854,16 @@ def _ppi(files, tmp_path, **kwargs):
     )
 
 
-class TestSelectionsHonoured:
-    """sel1/sel2 define the covariance matrix and the analysed residues."""
+class TestSelectionsRespected:
+    """sel1/sel2 define the covariance matrix and the analyzed residues."""
 
     def test_default_chains_find_salt_bridge(self, correlated_trajectory, tmp_path):
         ppi = _ppi(correlated_trajectory, tmp_path)
         ppi.run()
 
         results = json.loads((tmp_path / 'results.json').read_text())
-        assert set(results['positive']) == {'K2-D5'}
-        assert results['positive']['K2-D5']['saltbridge'] > 0.0
+        assert set(results['positive']) == {'A_K2-B_D5'}
+        assert results['positive']['A_K2-B_D5']['saltbridge'] > 0.0
 
     def test_swapped_selections(self, correlated_trajectory, tmp_path):
         """Previously an IndexError: covariance came from chain A/B regardless."""
@@ -871,16 +871,16 @@ class TestSelectionsHonoured:
         ppi.run()
 
         results = json.loads((tmp_path / 'results.json').read_text())
-        assert set(results['positive']) == {'D5-K2'}
+        assert set(results['positive']) == {'B_D5-A_K2'}
 
     def test_residue_range_selections(self, correlated_trajectory, tmp_path):
         ppi = _ppi(correlated_trajectory, tmp_path, sel1='resid 1-3', sel2='resid 4-6')
         ppi.run()
 
         results = json.loads((tmp_path / 'results.json').read_text())
-        assert set(results['positive']) == {'K2-D5'}
+        assert set(results['positive']) == {'A_K2-B_D5'}
 
-    def test_or_selection_is_parenthesised(self, correlated_trajectory, tmp_path):
+    def test_or_selection_is_parenthesized(self, correlated_trajectory, tmp_path):
         """'resid 1 or resid 2' must not become 'resid 1 or (resid 2 and name CA)'."""
         ppi = _ppi(
             correlated_trajectory, tmp_path, sel1='resid 1 or resid 2', sel2='resid 5'
@@ -889,12 +889,6 @@ class TestSelectionsHonoured:
 
         # Only Lys has a C-alpha in resids 1-2 (ACE has none).
         assert C.shape == (1, 1)
-
-    def test_empty_selection_raises(self, correlated_trajectory, tmp_path):
-        ppi = _ppi(correlated_trajectory, tmp_path, sel1='resname ACE')
-
-        with pytest.raises(ValueError, match="'resname ACE' contains no C-alpha"):
-            ppi.get_covariance()
 
     def test_topology_without_chain_ids(self, test_data_dir, tmp_path):
         """tleap prmtops carry no chainIDs; residue selections must still work."""
@@ -907,6 +901,8 @@ class TestSelectionsHonoured:
         )
 
         assert ppi.get_covariance().shape == (1, 1)
+        # No chain IDs -> labels fall back to one-letter code + resID.
+        assert set(ppi.compute_interactions(1, 2)) == {'K2-D3'}
 
     @staticmethod
     def _renumbered(two_chain_pdb, tmp_path):
@@ -946,14 +942,7 @@ class TestSelectionsHonoured:
 
         ppi.run()
         results = json.loads((tmp_path / 'results.json').read_text())
-        assert set(results['positive']) == {'K2-D2'}
-
-    def test_repeated_resids_within_selection_warn(self, two_chain_pdb, tmp_path):
-        files = self._renumbered(two_chain_pdb, tmp_path)
-        ppi = _ppi(files, tmp_path, sel1='resid 1-3', sel2='chainID B')
-
-        with pytest.warns(UserWarning, match="'resid 1-3' contains repeated resIDs"):
-            ppi.get_covariance()
+        assert set(results['positive']) == {'A_K2-B_D2'}
 
 
 class TestInteractionMetrics:

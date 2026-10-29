@@ -208,28 +208,49 @@ Create publication-quality figures:
    plt.tight_layout()
    plt.savefig("interface_analysis.png", dpi=300)
 
-Interface Scoring for AlphaFold Models
---------------------------------------
+Interface Scoring for Predicted Structures
+------------------------------------------
 
-For predicted structures with AlphaFold confidence metrics:
+For structures predicted by Chai, Boltz or AlphaFold, with pLDDT and PAE
+saved as ``.npz`` files:
 
 .. code-block:: python
 
    from molecular_simulations.analysis import ipSAE
 
    scorer = ipSAE(
-       structure_file="alphafold_complex.pdb",
-       pae_file="predicted_aligned_error.json",
-       plddt_file="plddt_scores.json",
+       structure_file="complex.cif",
+       plddt_file="plddt.npz",
+       pae_file="pae.npz",
+       scores=("ipsae", "ipsae2", "pDockQ", "pDockQ2", "LIS"),  # default: all
    )
-   scores = scorer.run()
-
-   print(f"ipTM: {scores['ipTM']:.3f}")
-   print(f"ipSAE: {scores['ipSAE']:.3f}")
-   print(f"pDockQ: {scores['pDockQ']:.3f}")
-   print(f"pDockQ2: {scores['pDockQ2']:.3f}")
+   scorer.run()
+   print(scorer.scores.select("chain1", "chain2", "ipSAE", "ipSAE2", "pDockQ"))
 
    # Interpretation:
    # pDockQ > 0.5: Likely correct interface
    # pDockQ 0.23-0.5: Possible interface
    # pDockQ < 0.23: Unlikely correct
+
+``scorer.scores`` has one row per chain pair. pDockQ, pDockQ2, LIS, ipTM and
+ipSAE are defined for protein and nucleic acid chains; ipSAE2
+(`DunbrackLab/IPSAE2 <https://github.com/DunbrackLab/IPSAE2>`_) also scores
+ligands, glycans and ions:
+
+* Each direction ``12`` aligns on ``chain1`` and scores ``chain2``
+  (``ipSAE2_12``, ``ipSAE2_21`` plus ``iPAE``, ``n0``, ``d0``, contact count
+  and alignment token diagnostics). ``ipSAE2`` is the larger direction for
+  same-type pairs, otherwise the direction aligned on the more complex
+  molecule (protein > nucleic acid > ligand > ion).
+* Protein and nucleic acid units use an inclusive 10 A PAE cutoff; ligand
+  and ion units have none. Only pairs with a heavy-atom contact within 5 A
+  are scored. Override these through ``ipsae2_kwargs``, e.g.
+  ``ipsae2_kwargs={"pae_cutoff": 12, "all_pairs": True}``.
+* The predictor's token order (atom-tokenized ligands and modified
+  residues) is reconstructed from the structure; an error is raised if it
+  does not match the PAE size or is ambiguous.
+
+Without ``ipsae2`` in ``scores``, ligand, glycan and ion chains must be
+listed in ``skip_chains``. With it, they are dropped from the other scores
+automatically. Pass ``plddt_file=None`` with ``scores=["ipsae2"]`` when no
+pLDDT file is available.

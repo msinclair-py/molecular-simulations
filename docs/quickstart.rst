@@ -166,19 +166,19 @@ path to another location which has ambertools installed (which cannot be done vi
 Interface Scoring
 ~~~~~~~~~~~~~~~~~
 
-Score protein-protein interfaces using AlphaFold metrics:
+Score interfaces of predicted complexes from pLDDT and PAE:
 
 .. code-block:: python
 
    from molecular_simulations.analysis import ipSAE
 
    scorer = ipSAE(
-       structure_file="/path/to/complex.pdb",
-       pae_file="/path/to/pae.json",
-       plddt_file="/path/to/plddt.json",
+       structure_file="/path/to/complex.cif",
+       plddt_file="/path/to/plddt.npz",
+       pae_file="/path/to/pae.npz",
    )
-   scores = scorer.run()
-   # Returns: ipTM, ipSAE, pDockQ, pDockQ2
+   scorer.run()
+   print(scorer.scores)  # ipTM, ipSAE, ipSAE2, pDockQ, pDockQ2, LIS
 
 Next Steps
 ----------

@@ -385,7 +385,15 @@ class TestIpSAERun:
         np.savez(plddt_file, plddt=np.array([0.9, 0.8]))
         np.savez(pae_file, pae=np.array([[0.0, 3.0], [3.0, 0.0]]))
 
-        obj = ipSAE(str(two_chain_pdb), plddt_file, pae_file, out_path=str(tmp_path))
+        # The capped (ACE/NME) PDB has no 2-token predictor tokenization, so
+        # ipSAE2 is left out; it is covered in test_ipsae2.py.
+        obj = ipSAE(
+            str(two_chain_pdb),
+            plddt_file,
+            pae_file,
+            out_path=str(tmp_path),
+            scores=('ipsae', 'pdockq', 'pdockq2', 'lis'),
+        )
 
         obj.run()
 

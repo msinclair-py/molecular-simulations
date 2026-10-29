@@ -30,7 +30,7 @@ A comprehensive Python toolkit for building, running, and analyzing molecular dy
 - **Protein-protein interaction analysis** using covariance matrix approach
 - **Interaction energy fingerprinting** (electrostatic + Lennard-Jones)
 - **Linear interaction energy** calculations (static and dynamic)
-- **Interface scoring** with ipTM, ipSAE, pDockQ, and pDockQ2
+- **Interface scoring** with ipTM, ipSAE, ipSAE2, pDockQ, pDockQ2, and LIS
 - **SASA calculations** (absolute and relative) via MDAnalysis
 - **Residue energy footprinting** for binding site characterization
 
@@ -174,19 +174,24 @@ ppi = PPInteractions(
 ppi.run()  # Analyzes H-bonds, salt bridges, hydrophobic contacts
 ```
 
-#### Interface Scoring (ipSAE/pDockQ)
+#### Interface Scoring (ipSAE/ipSAE2/pDockQ)
 
 ```python
 from molecular_simulations.analysis import ipSAE
 
 scorer = ipSAE(
-    structure_file='/path/to/complex.pdb',
-    pae_file='/path/to/pae.json',  # AlphaFold PAE matrix
-    plddt_file='/path/to/plddt.json'
+    structure_file='/path/to/complex.cif',
+    plddt_file='/path/to/plddt.npz',  # 'plddt' key
+    pae_file='/path/to/pae.npz',      # 'pae' key
+    scores=('ipsae', 'ipsae2', 'pDockQ', 'pDockQ2', 'LIS'),  # default: all
 )
-scores = scorer.run()
-# Returns: ipTM, ipSAE, pDockQ, pDockQ2 scores
+scorer.run()
+print(scorer.scores)  # one row per chain pair; also written to ipSAE_scores.parquet
 ```
+
+ipSAE2 ([DunbrackLab/IPSAE2](https://github.com/DunbrackLab/IPSAE2)) also
+scores ligands, glycans and ions. The other scores cover protein and nucleic
+acid chains only and leave pairs involving other molecules empty.
 
 #### SASA Calculations
 

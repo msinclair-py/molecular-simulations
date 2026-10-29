@@ -18,6 +18,5 @@ Submodules
    molecular_simulations.analysis.fingerprinter
    molecular_simulations.analysis.interaction_energy
    molecular_simulations.analysis.ipSAE
-   molecular_simulations.analysis.ipsae2
    molecular_simulations.analysis.sasa
    molecular_simulations.analysis.utils

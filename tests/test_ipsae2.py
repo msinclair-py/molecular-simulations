@@ -9,17 +9,12 @@ import numpy as np
 import pytest
 from scipy.spatial import cKDTree
 
-from molecular_simulations.analysis.ipSAE import ipSAE
-from molecular_simulations.analysis.ipsae2 import (
+from molecular_simulations.analysis.ipSAE import (
     IpSAE2Calculator,
+    IpSAE2Parser,
     MoleculeGeometry,
     TokenTable,
-    classify_molecules,
-    contact_units,
-    frame_validity,
-    infer_tokens,
-    read_atoms,
-    read_pae_metadata,
+    ipSAE,
 )
 
 UPSTREAM_PAE = np.array(
@@ -102,9 +97,11 @@ def write_cif(path, atoms):
 
 def load(path, pae, metadata=None):
     """Parse, tokenize and assign frames for a model."""
-    atoms = read_atoms(path)
-    tokens = infer_tokens(atoms, classify_molecules(atoms), len(pae), metadata)
-    tokens.frame_valid = frame_validity(atoms, tokens, metadata)
+    atoms = IpSAE2Parser.read_atoms(path)
+    tokens = IpSAE2Parser.infer_tokens(
+        atoms, IpSAE2Parser.classify_molecules(atoms), len(pae), metadata
+    )
+    tokens.frame_valid = IpSAE2Parser.frame_validity(atoms, tokens, metadata)
     return atoms, tokens
 
 
@@ -151,8 +148,14 @@ class TestGeometry:
                 xyz, np.array([key], object), xyz[0], xyz[0], cKDTree(xyz)
             )
 
-        assert contact_units(geom(0, 'a'), geom(5, 'b'), 5.0) == ({'a'}, {'b'})
-        assert contact_units(geom(0, 'a'), geom(5.01, 'b'), 5.0) == (set(), set())
+        assert IpSAE2Calculator.contact_units(geom(0, 'a'), geom(5, 'b'), 5.0) == (
+            {'a'},
+            {'b'},
+        )
+        assert IpSAE2Calculator.contact_units(geom(0, 'a'), geom(5.01, 'b'), 5.0) == (
+            set(),
+            set(),
+        )
 
 
 class TestUpstreamExample:
@@ -165,7 +168,7 @@ class TestUpstreamExample:
 
     def test_tokens(self, model):
         atoms, tokens = load(model, UPSTREAM_PAE)
-        assert classify_molecules(atoms) == {
+        assert IpSAE2Parser.classify_molecules(atoms) == {
             'A': 'prot',
             'B': 'prot',
             'C': 'lig',
@@ -208,18 +211,18 @@ class TestUpstreamExample:
     def test_npz_metadata(self, model, tmp_path):
         good = tmp_path / 'good.npz'
         np.savez(good, pae=UPSTREAM_PAE, token_asym_id=[0, 1, 2, 2, 2, 3])
-        _, tokens = load(model, UPSTREAM_PAE, read_pae_metadata(good))
+        _, tokens = load(model, UPSTREAM_PAE, IpSAE2Parser.read_pae_metadata(good))
         assert list(tokens.chain) == ['A', 'B', 'C', 'C', 'C', 'D']
 
         bad = tmp_path / 'bad.npz'
         np.savez(bad, pae=UPSTREAM_PAE, token_asym_id=[0, 1, 1, 2, 2, 3])
         with pytest.raises(ValueError, match='token mapping'):
-            load(model, UPSTREAM_PAE, read_pae_metadata(bad))
+            load(model, UPSTREAM_PAE, IpSAE2Parser.read_pae_metadata(bad))
 
     def test_frame_mask_metadata(self, model, tmp_path):
         path = tmp_path / 'pae.npz'
         np.savez(path, pae=UPSTREAM_PAE, frame_mask=[0, 1, 1, 1, 1, 1])
-        _, tokens = load(model, UPSTREAM_PAE, read_pae_metadata(path))
+        _, tokens = load(model, UPSTREAM_PAE, IpSAE2Parser.read_pae_metadata(path))
         # Ions never define a frame, even when the predictor says so.
         assert list(tokens.frame_valid) == [False, True, True, True, True, False]
 
@@ -349,7 +352,7 @@ class TestGlycan:
     def test_glycan_is_one_atom_tokenized_ligand(self, model):
         n = 2 + 6 + 1
         atoms, tokens = load(model, np.full((n, n), 5.0))
-        assert classify_molecules(atoms)['G'] == 'lig'
+        assert IpSAE2Parser.classify_molecules(atoms)['G'] == 'lig'
         assert list(tokens.chain) == ['A', 'A'] + ['G'] * 6 + ['B']
         assert tokens.policy == 'modified=none;ligand=atom'
         assert len(set(tokens.unit_key[2:8])) == 6
@@ -383,10 +386,29 @@ def test_ambiguous_tokenization_raises(tmp_path):
         load(model, np.zeros((4, 4)))
 
 
+@pytest.mark.parametrize('n_tokens, policy', [(3, 'residue'), (6, 'atom')])
+def test_selenocysteine_is_a_modified_residue(tmp_path, n_tokens, policy):
+    # Boltz keeps SEC as one token; AF3/Chai split it into atom tokens.
+    atoms = [
+        *ala('A', 1, 0.0),
+        ('HETATM', 'N', 'SEC', 'A', 2, (3.0, 0.0, 0.0), 'N'),
+        ('HETATM', 'CA', 'SEC', 'A', 2, (4.0, 0.0, 0.0), 'C'),
+        ('HETATM', 'C', 'SEC', 'A', 2, (4.0, 1.0, 0.0), 'C'),
+        ('HETATM', 'SE', 'SEC', 'A', 2, (5.0, 0.0, 0.0), 'SE'),
+        *ala('A', 3, 6.0),
+    ]
+    model = write_pdb(tmp_path / 'sec.pdb', atoms)
+    _, tokens = load(model, np.zeros((n_tokens, n_tokens)))
+    assert tokens.policy == f'modified={policy};ligand=none'
+    assert len(set(tokens.unit_key)) == 3
+
+
 def test_ion_in_protein_chain_raises(tmp_path):
     atoms = [*ala('A', 1, 0.0), ('HETATM', 'ZN', 'ZN', 'A', 2, (5.0, 0, 0), 'ZN')]
     with pytest.raises(ValueError, match='shares protein chain'):
-        classify_molecules(read_atoms(write_pdb(tmp_path / 'zn.pdb', atoms)))
+        IpSAE2Parser.classify_molecules(
+            IpSAE2Parser.read_atoms(write_pdb(tmp_path / 'zn.pdb', atoms))
+        )
 
 
 class TestScoreSelection:

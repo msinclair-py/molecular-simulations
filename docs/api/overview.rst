@@ -23,8 +23,7 @@ Package Structure
        ├── cov_ppi             # Protein-protein interactions
        ├── fingerprinter       # Interaction fingerprinting
        ├── interaction_energy  # Energy calculations
-       ├── ipSAE               # Interface scoring
-       ├── ipsae2              # ipSAE2 for any molecule type
+       ├── ipSAE               # Interface scoring (ipSAE2, ipSAE, pDockQ, LIS)
        ├── sasa                # Solvent accessible surface area
        └── utils               # Shared utilities
 

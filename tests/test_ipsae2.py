@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from scipy.spatial import cKDTree
 
+from molecular_simulations.analysis.ipSAE import ipSAE
 from molecular_simulations.analysis.ipsae2 import (
     IpSAE2Calculator,
     MoleculeGeometry,
@@ -386,3 +387,92 @@ def test_ion_in_protein_chain_raises(tmp_path):
     atoms = [*ala('A', 1, 0.0), ('HETATM', 'ZN', 'ZN', 'A', 2, (5.0, 0, 0), 'ZN')]
     with pytest.raises(ValueError, match='shares protein chain'):
         classify_molecules(read_atoms(write_pdb(tmp_path / 'zn.pdb', atoms)))
+
+
+class TestScoreSelection:
+    """ipSAE with a protein-glycan-protein model and score selection.
+
+    Tokens: A1, A2 (0-1), six glycan atoms (2-7), B1 (8). B aligns A
+    confidently (PAE 1) and A aligns B less so (PAE 2), so the original
+    ipSAE reports the pair as B -> A.
+    """
+
+    @pytest.fixture
+    def files(self, tmp_path):
+        atoms = ala('A', 1, 0.0) + ala('A', 2, 3.0)
+        atoms += sugar('G', 1, 0.0) + sugar('G', 2, 3.0)
+        atoms += ala('B', 1, 6.0)
+        model = write_pdb(tmp_path / 'model.pdb', atoms)
+        pae = np.full((9, 9), 25.0)
+        pae[:2, 8] = 2.0
+        pae[8, :2] = 1.0
+        pae[:2, 2:8] = 2.0
+        np.savez(tmp_path / 'pae.npz', pae=pae)
+        np.savez(tmp_path / 'plddt.npz', plddt=np.full(9, 90.0))
+        return model, tmp_path / 'plddt.npz', tmp_path / 'pae.npz'
+
+    def test_default_scores_all(self, files):
+        scorer = ipSAE(*files)
+        scorer.run()
+        scores = scorer.scores
+        assert set(zip(scores['chain1'], scores['chain2'], strict=True)) == {
+            ('B', 'A'),
+            ('A', 'G'),
+            ('B', 'G'),
+        }
+
+        ba = row_for(scores, 'B', 'A')
+        # Glycan tokens are dropped, so B maps to token 8, not a glycan atom.
+        assert ba['ipSAE'] == pytest.approx(0.5)
+        for column in ('pDockQ', 'pDockQ2', 'LIS', 'ipTM'):
+            assert ba[column] is not None
+        # ipSAE2 directions are reoriented to the merged chain1 -> chain2.
+        assert ba['ipSAE2_12'] == pytest.approx(0.5)
+        assert ba['ipSAE2_21'] == pytest.approx(0.2)
+        assert ba['ipSAE2'] == pytest.approx(0.5)
+        assert ba['ipSAE2_source'] == '12'
+
+        ag = row_for(scores, 'A', 'G')
+        assert ag['type2'] == 'lig'
+        assert ag['ipSAE'] is None and ag['pDockQ'] is None
+        assert ag['ipSAE2'] == pytest.approx(0.5)
+        bg = row_for(scores, 'B', 'G')
+        assert bg['ipSAE2'] == pytest.approx(1 / (1 + (25 / 2) ** 2))
+
+    def test_legacy_only_raises_on_glycan(self, files):
+        scorer = ipSAE(*files, scores=('ipsae', 'pDockQ'))
+        with pytest.raises(ValueError, match='skip_chains'):
+            scorer.run()
+
+    def test_legacy_only_with_skip_chains(self, files):
+        scorer = ipSAE(*files, skip_chains=['G'], scores=('ipsae', 'LIS'))
+        scorer.run()
+        assert scorer.scores.columns == ['chain1', 'chain2', 'LIS', 'ipTM', 'ipSAE']
+        row = row_for(scorer.scores, 'B', 'A')
+        assert row['ipSAE'] == pytest.approx(0.5)
+
+    def test_ipsae2_only_without_plddt(self, files):
+        model, _, pae = files
+        scorer = ipSAE(model, None, pae, scores=['ipSAE2'])
+        scorer.run()
+        assert 'ipSAE' not in scorer.scores.columns
+        assert len(scorer.scores) == 3
+        assert row_for(scorer.scores, 'A', 'B')['ipSAE2_source'] == '21'
+
+    def test_ipsae2_kwargs(self, files):
+        model, _, pae = files
+        scorer = ipSAE(
+            model, None, pae, scores=['ipsae2'], ipsae2_kwargs={'pae_cutoff': 1.5}
+        )
+        scorer.run()
+        # A -> B fails the tighter cutoff; B -> A (PAE 1) still passes.
+        row = row_for(scorer.scores, 'A', 'B')
+        assert row['ipSAE2_12'] == 0.0
+        assert row['ipSAE2_21'] == pytest.approx(0.5)
+
+    def test_invalid_arguments(self, files):
+        model, plddt, pae = files
+        with pytest.raises(ValueError, match='Unknown'):
+            ipSAE(model, plddt, pae, scores=['ipsae3'])
+        with pytest.raises(ValueError, match='plddt_file is required'):
+            ipSAE(model, None, pae, scores=['ipsae2', 'lis'])

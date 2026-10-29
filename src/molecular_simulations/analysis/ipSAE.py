@@ -3,9 +3,12 @@
 
 This module computes interaction prediction scores from pLDDT and PAE data,
 adapted from https://doi.org/10.1101/2025.02.10.637595. Supports outputs
-from structure prediction tools like Boltz and AlphaFold.
+from structure prediction tools like Boltz and AlphaFold. The ipSAE2 score,
+which also covers ligands, glycans and ions, is implemented in
+:mod:`molecular_simulations.analysis.ipsae2`.
 """
 
+from collections.abc import Iterable
 from itertools import permutations
 from pathlib import Path
 from typing import Any
@@ -14,32 +17,63 @@ import numpy as np
 import polars as pl
 from scipy.spatial.distance import cdist
 
+from .ipsae2 import (
+    IpSAE2Calculator,
+    classify_molecules,
+    frame_validity,
+    infer_tokens,
+    read_atoms,
+    read_pae_metadata,
+)
+
 PathLike = Path | str
 OptPath = Path | str | None
+
+SCORE_TYPES = ('ipsae', 'ipsae2', 'pdockq', 'pdockq2', 'lis')
+LEGACY_COLUMNS = {
+    'pdockq': ('pDockQ',),
+    'pdockq2': ('pDockQ2',),
+    'lis': ('LIS',),
+    'ipsae': ('ipTM', 'ipSAE'),
+}
 
 
 class ipSAE:
     """Compute interaction prediction Score from Aligned Errors.
 
-    Computes various model quality scores including pDockQ, pDockQ2,
-    LIS, ipTM, and ipSAE for structure predictions.
+    Computes any of pDockQ, pDockQ2, LIS, ipSAE (with ipTM) and ipSAE2 for
+    structure predictions, one row per unordered chain pair.
+
+    pDockQ, pDockQ2, LIS and ipSAE only score protein and nucleic acid
+    chains. Chains without standard residues (ligands, glycans, ions) must
+    be listed in ``skip_chains`` unless ipSAE2 is also requested, in which
+    case they are left out of those scores automatically while still being
+    scored by ipSAE2.
 
     Attributes:
         parser: ModelParser instance for structure file.
         plddt_file: Path to pLDDT data file.
         pae_file: Path to PAE data file.
         path: Output directory path.
+        score_types: Requested scores, lower case.
         scores: Polars DataFrame of computed scores after run().
 
     Args:
         structure_file: Path to PDB/CIF model file.
         plddt_file: Path to pLDDT numpy file (.npz with 'plddt' key).
+            May be None when only ipSAE2 is requested.
         pae_file: Path to PAE numpy file (.npz with 'pae' key).
         out_path: Output directory path. If None, uses parent directory
-            of plddt_file.
-        skip_chains: Chain IDs to exclude from scoring (e.g. glycan
-            or ligand chains). Their pLDDT/PAE tokens are inferred
-            from remaining tokens and dropped before scoring.
+            of plddt_file (or pae_file).
+        skip_chains: Chain IDs to exclude from all scores. Their
+            pLDDT/PAE tokens are inferred from remaining tokens and
+            dropped before scoring.
+        scores: Scores to compute, any of 'ipsae', 'ipsae2', 'pDockQ',
+            'pDockQ2' and 'LIS' (case-insensitive). Defaults to all.
+        ipsae2_kwargs: Keyword arguments for
+            :class:`~molecular_simulations.analysis.ipsae2.IpSAE2Calculator`
+            (pae_cutoff, contact_cutoff, fixed_d0, protein_min_d0,
+            all_pairs).
 
     Example:
         >>> scorer = ipSAE('model.pdb', 'plddt.npz', 'pae.npz')
@@ -50,27 +84,47 @@ class ipSAE:
     def __init__(
         self,
         structure_file: PathLike,
-        plddt_file: PathLike,
+        plddt_file: OptPath,
         pae_file: PathLike,
         out_path: OptPath = None,
         skip_chains: set[str] | list[str] | None = None,
+        scores: Iterable[str] = SCORE_TYPES,
+        ipsae2_kwargs: dict[str, Any] | None = None,
     ):
         """Initialize the ipSAE scorer.
 
         Args:
             structure_file: Path to structure file.
-            plddt_file: Path to pLDDT data file.
+            plddt_file: Path to pLDDT data file, or None for ipSAE2 only.
             pae_file: Path to PAE data file.
             out_path: Output directory path.
-            skip_chains: Chain IDs to exclude from scoring (e.g. glycan
-                or ligand chains). Their pLDDT/PAE tokens are inferred
-                from remaining tokens and dropped before scoring.
+            skip_chains: Chain IDs to exclude from all scores.
+            scores: Scores to compute. Defaults to all.
+            ipsae2_kwargs: Keyword arguments for IpSAE2Calculator.
+
+        Raises:
+            ValueError: If a score name is unknown, or plddt_file is None
+                while a score other than ipSAE2 is requested.
         """
+        self.score_types = {name.lower() for name in scores}
+        unknown = self.score_types - set(SCORE_TYPES)
+        if unknown or not self.score_types:
+            raise ValueError(
+                f'Unknown or empty scores {sorted(unknown)}; choose from {SCORE_TYPES}'
+            )
+        if plddt_file is None and self.score_types - {'ipsae2'}:
+            raise ValueError('plddt_file is required for scores other than ipsae2')
+
+        self.skip_chains = set(skip_chains) if skip_chains else set()
+        self.ipsae2_kwargs = ipsae2_kwargs or {}
         self.parser = ModelParser(structure_file, skip_chains=skip_chains)
-        self.plddt_file = Path(plddt_file)
+        self.plddt_file = Path(plddt_file) if plddt_file is not None else None
         self.pae_file = Path(pae_file)
 
-        self.path = Path(out_path) if out_path is not None else self.plddt_file.parent
+        if out_path is not None:
+            self.path = Path(out_path)
+        else:
+            self.path = (self.plddt_file or self.pae_file).parent
         self.path.mkdir(exist_ok=True)
 
     def parse_structure_file(self) -> None:
@@ -105,16 +159,50 @@ class ipSAE:
         )
 
     def run(self) -> None:
-        """Execute the complete ipSAE scoring workflow.
+        """Execute the complete scoring workflow.
 
-        Parses structure, computes distogram, loads pLDDT and PAE data,
-        runs the scorer, and saves results.
+        Computes the requested scores, merges them into one row per chain
+        pair, and saves results.
+        """
+        PAE = self.load_PAE_file()
+        legacy = None
+        if self.score_types & LEGACY_COLUMNS.keys():
+            legacy = self.run_legacy(PAE)
+        ipsae2 = self.run_ipsae2(PAE) if 'ipsae2' in self.score_types else None
+
+        self.scores = self.merge_scores(legacy, ipsae2)
+        self.save_scores()
+
+    def run_legacy(self, PAE: np.ndarray) -> pl.DataFrame:
+        """Compute pDockQ, pDockQ2, LIS, ipTM and ipSAE.
+
+        All four are computed in one pass, since the reported direction of
+        each pair is the one with the larger ipSAE; unrequested columns are
+        then dropped.
+
+        Args:
+            PAE: Full PAE matrix.
+
+        Returns:
+            DataFrame with chain1, chain2 and the requested columns.
+
+        Raises:
+            ValueError: If chains without standard residues are present,
+                not in ``skip_chains``, and ipSAE2 was not requested.
         """
         self.parse_structure_file()
+        nonpolymer = self.parser.nonpolymer_chains()
+        if nonpolymer and 'ipsae2' not in self.score_types:
+            raise ValueError(
+                f'Chains {nonpolymer} have no standard residues (ligand, glycan '
+                'or ion) and cannot be scored by pDockQ, pDockQ2, LIS or ipSAE. '
+                "Pass them in skip_chains, or request 'ipsae2' to score them."
+            )
+        for chain in nonpolymer:
+            self.parser.skip_chain(chain)
 
         distances = cdist(self.cb_coordinates, self.cb_coordinates)
         pLDDT = self.load_pLDDT_file()
-        PAE = self.load_PAE_file()
 
         n_residues = len(self.parser.residues)
         if pLDDT.shape[0] != n_residues or PAE.shape[0] != n_residues:
@@ -126,8 +214,95 @@ class ipSAE:
         self.prepare_scorer()
         self.scorer.compute_scores(distances, pLDDT, PAE)
 
-        self.scores = self.scorer.scores
-        self.save_scores()
+        columns = [
+            column
+            for name, cols in LEGACY_COLUMNS.items()
+            if name in self.score_types
+            for column in cols
+        ]
+        return self.scorer.scores.select('chain1', 'chain2', *columns)
+
+    def run_ipsae2(self, PAE: np.ndarray) -> pl.DataFrame:
+        """Compute ipSAE2 for every contacting molecule pair.
+
+        Args:
+            PAE: Full PAE matrix.
+
+        Returns:
+            DataFrame of ipSAE2 scores and directional diagnostics.
+        """
+        atoms = read_atoms(self.parser.structure)
+        metadata = read_pae_metadata(self.pae_file)
+        tokens = infer_tokens(atoms, classify_molecules(atoms), len(PAE), metadata)
+        tokens.frame_valid = frame_validity(atoms, tokens, metadata)
+        calculator = IpSAE2Calculator(**self.ipsae2_kwargs)
+        return calculator.compute_scores(PAE, atoms, tokens, self.skip_chains)
+
+    @staticmethod
+    def merge_scores(
+        legacy: pl.DataFrame | None, ipsae2: pl.DataFrame | None
+    ) -> pl.DataFrame:
+        """Join legacy and ipSAE2 scores on the unordered chain pair.
+
+        ipSAE2 directional columns are reoriented so that ``12`` always
+        means align on ``chain1`` and score ``chain2`` of the merged row.
+        Pairs reported by only one method have nulls for the other.
+
+        Args:
+            legacy: Output of run_legacy, or None.
+            ipsae2: Output of run_ipsae2, or None.
+
+        Returns:
+            Merged DataFrame.
+        """
+        if ipsae2 is None or legacy is None:
+            return legacy if ipsae2 is None else ipsae2
+
+        def pair_key(df: pl.DataFrame) -> pl.DataFrame:
+            return df.with_columns(
+                pl.min_horizontal('chain1', 'chain2').alias('_lo'),
+                pl.max_horizontal('chain1', 'chain2').alias('_hi'),
+            )
+
+        legacy = pair_key(legacy)
+        ipsae2 = pair_key(ipsae2).join(
+            legacy.select('_lo', '_hi', pl.col('chain1').alias('_legacy_chain1')),
+            on=['_lo', '_hi'],
+            how='left',
+        )
+        swap = pl.col('_legacy_chain1').is_not_null() & (
+            pl.col('_legacy_chain1') != pl.col('chain1')
+        )
+        pairs = [('chain1', 'chain2'), ('type1', 'type2')] + [
+            (c, c[:-2] + '21') for c in ipsae2.columns if c.endswith('_12')
+        ]
+        swapped = []
+        for a, b in pairs:
+            swapped.append(pl.when(swap).then(pl.col(b)).otherwise(pl.col(a)).alias(a))
+            swapped.append(pl.when(swap).then(pl.col(a)).otherwise(pl.col(b)).alias(b))
+        source = pl.col('ipSAE2_source')
+        flipped = source.replace({'12': '21', '21': '12'})
+        swapped.append(
+            pl.when(swap).then(flipped).otherwise(source).alias('ipSAE2_source')
+        )
+        ipsae2 = ipsae2.with_columns(swapped).drop('_legacy_chain1')
+
+        merged = legacy.join(ipsae2, on=['_lo', '_hi'], how='full', coalesce=True)
+        merged = merged.with_columns(
+            pl.coalesce('chain1', 'chain1_right').alias('chain1'),
+            pl.coalesce('chain2', 'chain2_right').alias('chain2'),
+        )
+        legacy_columns = [
+            c for c in legacy.columns if c not in ('chain1', 'chain2', '_lo', '_hi')
+        ]
+        ipsae2_columns = [
+            c
+            for c in ipsae2.columns
+            if c not in ('chain1', 'chain2', 'type1', 'type2', '_lo', '_hi')
+        ]
+        return merged.sort('_lo', '_hi').select(
+            'chain1', 'chain2', 'type1', 'type2', *legacy_columns, *ipsae2_columns
+        )
 
     def save_scores(self) -> None:
         """Save scores DataFrame to a Parquet file."""
@@ -139,6 +314,8 @@ class ipSAE:
         Returns:
             pLDDT array scaled to 0-100 range.
         """
+        if self.plddt_file is None:
+            raise ValueError('No plddt_file was provided')
         data = np.load(self.plddt_file)
         pLDDT_arr = data['plddt']
         if np.max(pLDDT_arr) <= 1.0:
@@ -610,6 +787,30 @@ class ModelParser:
             self.cb_residues.extend(chain_cb[cid])
             self.chains.extend([cid] * len(residues))
             self.chain_residue_counts[cid] = len(residues)
+
+    def nonpolymer_chains(self) -> list[str]:
+        """Return kept chains without standard residues.
+
+        These are ligand, glycan or ion chains that the residue-based
+        scores cannot handle and that occupy PAE tokens.
+
+        Returns:
+            Chain IDs in file order.
+        """
+        return [
+            cid
+            for cid in self.chain_order
+            if cid not in self.skip_chains and self.chain_residue_counts.get(cid) == 0
+        ]
+
+    def skip_chain(self, chain: str) -> None:
+        """Mark an already-parsed chain without residues as skipped.
+
+        Args:
+            chain: Chain ID with no standard residues.
+        """
+        self.skip_chains.add(chain)
+        self.chain_residue_counts.pop(chain, None)
 
     def build_protein_token_indices(self, total_tokens: int) -> None:
         """Derive pLDDT/PAE indices for kept-chain anchor tokens.

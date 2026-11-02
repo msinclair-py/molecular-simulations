@@ -18,6 +18,9 @@ ipSAE2 deviations from upstream:
       one ligand molecule instead of raising an error.
     * Selenocysteine and pyrrolysine are treated as modified residues, so
       both atom and residue tokenization are tried for them.
+    * Tokens without coordinates are dropped when the full PAE matches no
+      tokenization, identified by a per-token pLDDT of exactly 0 (Chai-1
+      keeps glycan leaving atoms as tokens but does not write them).
     * PAE is read from ``.npz`` only, and predictor-native ipTM values are
       not imported.
 """
@@ -237,16 +240,61 @@ class ipSAE:
         Args:
             PAE: Full PAE matrix.
 
+        Tokens without coordinates are dropped when the full PAE matches no
+        tokenization. Chai-1 keeps glycan leaving atoms (e.g. the O1 of each
+        linked sugar) as tokens but does not write them; their per-token
+        pLDDT is exactly 0, as it averages over existing atoms only.
+
         Returns:
             DataFrame of ipSAE2 scores and directional diagnostics.
+
+        Raises:
+            TokenMismatchError: If no tokenization matches, even after
+                dropping zero-pLDDT tokens.
         """
         atoms = IpSAE2Parser.read_atoms(self.parser.structure)
         metadata = IpSAE2Parser.read_pae_metadata(self.pae_file)
         chain_types = IpSAE2Parser.classify_molecules(atoms)
-        tokens = IpSAE2Parser.infer_tokens(atoms, chain_types, len(PAE), metadata)
+        try:
+            tokens = IpSAE2Parser.infer_tokens(atoms, chain_types, len(PAE), metadata)
+        except TokenMismatchError:
+            missing = self.uncoordinated_tokens(len(PAE))
+            if not len(missing):
+                raise
+            n_full = len(PAE)
+            keep = np.setdiff1d(np.arange(n_full), missing)
+            PAE = PAE[np.ix_(keep, keep)]
+            metadata = {
+                k: v[keep]
+                for k, v in metadata.items()
+                if v.ndim == 1 and len(v) == n_full
+            }
+            tokens = IpSAE2Parser.infer_tokens(atoms, chain_types, len(PAE), metadata)
         tokens.frame_valid = IpSAE2Parser.frame_validity(atoms, tokens, metadata)
         calculator = IpSAE2Calculator(**self.ipsae2_kwargs)
         return calculator.compute_scores(PAE, atoms, tokens, self.skip_chains)
+
+    def uncoordinated_tokens(self, n_tokens: int) -> np.ndarray:
+        """Find tokens whose per-token pLDDT is exactly 0.
+
+        pLDDT is read from ``plddt_file``, or from a ``plddt`` array in the
+        PAE file when no ``plddt_file`` was given.
+
+        Args:
+            n_tokens: PAE matrix dimension.
+
+        Returns:
+            Indices of zero-pLDDT tokens; empty if no per-token pLDDT of
+            length ``n_tokens`` is available.
+        """
+        if self.plddt_file is not None:
+            plddt = self.load_pLDDT_file()
+        else:
+            with np.load(self.pae_file) as data:
+                plddt = data.get('plddt')
+        if plddt is None or plddt.ndim != 1 or len(plddt) != n_tokens:
+            return np.array([], dtype=int)
+        return np.flatnonzero(plddt == 0)
 
     @staticmethod
     def merge_scores(
@@ -1030,6 +1078,10 @@ class ModelParser:
         }
 
 
+class TokenMismatchError(ValueError):
+    """No tokenization of the structure matches the PAE dimension."""
+
+
 @dataclass
 class AtomTable:
     """Heavy atoms of a structure model, in file order.
@@ -1562,7 +1614,8 @@ class IpSAE2Parser:
             The unique matching TokenTable.
 
         Raises:
-            ValueError: If no tokenization matches, or several distinct ones do.
+            TokenMismatchError: If no tokenization matches.
+            ValueError: If several distinct tokenizations match.
         """
         metadata = metadata or {}
         residues = atoms.residues()
@@ -1611,7 +1664,7 @@ class IpSAE2Parser:
                 candidates[effective] = tokens
 
         if not candidates:
-            raise ValueError(
+            raise TokenMismatchError(
                 f'No token mapping matches the {n_tokens}-token PAE matrix: '
                 + '; '.join(descriptions)
             )

@@ -13,6 +13,7 @@ from molecular_simulations.analysis.ipSAE import (
     IpSAE2Calculator,
     IpSAE2Parser,
     MoleculeGeometry,
+    TokenMismatchError,
     TokenTable,
     ipSAE,
 )
@@ -399,6 +400,47 @@ def test_single_polymer_chain_with_ligand(tmp_path):
     (row,) = scorer.scores.to_dicts()
     assert (row['chain1'], row['chain2'], row['type2']) == ('A', 'L', 'lig')
     assert row['ipSAE'] is None and row['ipSAE2'] is not None
+
+
+class TestUncoordinatedTokens:
+    """Chai-1 keeps glycan leaving atoms as tokens without coordinates.
+
+    Tokens: A1, A2 (0-1), glycan atoms with one unwritten O1 token at
+    index 3 (2-8), B1 (9). The O1 token has pLDDT exactly 0.
+    """
+
+    @pytest.fixture
+    def model(self, tmp_path):
+        atoms = ala('A', 1, 0.0) + ala('A', 2, 3.0)
+        atoms += sugar('G', 1, 0.0) + sugar('G', 2, 3.0) + ala('B', 1, 6.0)
+        return write_pdb(tmp_path / 'model.pdb', atoms), tmp_path
+
+    def write(self, tmp_path, plddt):
+        pae = np.full((10, 10), 2.0)
+        pae[3, :] = pae[:, 3] = 30.0  # would sink the glycan if kept
+        np.savez(tmp_path / 'scores.npz', pae=pae, plddt=plddt)
+        return tmp_path / 'scores.npz'
+
+    def test_zero_plddt_tokens_are_dropped(self, model):
+        path, tmp_path = model
+        plddt = np.full(10, 0.8)
+        plddt[3] = 0.0
+        npz = self.write(tmp_path, plddt)
+        scorer = ipSAE(path, npz, npz)
+        scorer.run()
+        ag = row_for(scorer.scores, 'A', 'G')
+        assert ag['ipSAE2_n0_12'] == 6
+        assert ag['ipSAE2_iPAE_12'] == pytest.approx(2.0)
+        # Without a plddt_file the pLDDT in the PAE file is used.
+        only = ipSAE(path, None, npz, scores=['ipsae2'])
+        only.run()
+        assert only.scores.height == scorer.scores.height
+
+    def test_mismatch_without_zero_plddt_raises(self, model):
+        path, tmp_path = model
+        npz = self.write(tmp_path, np.full(10, 0.8))
+        with pytest.raises(TokenMismatchError):
+            ipSAE(path, npz, npz).run()
 
 
 @pytest.mark.parametrize('n_tokens, policy', [(3, 'residue'), (6, 'atom')])

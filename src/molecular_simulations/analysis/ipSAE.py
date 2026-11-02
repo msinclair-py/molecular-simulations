@@ -420,10 +420,14 @@ class ScoreCalculator:
             LIS = self.compute_LIS(chain1, chain2)
             ipTM, ipSAE = self.compute_ipTM_ipSAE(chain1, chain2)
 
-            results.append([chain1, chain2, pDockQ, pDockQ2, LIS, ipTM, ipSAE])
+            values = (pDockQ, pDockQ2, LIS, ipTM, ipSAE)
+            results.append((chain1, chain2, *map(float, values)))
 
+        # Row tuples keep the schema when there are no pairs (one polymer
+        # chain, e.g. a protein with a ligand scored only by ipSAE2).
         self.df = pl.DataFrame(
-            np.array(results),
+            results,
+            orient='row',
             schema={
                 'chain1': str,
                 'chain2': str,

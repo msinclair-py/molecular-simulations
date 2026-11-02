@@ -386,6 +386,21 @@ def test_ambiguous_tokenization_raises(tmp_path):
         load(model, np.zeros((4, 4)))
 
 
+def test_single_polymer_chain_with_ligand(tmp_path):
+    # One protein chain leaves the legacy scores with no pairs; the default
+    # run must still report the protein-ligand pair from ipSAE2.
+    atoms = ala('A', 1, 0.0) + ala('A', 2, 3.0) + sugar('L', 1, 6.0)
+    model = write_pdb(tmp_path / 'model.pdb', atoms)
+    pae = np.full((5, 5), 2.0)
+    np.savez(tmp_path / 'scores.npz', pae=pae, plddt=np.full(5, 90.0))
+    npz = tmp_path / 'scores.npz'
+    scorer = ipSAE(model, npz, npz)
+    scorer.run()
+    (row,) = scorer.scores.to_dicts()
+    assert (row['chain1'], row['chain2'], row['type2']) == ('A', 'L', 'lig')
+    assert row['ipSAE'] is None and row['ipSAE2'] is not None
+
+
 @pytest.mark.parametrize('n_tokens, policy', [(3, 'residue'), (6, 'atom')])
 def test_selenocysteine_is_a_modified_residue(tmp_path, n_tokens, policy):
     # Boltz keeps SEC as one token; AF3/Chai split it into atom tokens.

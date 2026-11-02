@@ -129,6 +129,7 @@ class ipSAE:
 
         self.skip_chains = set(skip_chains) if skip_chains else set()
         self.ipsae2_kwargs = ipsae2_kwargs or {}
+        self.tokens: TokenTable | None = None
         self.parser = ModelParser(structure_file, skip_chains=skip_chains)
         self.plddt_file = Path(plddt_file) if plddt_file is not None else None
         self.pae_file = Path(pae_file)
@@ -216,10 +217,19 @@ class ipSAE:
         distances = cdist(self.cb_coordinates, self.cb_coordinates)
         pLDDT = self.load_pLDDT_file()
 
+        try:
+            self.tokenize(len(PAE))
+        except ValueError:
+            indices = None
+        else:
+            indices = self.legacy_token_indices()
         n_residues = len(self.parser.residues)
-        if pLDDT.shape[0] != n_residues or PAE.shape[0] != n_residues:
+        if indices is None and (len(pLDDT) != n_residues or len(PAE) != n_residues):
+            # No token table: assume one token per residue and infer the span
+            # of skipped chains.
             self.parser.build_protein_token_indices(pLDDT.shape[0])
             indices = np.array(self.parser.protein_token_indices, dtype=int)
+        if indices is not None:
             pLDDT = pLDDT[indices]
             PAE = PAE[np.ix_(indices, indices)]
 
@@ -240,39 +250,86 @@ class ipSAE:
         Args:
             PAE: Full PAE matrix.
 
-        Tokens without coordinates are dropped when the full PAE matches no
-        tokenization. Chai-1 keeps glycan leaving atoms (e.g. the O1 of each
-        linked sugar) as tokens but does not write them; their per-token
-        pLDDT is exactly 0, as it averages over existing atoms only.
-
         Returns:
             DataFrame of ipSAE2 scores and directional diagnostics.
 
         Raises:
+            TokenMismatchError: If no tokenization matches the PAE.
+        """
+        self.tokenize(len(PAE))
+        PAE = PAE[np.ix_(self.token_index, self.token_index)]
+        calculator = IpSAE2Calculator(**self.ipsae2_kwargs)
+        return calculator.compute_scores(PAE, self.atoms, self.tokens, self.skip_chains)
+
+    def tokenize(self, n_tokens: int) -> None:
+        """Reconstruct the predictor's token order from the structure.
+
+        Sets ``atoms``, ``tokens`` and ``token_index``, the PAE index of
+        each token. Tokens without coordinates are dropped when the full PAE
+        matches no tokenization: Chai-1 keeps glycan leaving atoms (e.g. the
+        O1 of each linked sugar) as tokens but does not write them, and
+        their per-token pLDDT is exactly 0, as it averages over existing
+        atoms only. The result is cached.
+
+        Args:
+            n_tokens: PAE matrix dimension.
+
+        Raises:
             TokenMismatchError: If no tokenization matches, even after
                 dropping zero-pLDDT tokens.
+            ValueError: If the token order is ambiguous or a chain cannot be
+                classified.
         """
+        if self.tokens is not None:
+            return
         atoms = IpSAE2Parser.read_atoms(self.parser.structure)
         metadata = IpSAE2Parser.read_pae_metadata(self.pae_file)
         chain_types = IpSAE2Parser.classify_molecules(atoms)
+        keep = np.arange(n_tokens)
         try:
-            tokens = IpSAE2Parser.infer_tokens(atoms, chain_types, len(PAE), metadata)
+            tokens = IpSAE2Parser.infer_tokens(atoms, chain_types, n_tokens, metadata)
         except TokenMismatchError:
-            missing = self.uncoordinated_tokens(len(PAE))
+            missing = self.uncoordinated_tokens(n_tokens)
             if not len(missing):
                 raise
-            n_full = len(PAE)
-            keep = np.setdiff1d(np.arange(n_full), missing)
-            PAE = PAE[np.ix_(keep, keep)]
+            keep = np.setdiff1d(keep, missing)
             metadata = {
                 k: v[keep]
                 for k, v in metadata.items()
-                if v.ndim == 1 and len(v) == n_full
+                if v.ndim == 1 and len(v) == n_tokens
             }
-            tokens = IpSAE2Parser.infer_tokens(atoms, chain_types, len(PAE), metadata)
+            tokens = IpSAE2Parser.infer_tokens(atoms, chain_types, len(keep), metadata)
         tokens.frame_valid = IpSAE2Parser.frame_validity(atoms, tokens, metadata)
-        calculator = IpSAE2Calculator(**self.ipsae2_kwargs)
-        return calculator.compute_scores(PAE, atoms, tokens, self.skip_chains)
+        self.atoms, self.tokens, self.token_index = atoms, tokens, keep
+
+    def legacy_token_indices(self) -> np.ndarray:
+        """Map each legacy residue to the PAE index of its anchor atom.
+
+        A residue-tokenized residue maps to its token, and an
+        atom-tokenized modified residue to the token of its CA or C1'.
+
+        Returns:
+            PAE indices, one per residue in ``parser.residues``.
+
+        Raises:
+            ValueError: If an anchor atom is missing from the token table.
+        """
+        atom_of = {
+            (name, *xyz): i
+            for i, (name, xyz) in enumerate(
+                zip(self.atoms.atom_name, map(tuple, self.atoms.xyz), strict=True)
+            )
+        }
+        indices = []
+        for res in self.parser.residues:
+            atom = atom_of.get((ModelParser.unquote(res['atom_name']), *res['coor']))
+            if atom is None:
+                raise ValueError(
+                    f'Residue {res["chain_id"]}:{res["res"]}{res["resid"]} '
+                    'has no token in the ipSAE2 token table'
+                )
+            indices.append(self.token_index[self.tokens.atom_token[atom]])
+        return np.array(indices, dtype=int)
 
     def uncoordinated_tokens(self, n_tokens: int) -> np.ndarray:
         """Find tokens whose per-token pLDDT is exactly 0.
@@ -804,8 +861,7 @@ class ModelParser:
         with open(self.structure) as f:
             lines = f.readlines()
 
-        chain_residues: dict[str, list[dict[str, Any]]] = {}
-        chain_cb: dict[str, list[dict[str, Any]]] = {}
+        chain_atoms: dict[str, list[dict[str, Any]]] = {}
         seen_chains: set[str] = set()
 
         for line in lines:
@@ -823,32 +879,60 @@ class ModelParser:
                 if cid not in seen_chains:
                     seen_chains.add(cid)
                     self.chain_order.append(cid)
-                    chain_residues[cid] = []
-                    chain_cb[cid] = []
+                    chain_atoms[cid] = []
 
-                if cid in self.skip_chains:
-                    continue
-
-                name = atom['atom_name']
-                is_standard = atom['res'] in self.STANDARD_RESIDUES
-                if is_standard and (name == 'CA' or 'C1' in name):
-                    chain_residues[cid].append(atom)
-
-                if is_standard and (
-                    name == 'CB'
-                    or 'C3' in name
-                    or (atom['res'] == 'GLY' and name == 'CA')
-                ):
-                    chain_cb[cid].append(atom)
+                if cid not in self.skip_chains:
+                    chain_atoms[cid].append(atom)
 
         for cid in self.chain_order:
             if cid in self.skip_chains:
                 continue
-            residues = chain_residues[cid]
+            residues, cb_residues = self.polymer_residues(chain_atoms[cid])
             self.residues.extend(residues)
-            self.cb_residues.extend(chain_cb[cid])
+            self.cb_residues.extend(cb_residues)
             self.chains.extend([cid] * len(residues))
             self.chain_residue_counts[cid] = len(residues)
+
+    def polymer_residues(
+        self, atoms: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Pick each residue's anchor and distance atoms in one chain.
+
+        Anchors are CA (protein) or C1' (nucleotide); distance atoms are
+        CB, falling back to CA, or C3'. In a chain with standard residues,
+        modified residues (e.g. SEP, MSE) with an anchor atom are kept too.
+        A chain without standard residues (ligand, glycan, ion) yields none.
+
+        Args:
+            atoms: Parsed atoms of one chain, in file order.
+
+        Returns:
+            Tuple of (anchor atoms, distance atoms), one of each per residue.
+        """
+        groups: list[tuple[tuple, list[dict[str, Any]]]] = []
+        for atom in atoms:
+            key = (atom['resid'], atom.get('icode', ''), atom['res'])
+            if not groups or groups[-1][0] != key:
+                groups.append((key, []))
+            groups[-1][1].append(atom)
+        if not any(key[2] in self.STANDARD_RESIDUES for key, _ in groups):
+            return [], []
+
+        anchors, distance_atoms = [], []
+        for _, group in groups:
+            by_name: dict[str, dict[str, Any]] = {}
+            for atom in group:
+                by_name.setdefault(self.unquote(atom['atom_name']), atom)
+            anchor = by_name.get('CA') or by_name.get("C1'") or by_name.get('C1*')
+            if anchor is None:
+                continue
+            if anchor['atom_name'] == 'CA':
+                distance = by_name.get('CB', anchor)
+            else:
+                distance = by_name.get("C3'") or by_name.get('C3*') or anchor
+            anchors.append(anchor)
+            distance_atoms.append(distance)
+        return anchors, distance_atoms
 
     def nonpolymer_chains(self) -> list[str]:
         """Return kept chains without standard residues.
@@ -981,6 +1065,13 @@ class ModelParser:
     )
 
     @staticmethod
+    def unquote(name: str) -> str:
+        """Remove mmCIF quotes around an atom name, e.g. ``"C1'"``."""
+        if len(name) >= 2 and name[0] == name[-1] and name[0] in '\'"':
+            return name[1:-1]
+        return name
+
+    @staticmethod
     def parse_pdb_line(line: str, *args, **kwargs) -> dict[str, Any]:
         """Parse a single line of a PDB file.
 
@@ -1000,9 +1091,11 @@ class ModelParser:
         y = line[38:46].strip()
         z = line[46:54].strip()
 
-        return ModelParser.package_line(
+        atom = ModelParser.package_line(
             atom_num, atom_name, residue_name, chain_id, residue_id, x, y, z
         )
+        atom['icode'] = line[26:27].strip()
+        return atom
 
     @staticmethod
     def parse_cif_line(
@@ -1038,9 +1131,13 @@ class ModelParser:
                 return None
             residue_id = _split[fields['auth_seq_id']]
 
-        return ModelParser.package_line(
+        atom = ModelParser.package_line(
             atom_num, atom_name, residue_name, chain_id, residue_id, x, y, z
         )
+        if 'pdbx_PDB_ins_code' in fields:
+            icode = _split[fields['pdbx_PDB_ins_code']]
+            atom['icode'] = '' if icode in ('.', '?') else icode
+        return atom
 
     @staticmethod
     def package_line(

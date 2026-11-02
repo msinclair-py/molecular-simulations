@@ -59,10 +59,11 @@ def write_pdb(path, atoms):
     return path
 
 
-def write_cif(path, atoms):
+def write_cif(path, atoms, label_asym=False):
     """Write atoms as an mmCIF atom_site loop, quoting primed atom names.
 
-    ``label_asym_id`` is left as ``.`` so chains come from ``auth_asym_id``.
+    ``label_asym_id`` is left as ``.`` so chains come from ``auth_asym_id``,
+    unless ``label_asym`` is set.
     """
     header = [
         'data_test',
@@ -89,7 +90,8 @@ def write_cif(path, atoms):
         quoted = f'"{name}"' if "'" in name else name
         x, y, z = xyz
         rows.append(
-            f'{record} {serial} {element} {quoted} . {resname} . . '
+            f'{record} {serial} {element} {quoted} . {resname} '
+            f'{chain if label_asym else "."} . '
             f'{x} {y} {z} {resnum} {chain} 1'
         )
     path.write_text('\n'.join(header + rows) + '\n')
@@ -385,6 +387,48 @@ def test_ambiguous_tokenization_raises(tmp_path):
     model = write_pdb(tmp_path / 'ambiguous.pdb', atoms)
     with pytest.raises(ValueError, match='Ambiguous token order'):
         load(model, np.zeros((4, 4)))
+
+
+class TestLegacyTokenMapping:
+    """Legacy scores read each residue's token from the ipSAE2 token table."""
+
+    def test_atom_tokenized_modified_residue(self, tmp_path):
+        # Tokens: A1 (0), SEP atoms (1-4, CA at 2), A3 (5), B1 (6).
+        atoms = [
+            *ala('A', 1, 0.0),
+            ('HETATM', 'N', 'SEP', 'A', 2, (3.0, 0.0, 0.0), 'N'),
+            ('HETATM', 'CA', 'SEP', 'A', 2, (4.0, 0.0, 0.0), 'C'),
+            ('HETATM', 'C', 'SEP', 'A', 2, (4.0, 1.0, 0.0), 'C'),
+            ('HETATM', 'P', 'SEP', 'A', 2, (5.0, 0.0, 0.0), 'P'),
+            *ala('A', 3, 6.0),
+            *ala('B', 1, 9.0),
+        ]
+        model = write_pdb(tmp_path / 'sep.pdb', atoms)
+        np.savez(tmp_path / 's.npz', pae=np.full((7, 7), 2.0), plddt=np.ones(7))
+        npz = tmp_path / 's.npz'
+        scorer = ipSAE(model, npz, npz, scores=['ipsae', 'lis'])
+        scorer.run()
+        assert scorer.parser.chain_residue_counts == {'A': 3, 'B': 1}
+        assert list(scorer.legacy_token_indices()) == [0, 2, 5, 6]
+        assert scorer.scores.height == 1
+
+    def test_quoted_cif_nucleotides(self, tmp_path):
+        atoms = ala('A', 1, 0.0) + ala('A', 2, 3.0)
+        for name, xyz in {
+            'P': (6.0, 0.0, 0.0),
+            "C1'": (6.0, 1.0, 0.0),
+            "C3'": (7.0, 0.0, 0.0),
+            "C4'": (6.0, 0.0, 1.0),
+        }.items():
+            atoms.append(('ATOM', name, 'DA', 'C', 1, xyz, 'C'))
+        model = write_cif(tmp_path / 'dna.cif', atoms, label_asym=True)
+        np.savez(tmp_path / 's.npz', pae=np.full((3, 3), 2.0), plddt=np.ones(3))
+        npz = tmp_path / 's.npz'
+        scorer = ipSAE(model, npz, npz)
+        scorer.run()
+        assert scorer.parser.chain_residue_counts == {'A': 2, 'C': 1}
+        assert scorer.parser.cb_residues[2]['atom_name'] == '"C3\'"'
+        assert list(scorer.legacy_token_indices()) == [0, 1, 2]
 
 
 def test_single_polymer_chain_with_ligand(tmp_path):

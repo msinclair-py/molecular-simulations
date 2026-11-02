@@ -478,13 +478,13 @@ class TestModelParserCIF:
 
 
 class TestParseStructureCBFallback:
-    """Cover ipSAE.parse_structure_file's CA fallback when no CB is present."""
+    """Cover the per-residue CA fallback when no CB is present."""
 
     def test_ca_only_residue_falls_back_to_ca(self, tmp_path):
-        """A residue with only a CA atom yields empty cb_residues -> CA fallback."""
+        """A residue with only a CA atom uses its CA as the distance atom."""
         pdb = tmp_path / 'ca_only.pdb'
-        # ALA with a single CA atom: it registers as an anchor residue but has no
-        # CB (and is not GLY), so parser.cb_residues stays empty -> line 89-90.
+        # ALA with a single CA atom: it registers as an anchor residue but has
+        # no CB (and is not GLY), so its CA stands in for the CB.
         pdb.write_text(
             'ATOM      1  CA  ALA A   1      10.000  20.000  30.000  1.00 20.00           C\n'
             'END\n'
@@ -493,8 +493,7 @@ class TestParseStructureCBFallback:
         obj = ipSAE(str(pdb), 'plddt.npy', 'pae.npy', out_path=str(tmp_path))
         obj.parse_structure_file()
 
-        assert obj.parser.cb_residues == []
-        # cb_coordinates falls back to the CA coordinates array.
+        assert obj.parser.cb_residues[0] is obj.parser.residues[0]
         assert obj.cb_coordinates.shape == (1, 3)
         assert np.array_equal(obj.cb_coordinates, obj.coordinates)
 

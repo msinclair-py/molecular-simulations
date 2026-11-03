@@ -34,6 +34,9 @@ A comprehensive Python toolkit for building, running, and analyzing molecular dy
 - **SASA calculations** (absolute and relative) via MDAnalysis
 - **Residue energy footprinting** for binding site characterization
 
+### 🤖 Agent Skills
+- **Bundled skills** for Claude Code, Codex and other agents, installed with `molsim skills install` ([details](#using-with-ai-agents))
+
 ## Installation
 
 > **Note:** `molecular-simulations` uses [**AmberTools**](https://ambermd.org/AmberTools.php) (for system building with `tleap`), which is **not distributed on PyPI**. If you don't already have an AmberTools installation to point at, the easiest way to get one is via a conda-forge-based package manager (Anaconda/Miniconda, Mamba, or Pixi) alongside `pip install molecular-simulations`.
@@ -80,6 +83,35 @@ For development:
 ```bash
 pip install "molecular-simulations[dev]"
 ```
+
+## Using with AI agents
+
+The package ships [Agent Skills](https://agentskills.io/specification) (one
+`SKILL.md` per stage: build, simulate, analyze, HPC deployment) so coding
+agents such as Claude Code and Codex can drive it from natural-language
+requests. The top-level [`SKILL.md`](SKILL.md) is the entry point, and
+[`skills/`](skills/README.md) holds the stage skills.
+
+After installing the package, link the skills into your agent's skills
+directory:
+
+```bash
+molsim skills install --agent claude   # Claude Code: ~/.claude/skills
+molsim skills install --agent codex    # Codex: ~/.agents/skills
+molsim skills install --dest <dir>     # any other agent's skills directory
+```
+
+Add `--scope project` to install into the current project instead of your
+home directory, or `--copy` to copy instead of link. In Claude Code you can
+also install them from GitHub as a plugin, without the Python package:
+
+```
+/plugin marketplace add msinclair-py/molecular-simulations
+/plugin install molecular-simulations@molecular-simulations
+```
+
+Then ask the agent for a task in plain language, e.g. *"build an explicit
+solvent system for 1ubq.pdb and run 10 ns of NPT on the GPU"*.
 
 ## Quick Start
 

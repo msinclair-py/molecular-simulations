@@ -1,6 +1,6 @@
 ---
-name: run-simulations
-description: Run OpenMM molecular dynamics with molecular-simulations — explicit-solvent NPT, implicit-solvent GB, energy minimization, and MM-PBSA binding free energy. Use when launching, configuring, or restarting an MD production run from AMBER/CHARMM inputs, choosing equilibration/production step counts, or selecting GPU/CPU platforms. For running many replicas across HPC nodes, combine with the parsl-hpc skill.
+name: molsim-run-simulations
+description: Run OpenMM molecular dynamics with molecular-simulations — explicit-solvent NPT, implicit-solvent GB, energy minimization, and MM-PBSA binding free energy. Use when launching, configuring, or restarting an MD production run from AMBER/CHARMM inputs, choosing equilibration/production step counts, or selecting GPU/CPU platforms. For running many replicas across HPC nodes, combine with the molsim-parsl-hpc skill.
 ---
 
 # Running simulations
@@ -13,7 +13,7 @@ NPT production pipeline and handles checkpoint/restart automatically.
 
 `Simulator` reads `system.prmtop` and `system.inpcrd` from `path` by default
 (override with `top_name` / `coor_name`). These are produced by the
-`build-systems` workflow. All outputs (`eq.*`, `prod.dcd`, `prod.log`,
+`molsim-build-systems` workflow. All outputs (`eq.*`, `prod.dcd`, `prod.log`,
 `prod.chk`, `prod.rst.chk`, `prod.state`) are written to `path` (or `out_path`).
 
 ## Explicit solvent (NPT)
@@ -115,7 +115,7 @@ objects into the system for enhanced sampling — same run pipeline otherwise.
 
 ## Tips
 - One `Simulator` == one replica/one system directory. Run many in parallel by
-  globbing replica dirs and submitting each through Parsl (see `parsl-hpc`).
+  globbing replica dirs and submitting each through Parsl (see `molsim-parsl-hpc`).
 - Monitor progress via `prod.log` (tab-separated: step, energy, temp, %
   progress, remaining time, speed, volume).
 - `prod.dcd` frames are written every `prod_reporter_frequency` steps; on restart

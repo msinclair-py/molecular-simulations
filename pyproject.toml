@@ -40,6 +40,9 @@ dependencies = [
     'seaborn'
 ]
 
+[project.scripts]
+molsim = 'molecular_simulations.cli:main'
+
 [project.urls]
 Homepage = 'https://github.com/msinclair-py/molecular-simulations'
 Issues = 'https://github.com/msinclair-py/molecular-simulations/issues'
@@ -70,6 +73,9 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ['src/molecular_simulations']
+
+[tool.hatch.build.targets.wheel.force-include]
+'skills' = 'molecular_simulations/skills'
 
 [tool.pytest.ini_options]
 addopts = '-q --maxfail=1'

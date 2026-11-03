@@ -1,5 +1,5 @@
 ---
-name: build-systems
+name: molsim-build-systems
 description: Build AMBER molecular systems (topology + coordinates) for OpenMM simulations with molecular-simulations. Use when preparing a protein, protein-ligand complex, or implicit-solvent system from a PDB/CIF — solvating, neutralizing/ionizing to 150 mM NaCl, parameterizing small molecules with GAFF2, or assigning chains/disulfides before running MD.
 ---
 
@@ -7,7 +7,7 @@ description: Build AMBER molecular systems (topology + coordinates) for OpenMM s
 
 The `molecular_simulations.build` module wraps AmberTools (`tleap`, `cpptraj`,
 `antechamber`, `parmchk2`) to turn a structure file into the `.prmtop` topology
-and `.inpcrd` coordinate files that the `run-simulations` workflow expects.
+and `.inpcrd` coordinate files that the `molsim-run-simulations` workflow expects.
 
 ## Prerequisites
 
@@ -127,4 +127,4 @@ Pass `lig_param_prefix='/path/to/params/ligand'` to reuse pre-computed GAFF2
   silently, re-run with `debug=True` and execute the written `tleap.in` by hand
   to see the leap log.
 - For HPC fan-out (build many systems in parallel), wrap `builder.build()` in a
-  Parsl `python_app` — see the `parsl-hpc` skill.
+  Parsl `python_app` — see the `molsim-parsl-hpc` skill.

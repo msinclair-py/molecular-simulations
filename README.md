@@ -43,24 +43,49 @@ A comprehensive Python toolkit for building, running, and analyzing molecular dy
 >
 > If you already have AmberTools installed elsewhere (e.g. a shared cluster module, an existing conda env, or a source build), you don't need a second copy — just set the `AMBERHOME` environment variable, or pass `amberhome='/path/to/amber'` directly to the relevant classes (`ExplicitSolvent`, `MMPBSA`, etc.), and skip straight to `pip install molecular-simulations` below.
 
+### Which AmberTools to install
+
+Install **`ambertools` from conda-forge**. It provides everything
+`molecular-simulations` calls (`tleap`, `antechamber`, `parmchk2`, `sqm`,
+`pdb4amber`, `cpptraj`, `sander`, `mmpbsa_py_energy`, `parmed`) and the force
+fields it loads, and it is the conda-forge package that
+[Amber's install page](https://ambermd.org/GetAmber.php) lists as official.
+
+- **It works with NumPy 2.** `molecular-simulations` 0.5 and later requires
+  `numpy>=2.0`, and conda-forge's AmberTools allows it (`numpy>=1.23,<3`). An
+  AmberTools build that pins `numpy<2` cannot share an environment with the
+  current package, and pip and pixi do not report that as an error: they
+  quietly install `molecular-simulations` 0.4.x, the last release without the
+  NumPy 2 requirement. If `pip show molecular-simulations` reports 0.4.x,
+  check which NumPy your AmberTools requires.
+- **No CUDA or MPI is needed.** The conda-forge build has neither. MD runs on
+  OpenMM; AmberTools is only used to build systems and for serial tools, and
+  MM-PBSA is parallelized across processes with Parsl.
+- **Use Python 3.10–3.13.** `rust-simulation-tools`, a dependency, has no
+  Python 3.14 wheels yet, hence the `<3.14` bound below.
+
+pip may warn that `ndfes`, `edgembar` and `proprep` require `numpy<2`. These
+are free-energy analysis tools bundled inside the conda-forge AmberTools
+package; `molecular-simulations` does not use them, so the warning is safe to
+ignore.
+
 ### Using conda / mamba
 
 ```bash
-conda create -n molsim python=3.12
+conda create -n molsim -c conda-forge "python>=3.10,<3.14" ambertools openmm
 conda activate molsim
-conda install -c dacase -c conda-forge ambertools-dac openmm
 pip install molecular-simulations
 ```
 
-`dacase::ambertools-dac` is the official channel maintained by the AmberTools developers and tracks the current AmberTools release; the community-maintained `conda-forge::ambertools` package also works if you prefer to stay on a single channel. `mamba` is a drop-in replacement for `conda` (`mamba create ...`, `mamba install ...`) and resolves environments much faster.
+`mamba` is a drop-in replacement for `conda` (`mamba create ...`) and resolves
+environments much faster.
 
 ### Using pixi
 
 ```bash
 pixi init molsim
 cd molsim
-pixi workspace channel add dacase
-pixi add python=3.12 ambertools-dac openmm
+pixi add "python>=3.10,<3.14" ambertools openmm
 pixi add --pypi molecular-simulations
 ```
 
@@ -261,12 +286,12 @@ etc.
 
 ## Requirements
 
-- Python ≥ 3.10
+- Python 3.10–3.13
 - OpenMM ≥ 8.0
 - MDAnalysis ≥ 2.7
 - Parsl ≥ 2024.1.29
 - NumPy, SciPy, scikit-learn, Polars
-- AmberTools (not available on PyPI — install via conda/mamba/pixi, or point at an existing install via `AMBERHOME`; see [Installation](#installation))
+- AmberTools from conda-forge (not available on PyPI; or point at an existing install via `AMBERHOME`; see [Which AmberTools to install](#which-ambertools-to-install))
 - Optional: RDKit, OpenBabel (for ligand parameterization)
 
 ## Known Issues

@@ -23,7 +23,7 @@ Package Structure
        ├── cov_ppi             # Protein-protein interactions
        ├── fingerprinter       # Interaction fingerprinting
        ├── interaction_energy  # Energy calculations
-       ├── ipSAE               # Interface scoring
+       ├── ipSAE               # Interface scoring (ipSAE2, ipSAE, pDockQ, LIS)
        ├── sasa                # Solvent accessible surface area
        └── utils               # Shared utilities
 
@@ -102,8 +102,8 @@ Classes for analyzing MD trajectories and structures.
    Identifies hydrogen bonds, salt bridges, and hydrophobic contacts.
 
 :class:`~molecular_simulations.analysis.ipSAE`
-   Score protein interfaces using AlphaFold-derived metrics: ipTM, ipSAE, 
-   pDockQ, and pDockQ2.
+   Score predicted interfaces from pLDDT and PAE: ipTM, ipSAE, ipSAE2,
+   pDockQ, pDockQ2, and LIS. Select a subset with ``scores``.
 
 :class:`~molecular_simulations.analysis.SASA`
    Calculate absolute solvent accessible surface area per residue.

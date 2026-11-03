@@ -9,7 +9,12 @@ import numpy as np
 import polars as pl
 import pytest
 
-from molecular_simulations.analysis.ipSAE import ModelParser, ScoreCalculator, ipSAE
+from molecular_simulations.analysis.ipSAE import (
+    ModelParser,
+    ScoreCalculator,
+    TokenMismatchError,
+    ipSAE,
+)
 
 
 class TestModelParser:
@@ -19,83 +24,65 @@ class TestModelParser:
         """Test ModelParser initialization"""
         parser = ModelParser('test.pdb')
         assert parser.structure == Path('test.pdb')
-        assert parser.protein_token_indices == []
         assert parser.residues == []
         assert parser.cb_residues == []
         assert parser.chains == []
 
-    def test_nucleic_acids_class_attribute(self):
-        """Test nucleic acids class attribute"""
-        na_set = ModelParser.NUCLEIC_ACIDS
-        assert 'DA' in na_set
-        assert 'DC' in na_set
-        assert 'DT' in na_set
-        assert 'DG' in na_set
-        assert 'A' in na_set
-        assert 'C' in na_set
-        assert 'U' in na_set
-        assert 'G' in na_set
+    def test_canonical_residue_class_attributes(self):
+        """Canonical residues cover amino acids and nucleotides, not ligands"""
+        for name in ('DA', 'DC', 'DT', 'DG', 'A', 'C', 'U', 'G'):
+            assert name in ModelParser.CANONICAL_NUCLEIC
+        assert {'ALA', 'GLY'} <= ModelParser.CANONICAL_PROTEIN
+        assert 'SEP' not in ModelParser.CANONICAL_PROTEIN
+        assert (
+            'LIG' not in ModelParser.CANONICAL_PROTEIN | ModelParser.CANONICAL_NUCLEIC
+        )
 
-    def test_standard_residues_class_attribute(self):
-        """Test standard residues class attribute includes amino acids and nucleic acids"""
-        sr = ModelParser.STANDARD_RESIDUES
-        assert 'ALA' in sr
-        assert 'GLY' in sr
-        assert 'DA' in sr
-        assert 'LIG' not in sr
+    def test_read_atoms_pdb(self, tmp_path):
+        """PDB columns are read into the atom table"""
+        pdb_file = tmp_path / 'test.pdb'
+        pdb_file.write_text(
+            'ATOM      1  CA  GLY A   1      10.000  20.000  30.000  1.00 20.00           C\n'
+        )
+        atoms = ModelParser(pdb_file).read_atoms()
 
-    def test_parse_pdb_line(self):
-        """Test PDB line parsing"""
-        pdb_line = 'ATOM      1  CA  GLY A   1      10.000  20.000  30.000  1.00 20.00           C'
-        result = ModelParser.parse_pdb_line(pdb_line)
+        assert atoms.atom_name[0] == 'CA'
+        assert atoms.resname[0] == 'GLY'
+        assert atoms.chain[0] == 'A'
+        assert atoms.resnum[0] == '1'
+        assert atoms.element[0] == 'C'
+        assert np.allclose(atoms.xyz[0], [10.0, 20.0, 30.0])
 
-        assert result['atom_num'] == 1
-        assert result['atom_name'] == 'CA'
-        assert result['res'] == 'GLY'
-        assert result['chain_id'] == 'A'
-        assert result['resid'] == 1
-        assert np.allclose(result['coor'], [10.0, 20.0, 30.0])
+    def test_read_atoms_cif(self, tmp_path):
+        """mmCIF columns are read by name and quoted atom names unquoted"""
+        cif_file = tmp_path / 'test.cif'
+        cif_file.write_text(
+            '\n'.join(
+                [
+                    'data_test',
+                    'loop_',
+                    '_atom_site.group_PDB',
+                    '_atom_site.id',
+                    '_atom_site.type_symbol',
+                    '_atom_site.label_alt_id',
+                    '_atom_site.label_atom_id',
+                    '_atom_site.label_comp_id',
+                    '_atom_site.label_asym_id',
+                    '_atom_site.label_seq_id',
+                    '_atom_site.Cartn_x',
+                    '_atom_site.Cartn_y',
+                    '_atom_site.Cartn_z',
+                    'ATOM 1 C . CA GLY A 1 10.000 20.000 30.000',
+                    'ATOM 2 C . "C1\'" DA B 1 1.0 2.0 3.0',
+                ]
+            )
+            + '\n'
+        )
+        atoms = ModelParser(cif_file).read_atoms()
 
-    def test_parse_cif_line(self):
-        """Test CIF line parsing"""
-        # mmCIF format: group_PDB id label_atom_id alt_id label_comp_id label_asym_id label_seq_id Cartn_x Cartn_y Cartn_z ...
-        cif_line = 'ATOM 1 CA . GLY A 1 10.000 20.000 30.000 1.00 20.00 C'
-        fields = {
-            'id': 1,  # Atom serial number
-            'label_atom_id': 2,  # Atom name (CA)
-            'label_comp_id': 4,  # Residue name (GLY)
-            'label_asym_id': 5,  # Chain ID (A)
-            'label_seq_id': 6,  # Residue ID (1)
-            'Cartn_x': 7,  # X coordinate
-            'Cartn_y': 8,  # Y coordinate
-            'Cartn_z': 9,  # Z coordinate
-        }
-
-        result = ModelParser.parse_cif_line(cif_line, fields)
-
-        assert result['atom_num'] == 1
-        assert result['atom_name'] == 'CA'
-        assert result['res'] == 'GLY'
-        assert result['chain_id'] == 'A'
-        assert result['resid'] == 1
-        assert np.allclose(result['coor'], [10.0, 20.0, 30.0])
-
-    def test_parse_cif_line_missing_resid(self):
-        """Test CIF line parsing with missing residue ID"""
-        cif_line = 'ATOM 1 CA . GLY A . 10.000 20.000 30.000 1.00 20.00 C'
-        fields = {
-            'id': 1,
-            'label_atom_id': 2,
-            'label_comp_id': 4,
-            'label_asym_id': 5,
-            'label_seq_id': 6,
-            'Cartn_x': 7,
-            'Cartn_y': 8,
-            'Cartn_z': 9,
-        }
-
-        result = ModelParser.parse_cif_line(cif_line, fields)
-        assert result is None
+        assert list(atoms.atom_name) == ['CA', "C1'"]
+        assert list(atoms.chain) == ['A', 'B']
+        assert np.allclose(atoms.xyz[0], [10.0, 20.0, 30.0])
 
     def test_parse_structure_file_pdb(self, tmp_path):
         """Test parsing a real PDB structure file written to disk."""
@@ -116,157 +103,116 @@ class TestModelParser:
         assert len(parser.chains) == 2
         assert all(chain == 'A' for chain in parser.chains)
 
-    def test_classify_chains(self):
-        """Test chain classification"""
-        parser = ModelParser('test.pdb')
-        # Set up residues - need to structure it so the bug doesn't break the test
-        # The implementation has a bug where it uses indices from unique(chains) instead of self.chains
-        # So residue at index 0 represents chain A, index 1 represents chain B
-        parser.residues = [
-            {'res': 'GLY'},  # Chain A - index 0
-            {'res': 'DA'},  # Chain B - index 1
-        ]
-        parser.chains = ['A', 'B']  # Must match residues length
-
+    def test_classify_chains(self, tmp_path):
+        """Chains are labeled protein or nucleic acid"""
+        pdb_file = tmp_path / 'test.pdb'
+        pdb_file.write_text(
+            'ATOM      1  CA  GLY A   1      10.000  20.000  30.000  1.00 20.00           C\n'
+            "ATOM      2  C1' DA  B   1      12.000  20.000  30.000  1.00 20.00           C\n"
+        )
+        parser = ModelParser(pdb_file)
+        parser.parse_structure_file()
         parser.classify_chains()
 
-        assert parser.chain_types['A'] == 'protein'
-        assert parser.chain_types['B'] == 'nucleic_acid'
+        assert parser.chain_types == {'A': 'protein', 'B': 'nucleic_acid'}
 
 
 class TestScoreCalculator:
     """Test suite for ScoreCalculator class"""
 
+    CHAINS = np.array(['A', 'A', 'B', 'B'])
+    PLDDT = np.array([90.0, 85.0, 80.0, 75.0])
+    PAE = np.array([[0, 2, 8, 10], [2, 0, 9, 8], [8, 9, 0, 5], [10, 8, 5, 0]], float)
+    NEAR = np.array([[0, 1, 5, 6], [1, 0, 7, 5], [5, 7, 0, 3], [6, 5, 3, 0]], float)
+    FAR = np.array(
+        [[0, 1, 100, 100], [1, 0, 100, 100], [100, 100, 0, 1], [100, 100, 1, 0]],
+        float,
+    )
+
+    def calc(self, chain_types=None):
+        return ScoreCalculator(
+            self.CHAINS, chain_types or {'A': 'protein', 'B': 'protein'}
+        )
+
     def test_init(self):
         """Test ScoreCalculator initialization"""
-        chains = np.array(['A', 'A', 'B', 'B'])
-        chain_pair_type = {'A': 'protein', 'B': 'protein'}
-        n_residues = 4
+        calc = self.calc()
+        assert np.array_equal(calc.chains, self.CHAINS)
+        assert calc.pdockq_cutoff == 8.0
+        assert calc.pae_cutoff == 12.0
 
-        calc = ScoreCalculator(chains, chain_pair_type, n_residues)
+    def test_ptm(self):
+        """The TM kernel is 1 at zero PAE and 1/2 at PAE == d0"""
+        ptm = ScoreCalculator.ptm(np.array([0.0, 10.0]), 10.0)
+        assert np.allclose(ptm, [1.0, 0.5])
 
-        assert np.array_equal(calc.chains, chains)
-        assert np.array_equal(calc.unique_chains, np.array(['A', 'B']))
-        assert calc.n_res == n_residues
-        assert calc.pDockQ_cutoff == 8.0
-        assert calc.PAE_cutoff == 12.0
+    def test_d0(self):
+        """d0 matches upstream ipSAE: 1 up to min_length, floored at 1 or 2"""
+        formula = lambda n: 1.24 * (n - 15) ** (1 / 3) - 1.8  # noqa: E731
+        assert ScoreCalculator.d0(27, False) == 1.0
+        assert ScoreCalculator.d0(28, False) == pytest.approx(formula(28))
+        assert ScoreCalculator.d0(27, False, min_length=26) == pytest.approx(
+            formula(27)
+        )
+        assert ScoreCalculator.d0(10, True) == 2.0
+        d0 = ScoreCalculator.d0(np.array([5, 100, 200]), False)
+        assert d0.shape == (3,)
+        assert d0[2] > d0[1] > d0[0]
 
-    def test_pDockQ_score(self):
-        """Test pDockQ score calculation"""
-        score = ScoreCalculator.pDockQ_score(150.0)
-        assert 0 <= score <= 1
+    def test_score_pair(self):
+        """All four A-B residue pairs are in contact"""
+        pDockQ, pDockQ2, lis, ipTM, ipSAE = self.calc().score_pair(
+            'A', 'B', self.NEAR, self.PLDDT, self.PAE
+        )
+        assert lis == pytest.approx(np.mean([(12 - p) / 12 for p in (8, 10, 9, 8)]))
+        assert 0 < pDockQ < 1
+        assert 0 < pDockQ2 < 1.5
+        assert 0 < ipTM <= 1
+        assert 0 < ipSAE <= 1
 
-        # Test with extreme values
-        score_low = ScoreCalculator.pDockQ_score(0.0)
-        score_high = ScoreCalculator.pDockQ_score(300.0)
-        assert score_low < score_high
+    def test_no_contacts(self):
+        """pDockQ and pDockQ2 are 0 without residue pairs within the cutoff"""
+        pDockQ, pDockQ2, *_ = self.calc().score_pair(
+            'A', 'B', self.FAR, self.PLDDT, self.PAE
+        )
+        assert pDockQ == 0.0
+        assert pDockQ2 == 0.0
 
-    def test_pDockQ2_score(self):
-        """Test pDockQ2 score calculation"""
-        score = ScoreCalculator.pDockQ2_score(80.0)
-        assert 0 <= score <= 1.5
+    def test_lis_zero_when_all_pae_above_cutoff(self):
+        """No PAE below the cutoff -> LIS 0.0"""
+        _, _, lis, _, _ = self.calc().score_pair(
+            'A', 'B', self.NEAR, self.PLDDT, np.full((4, 4), 30.0)
+        )
+        assert lis == 0.0
 
-        # Test with extreme values
-        score_low = ScoreCalculator.pDockQ2_score(0.0)
-        score_high = ScoreCalculator.pDockQ2_score(200.0)
-        assert score_low < score_high
+    def test_zero_when_scored_chain_absent(self):
+        """A scored chain without residues gives ipTM and ipSAE of 0.0"""
+        calc = ScoreCalculator(np.array(['A', 'A']), {'A': 'protein', 'B': 'protein'})
+        *_, ipTM, ipSAE = calc.score_pair(
+            'A', 'B', np.zeros((2, 2)), np.full(2, 90.0), np.zeros((2, 2))
+        )
+        assert ipTM == 0.0
+        assert ipSAE == 0.0
 
-    def test_compute_pTM(self):
-        """Test pTM score calculation"""
-        x = np.array([5.0, 10.0, 15.0])
-        d0 = 10.0
-        scores = ScoreCalculator.compute_pTM(x, d0)
-
-        assert scores.shape == (3,)
-        assert all(0 <= s <= 1 for s in scores)
-
-    def test_compute_d0(self):
-        """Test d0 calculation"""
-        # Test with small L - should return close to min_value
-        d0_small = ScoreCalculator.compute_d0(10, 'protein')
-        assert d0_small >= 1.0  # Should be at least the min_value
-        assert d0_small < 2.0  # But not too large for small L
-
-        # Test with larger L - should return larger value
-        d0_large = ScoreCalculator.compute_d0(100, 'protein')
-        assert d0_large > d0_small  # Larger L gives larger d0
-
-        # Test nucleic acid has different min_value
-        d0_na_small = ScoreCalculator.compute_d0(10, 'nucleic_acid')
-        assert d0_na_small >= 2.0  # NA min_value is 2.0
-        assert d0_na_small < 3.0
-
-    def test_compute_d0_array(self):
-        """Test vectorized d0 calculation"""
-        L = np.array([5, 50, 100, 200])
-        d0 = ScoreCalculator.compute_d0_array(L, 'protein')
-
-        assert d0.shape == (4,)
-        assert np.all(d0 >= 1.0)
-        # Larger L should give larger d0
-        assert d0[-1] > d0[1]
-
-        # Test nucleic acid min_value
-        d0_na = ScoreCalculator.compute_d0_array(np.array([5]), 'nucleic_acid')
-        assert d0_na[0] >= 2.0
-
-        # Verify consistency with scalar compute_d0 for large L
-        d0_scalar = ScoreCalculator.compute_d0(100, 'protein')
-        d0_array = ScoreCalculator.compute_d0_array(np.array([100]), 'protein')
-        assert np.isclose(d0_scalar, d0_array[0])
-
-    def test_permute_chains(self):
-        """Test chain permutation against the real permute_chains output."""
-        chains = np.array(['A', 'A', 'B', 'B', 'C', 'C'])
-        chain_pair_type = {'A': 'protein', 'B': 'protein', 'C': 'protein'}
-
-        calc = ScoreCalculator(chains, chain_pair_type, 6)
-
-        # Real permute_chains stores list(permutations(unique_chains, 2)):
-        # all ordered pairs of distinct chains.
-        assert ('A', 'B') in calc.permuted
-        assert ('B', 'A') in calc.permuted
-        assert ('A', 'C') in calc.permuted
-        assert ('C', 'A') in calc.permuted
-        assert ('B', 'C') in calc.permuted
-        assert ('C', 'B') in calc.permuted
-
-        # Self-pairs are excluded.
-        assert ('A', 'A') not in calc.permuted
-        assert ('B', 'B') not in calc.permuted
-        assert ('C', 'C') not in calc.permuted
-
-        # 3 chains -> 3 * 2 = 6 ordered pairs.
-        assert len(calc.permuted) == 6
+    def test_nucleic_acid_uses_larger_d0(self):
+        """A nucleic acid partner raises the d0 floor to 2"""
+        args = ('A', 'B', self.NEAR, self.PLDDT, self.PAE)
+        prot = self.calc().score_pair(*args)
+        nuc = self.calc({'A': 'protein', 'B': 'nucleic_acid'}).score_pair(*args)
+        assert nuc[3] > prot[3]
+        assert nuc[4] > prot[4]
 
     def test_compute_scores(self):
-        """Test score computation with the real permute_chains."""
-        chains = np.array(['A', 'A', 'B', 'B'])
-        chain_pair_type = {'A': 'protein', 'B': 'protein'}
+        """A->B and B->A collapse to the direction with the larger ipSAE"""
+        calc = self.calc()
+        scores = calc.compute_scores(self.NEAR, self.PLDDT, self.PAE)
 
-        calc = ScoreCalculator(chains, chain_pair_type, 4)
-
-        # Create data - ensure some distances are within cutoff.
-        # pDockQ_cutoff is 8.0, so make sure some distances are < 8.0
-        distances = np.array(
-            [
-                [0, 1, 5, 6],  # Residue 0 to all others
-                [1, 0, 7, 5],  # Residue 1 to all others
-                [5, 7, 0, 3],  # Residue 2 to all others
-                [6, 5, 3, 0],  # Residue 3 to all others
-            ]
-        )
-        pLDDT = np.array([90, 85, 80, 75])  # Good pLDDT scores
-        PAE = np.array([[0, 2, 8, 10], [2, 0, 9, 8], [8, 9, 0, 5], [10, 8, 5, 0]])
-
-        calc.compute_scores(distances, pLDDT, PAE)
-
-        assert hasattr(calc, 'df')
-        assert hasattr(calc, 'scores')
-        # Real permuted pairs are (A,B) and (B,A); after get_max_values the
-        # undirected A_B pair collapses to a single row.
-        assert len(calc.scores) == 1
-        assert set(calc.scores['chain1'].to_list()) <= {'A', 'B'}
+        assert scores.height == 1
+        both = [
+            calc.score_pair(c1, c2, self.NEAR, self.PLDDT, self.PAE)[4]
+            for c1, c2 in (('A', 'B'), ('B', 'A'))
+        ]
+        assert scores['ipSAE'][0] == max(both)
 
 
 class TestIpSAE:
@@ -359,7 +305,7 @@ class TestIpSAE:
         assert ipsae.parser.chain_types == {'A': 'protein', 'B': 'protein'}
 
     def test_prepare_scorer(self, two_chain_pdb, tmp_path):
-        """Test scorer preparation with the real permute_chains."""
+        """Test scorer preparation."""
         ipsae = ipSAE(
             str(two_chain_pdb), 'plddt.npy', 'pae.npy', out_path=str(tmp_path)
         )
@@ -369,9 +315,7 @@ class TestIpSAE:
 
         assert isinstance(ipsae.scorer, ScoreCalculator)
         assert np.array_equal(ipsae.scorer.chains, np.array(['A', 'B']))
-        # Real permute_chains gives both ordered cross-pairs.
-        assert ('A', 'B') in ipsae.scorer.permuted
-        assert ('B', 'A') in ipsae.scorer.permuted
+        assert ipsae.scorer.chain_types == {'A': 'protein', 'B': 'protein'}
 
 
 class TestIpSAERun:
@@ -385,7 +329,15 @@ class TestIpSAERun:
         np.savez(plddt_file, plddt=np.array([0.9, 0.8]))
         np.savez(pae_file, pae=np.array([[0.0, 3.0], [3.0, 0.0]]))
 
-        obj = ipSAE(str(two_chain_pdb), plddt_file, pae_file, out_path=str(tmp_path))
+        # The capped (ACE/NME) PDB has no 2-token predictor tokenization, so
+        # ipSAE2 is left out; it is covered in test_ipsae2.py.
+        obj = ipSAE(
+            str(two_chain_pdb),
+            plddt_file,
+            pae_file,
+            out_path=str(tmp_path),
+            scores=('ipsae', 'pdockq', 'pdockq2', 'lis'),
+        )
 
         obj.run()
 
@@ -403,49 +355,20 @@ class TestIpSAERun:
         assert len(back) == 1
 
 
-class TestScoreCalculatorEdgeCases:
-    """Test edge cases in ScoreCalculator."""
-
-    def test_compute_pDockQ_no_contacts(self):
-        """Test pDockQ returns 0,0 when n_pairs==0 (line 254)."""
-        chains = np.array(['A', 'A', 'B', 'B'])
-        chain_pair_type = {'A': 'protein', 'B': 'protein'}
-
-        calc = ScoreCalculator(chains, chain_pair_type, 4)
-        # Distances all > pDockQ_cutoff (8.0)
-        calc.distances = np.array(
-            [[0, 1, 100, 100], [1, 0, 100, 100], [100, 100, 0, 1], [100, 100, 1, 0]]
-        )
-        calc.pLDDT = np.array([90, 85, 80, 75])
-
-        pdockq, pdockq2 = calc.compute_pDockQ_scores('A', 'B')
-        assert pdockq == 0.0
-        assert pdockq2 == 0.0
-
-    def test_compute_ipTM_nucleic_acid(self):
-        """Test ipTM with nucleic_acid pair type (line 322)."""
-        chains = np.array(['A', 'A', 'B', 'B'])
-        chain_pair_type = {'A': 'protein', 'B': 'nucleic_acid'}
-
-        calc = ScoreCalculator(chains, chain_pair_type, 4)
-        calc.PAE = np.array([[0, 2, 8, 10], [2, 0, 9, 8], [8, 9, 0, 5], [10, 8, 5, 0]])
-
-        ipTM, ipSAE_score = calc.compute_ipTM_ipSAE('A', 'B')
-        # Should use nucleic_acid d0 (min_value=2.0)
-        assert isinstance(ipTM, float)
-        assert isinstance(ipSAE_score, float)
-
-
 class TestModelParserCIF:
-    """Test ModelParser CIF parsing (lines 494, 503-505, 510)."""
+    """Test ModelParser CIF parsing."""
 
     def test_parse_structure_file_cif(self):
         """Test parsing CIF structure file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cif_file = Path(tmpdir) / 'test.cif'
             lines = [
+                'data_test',
+                'loop_',
                 '_atom_site.group_PDB',
                 '_atom_site.id',
+                '_atom_site.type_symbol',
+                '_atom_site.label_alt_id',
                 '_atom_site.label_atom_id',
                 '_atom_site.label_comp_id',
                 '_atom_site.label_asym_id',
@@ -453,10 +376,9 @@ class TestModelParserCIF:
                 '_atom_site.Cartn_x',
                 '_atom_site.Cartn_y',
                 '_atom_site.Cartn_z',
-                'ATOM 1 CA GLY A 1 10.000 20.000 30.000',
-                'ATOM 2 CA ALA A 2 12.000 22.000 32.000',
-                'ATOM 3 CB ALA A 2 13.000 23.000 33.000',
-                'ATOM 4 CA LEU A . 14.000 24.000 34.000',
+                'ATOM 1 C . CA GLY A 1 10.000 20.000 30.000',
+                'ATOM 2 C . CA ALA A 2 12.000 22.000 32.000',
+                'ATOM 3 C . CB ALA A 2 13.000 23.000 33.000',
             ]
             cif_file.write_text('\n'.join(lines) + '\n')
 
@@ -470,13 +392,13 @@ class TestModelParserCIF:
 
 
 class TestParseStructureCBFallback:
-    """Cover ipSAE.parse_structure_file's CA fallback when no CB is present."""
+    """Cover the per-residue CA fallback when no CB is present."""
 
     def test_ca_only_residue_falls_back_to_ca(self, tmp_path):
-        """A residue with only a CA atom yields empty cb_residues -> CA fallback."""
+        """A residue with only a CA atom uses its CA as the distance atom."""
         pdb = tmp_path / 'ca_only.pdb'
-        # ALA with a single CA atom: it registers as an anchor residue but has no
-        # CB (and is not GLY), so parser.cb_residues stays empty -> line 89-90.
+        # ALA with a single CA atom: it registers as an anchor residue but has
+        # no CB (and is not GLY), so its CA stands in for the CB.
         pdb.write_text(
             'ATOM      1  CA  ALA A   1      10.000  20.000  30.000  1.00 20.00           C\n'
             'END\n'
@@ -485,103 +407,62 @@ class TestParseStructureCBFallback:
         obj = ipSAE(str(pdb), 'plddt.npy', 'pae.npy', out_path=str(tmp_path))
         obj.parse_structure_file()
 
-        assert obj.parser.cb_residues == []
-        # cb_coordinates falls back to the CA coordinates array.
+        assert obj.parser.cb_residues[0] == obj.parser.residues[0]
         assert obj.cb_coordinates.shape == (1, 3)
         assert np.array_equal(obj.cb_coordinates, obj.coordinates)
 
 
-class TestComputeLISAllAboveCutoff:
-    """Cover compute_LIS when every selected PAE is >= the cutoff."""
+class TestLegacyWithoutTokenTable:
+    """Legacy scores need a token table or one PAE row per residue."""
 
-    def test_lis_zero_when_all_pae_above_cutoff(self):
-        """selected_pae is non-empty but no value passes the cutoff -> LIS 0.0."""
-        calc = ScoreCalculator(
-            np.array(['A', 'A', 'B', 'B']), {'A': 'protein', 'B': 'protein'}, 4
+    def test_mismatch_raises(self, two_chain_pdb, tmp_path):
+        """The capped PDB has no tokenization for a 3-token PAE -> error."""
+        np.savez(tmp_path / 'plddt.npz', plddt=np.full(3, 0.9))
+        np.savez(tmp_path / 'pae.npz', pae=np.zeros((3, 3)))
+        obj = ipSAE(
+            str(two_chain_pdb),
+            tmp_path / 'plddt.npz',
+            tmp_path / 'pae.npz',
+            out_path=str(tmp_path),
+            scores=('ipsae',),
         )
-        calc.PAE = np.full((4, 4), 30.0)  # all >= PAE_cutoff (12.0)
 
-        assert calc.compute_LIS('A', 'B') == 0.0
+        with pytest.raises(TokenMismatchError):
+            obj.run()
 
 
-class TestComputeIpTMEmptyChain:
-    """Cover compute_ipTM_ipSAE when the scored chain has no residues."""
+class TestReadAtomsAuthFallback:
+    """Cover read_atoms' auth_seq_id fallback for a missing label_seq_id."""
 
-    def test_zero_when_scored_chain_absent(self):
-        """chain2 absent from `chains` -> empty masks -> ipTM and ipSAE both 0.0."""
-        # 'B' is a known chain type but contributes no residues to `chains`, so
-        # mask_c2 is all-False (line 357 skip) and no row has a valid PAE
-        # (line 369 skip); both scores collapse to 0.0.
-        calc = ScoreCalculator(
-            np.array(['A', 'A']), {'A': 'protein', 'B': 'protein'}, 2
+    def test_auth_seq_id_used_when_label_missing(self, tmp_path):
+        """label_seq_id '.' with auth_seq_id present -> auth used."""
+        cif_file = tmp_path / 'test.cif'
+        cif_file.write_text(
+            '\n'.join(
+                [
+                    'data_test',
+                    'loop_',
+                    '_atom_site.group_PDB',
+                    '_atom_site.id',
+                    '_atom_site.type_symbol',
+                    '_atom_site.label_alt_id',
+                    '_atom_site.label_atom_id',
+                    '_atom_site.label_comp_id',
+                    '_atom_site.label_asym_id',
+                    '_atom_site.label_seq_id',
+                    '_atom_site.Cartn_x',
+                    '_atom_site.Cartn_y',
+                    '_atom_site.Cartn_z',
+                    '_atom_site.auth_seq_id',
+                    'HETATM 1 C . C1 NAG A . 10.0 20.0 30.0 5',
+                ]
+            )
+            + '\n'
         )
-        calc.PAE = np.zeros((2, 2))
+        atoms = ModelParser(cif_file).read_atoms()
 
-        ipTM, ipSAE_score = calc.compute_ipTM_ipSAE('A', 'B')
-
-        assert ipTM == 0.0
-        assert ipSAE_score == 0.0
-
-
-class TestBuildProteinTokenIndices:
-    """Cover build_protein_token_indices token-layout inference and errors."""
-
-    def _parser(self, skip_chains):
-        return ModelParser('unused.pdb', skip_chains=skip_chains)
-
-    def test_non_contiguous_skipped_runs_raise(self):
-        """Skipped chains in two separate runs are unsolvable -> ValueError."""
-        parser = self._parser({'B', 'D'})
-        parser.chain_order = ['A', 'B', 'C', 'D']
-        parser.chain_residue_counts = {'A': 2, 'C': 2}
-
-        with pytest.raises(ValueError, match='non-contiguous'):
-            parser.build_protein_token_indices(6)
-
-    def test_kept_exceeds_total_raises(self):
-        """More kept residues than total tokens -> negative span -> ValueError."""
-        parser = self._parser({'B'})
-        parser.chain_order = ['A', 'B']
-        parser.chain_residue_counts = {'A': 5}
-
-        with pytest.raises(ValueError, match='exceeds'):
-            parser.build_protein_token_indices(3)
-
-    def test_contiguous_skip_infers_indices(self):
-        """A single contiguous skip block leaves the correct kept-token indices."""
-        parser = self._parser({'B'})
-        parser.chain_order = ['A', 'B', 'C']
-        parser.chain_residue_counts = {'A': 2, 'C': 2}
-
-        parser.build_protein_token_indices(6)
-
-        # A occupies tokens 0,1; the 2-token skip block spans 2,3; C is 4,5.
-        assert parser.protein_token_indices == [0, 1, 4, 5]
-
-
-class TestParseCifLineAuthFallback:
-    """Cover parse_cif_line's auth_seq_id fallback for a missing label_seq_id."""
-
-    def test_auth_seq_id_used_when_label_missing(self):
-        """label_seq_id '.' with allow_missing + auth_seq_id present -> auth used."""
-        cif_line = 'ATOM 1 CA . GLY A . 10.0 20.0 30.0 1.00 20.00 C 5'
-        fields = {
-            'id': 1,
-            'label_atom_id': 2,
-            'label_comp_id': 4,
-            'label_asym_id': 5,
-            'label_seq_id': 6,
-            'Cartn_x': 7,
-            'Cartn_y': 8,
-            'Cartn_z': 9,
-            'auth_seq_id': 13,
-        }
-
-        result = ModelParser.parse_cif_line(cif_line, fields, allow_missing_seq_id=True)
-
-        assert result is not None
-        assert result['resid'] == 5
-        assert result['res'] == 'GLY'
+        assert atoms.resnum[0] == '5'
+        assert atoms.resname[0] == 'NAG'
 
 
 if __name__ == '__main__':

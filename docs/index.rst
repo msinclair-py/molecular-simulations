@@ -35,7 +35,7 @@ Features
 **Analysis Tools**
    Automatic clustering with KMeans++, protein-protein interaction analysis, interaction 
    energy fingerprinting, MM-PBSA binding free energy calculations, SASA calculations, 
-   and interface scoring (ipTM, ipSAE, pDockQ).
+   and interface scoring (ipTM, ipSAE, ipSAE2, pDockQ).
 
 Quick Example
 -------------

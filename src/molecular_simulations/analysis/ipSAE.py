@@ -25,7 +25,6 @@ ipSAE2 deviations from upstream:
       not imported.
 """
 
-import re
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -33,6 +32,7 @@ from itertools import permutations
 from pathlib import Path
 from typing import Any, ClassVar
 
+import gemmi
 import numpy as np
 import polars as pl
 from scipy.spatial import cKDTree
@@ -166,14 +166,7 @@ class ipSAE:
         Creates a ScoreCalculator instance with chain information
         extracted from the parsed structure.
         """
-        chains = np.array(self.parser.chains)
-        chain_types = self.parser.chain_types
-
-        self.scorer = ScoreCalculator(
-            chains=chains,
-            chain_pair_type=chain_types,
-            n_residues=len(self.parser.residues),
-        )
+        self.scorer = ScoreCalculator(self.parser.chains, self.parser.chain_types)
 
     def run(self) -> None:
         """Execute the complete scoring workflow.
@@ -442,30 +435,26 @@ class ipSAE:
 
 
 class ScoreCalculator:
-    """Calculate model quality scores from structure predictions.
+    """Compute pDockQ, pDockQ2, LIS, ipTM and ipSAE from residue-level data.
 
-    Computes pDockQ, pDockQ2, LIS, ipTM, and ipSAE scores for all
-    chain pairs in a structure.
+    Every ordered chain pair is scored, and each unordered pair keeps the
+    direction with the larger ipSAE.
 
     Attributes:
-        chains: Array of chain IDs for each residue.
-        unique_chains: Unique chain IDs in the structure.
-        chain_pair_type: Dictionary mapping chain ID to type.
-        n_res: Total number of residues across all chains (integer).
-        permuted: List of all chain pairs to evaluate.
+        chains: Chain ID per residue.
+        chain_types: Chain ID to 'protein' or 'nucleic_acid'.
+        pdockq_cutoff: Contact distance for pDockQ and pDockQ2 in Angstroms.
+        pae_cutoff: PAE cutoff for LIS and ipSAE in Angstroms.
         scores: DataFrame of computed scores after compute_scores().
 
     Args:
-        chains: Array of chain IDs.
-        chain_pair_type: Dictionary mapping chain ID to chain type
-            ('protein' or 'nucleic_acid').
-        n_residues: Total number of residues across all chains.
-        pdockq_cutoff: Distance cutoff for pDockQ in Angstroms.
-            Defaults to 8.0.
-        pae_cutoff: PAE cutoff for ipSAE in Angstroms. Defaults to 12.0.
+        chains: Chain ID per residue.
+        chain_types: Chain ID to 'protein' or 'nucleic_acid'.
+        pdockq_cutoff: Contact distance for pDockQ. Defaults to 8.0.
+        pae_cutoff: PAE cutoff for LIS and ipSAE. Defaults to 12.0.
 
     Example:
-        >>> calc = ScoreCalculator(chains, chain_types, n_residues)
+        >>> calc = ScoreCalculator(chains, chain_types)
         >>> calc.compute_scores(distances, plddt, pae)
         >>> print(calc.scores)
     """
@@ -473,59 +462,38 @@ class ScoreCalculator:
     def __init__(
         self,
         chains: np.ndarray,
-        chain_pair_type: dict[str, str],
-        n_residues: int,
+        chain_types: dict[str, str],
         pdockq_cutoff: float = 8.0,
         pae_cutoff: float = 12.0,
     ):
-        """Initialize the ScoreCalculator.
-
-        Args:
-            chains: Array of chain IDs.
-            chain_pair_type: Chain ID to type mapping.
-            n_residues: Total number of residues across all chains.
-            pdockq_cutoff: pDockQ distance cutoff.
-            pae_cutoff: PAE cutoff.
-        """
-        self.chains = chains
-        self.unique_chains = np.unique(chains)
-        self.chain_pair_type = chain_pair_type
-        self.n_res = n_residues
-        self.pDockQ_cutoff = pdockq_cutoff
-        self.PAE_cutoff = pae_cutoff
-
-        self.permute_chains()
+        """Initialize the ScoreCalculator."""
+        self.chains = np.asarray(chains)
+        self.chain_types = chain_types
+        self.pdockq_cutoff = pdockq_cutoff
+        self.pae_cutoff = pae_cutoff
 
     def compute_scores(
         self, distances: np.ndarray, pLDDT: np.ndarray, PAE: np.ndarray
-    ) -> None:
-        """Compute all scores for all chain pairs.
-
-        Calculates pDockQ, pDockQ2, LIS, ipTM, and ipSAE scores for
-        each permutation of chain pairs.
+    ) -> pl.DataFrame:
+        """Score all chain pairs.
 
         Args:
             distances: Pairwise distance matrix between all residues.
             pLDDT: Per-residue pLDDT values (0-100 scale).
             PAE: Predicted aligned error matrix.
+
+        Returns:
+            One row per unordered chain pair, in the direction with the
+            larger ipSAE.
         """
-        self.distances = distances
-        self.pLDDT = pLDDT
-        self.PAE = PAE
-
-        results = []
-        for chain1, chain2 in self.permuted:
-            pDockQ, pDockQ2 = self.compute_pDockQ_scores(chain1, chain2)
-            LIS = self.compute_LIS(chain1, chain2)
-            ipTM, ipSAE = self.compute_ipTM_ipSAE(chain1, chain2)
-
-            values = (pDockQ, pDockQ2, LIS, ipTM, ipSAE)
-            results.append((chain1, chain2, *map(float, values)))
-
+        rows = [
+            (chain1, chain2, *self.score_pair(chain1, chain2, distances, pLDDT, PAE))
+            for chain1, chain2 in permutations(np.unique(self.chains), 2)
+        ]
         # Row tuples keep the schema when there are no pairs (one polymer
         # chain, e.g. a protein with a ligand scored only by ipSAE2).
-        self.df = pl.DataFrame(
-            results,
+        df = pl.DataFrame(
+            rows,
             orient='row',
             schema={
                 'chain1': str,
@@ -537,146 +505,8 @@ class ScoreCalculator:
                 'ipSAE': float,
             },
         )
-        self.get_max_values()
-
-    def compute_pDockQ_scores(self, chain1: str, chain2: str) -> tuple[float, float]:
-        """Compute pDockQ and pDockQ2 scores for a chain pair.
-
-        pDockQ depends solely on pLDDT, while pDockQ2 depends on both
-        pLDDT and PAE.
-
-        Args:
-            chain1: First chain identifier.
-            chain2: Second chain identifier.
-
-        Returns:
-            Tuple of (pDockQ, pDockQ2) scores.
-        """
-        mask_c1 = self.chains == chain1
-        mask_c2 = self.chains == chain2
-
-        dist_sub = self.distances[np.ix_(mask_c1, mask_c2)]
-        contact = dist_sub <= self.pDockQ_cutoff
-        n_pairs = np.sum(contact)
-
-        if n_pairs == 0:
-            return 0.0, 0.0
-
-        c1_idx = np.where(mask_c1)[0]
-        c2_idx = np.where(mask_c2)[0]
-        c1_contact = c1_idx[contact.any(axis=1)]
-        c2_contact = c2_idx[contact.any(axis=0)]
-        residues = np.concatenate([c1_contact, c2_contact])
-
-        mean_pLDDT = self.pLDDT[residues].mean()
-        x = mean_pLDDT * np.log10(n_pairs)
-        pDockQ = self.pDockQ_score(x)
-
-        pae_sub = self.PAE[np.ix_(mask_c1, mask_c2)]
-        pae_contacts = pae_sub[contact]
-        pae_ptm = self.compute_pTM(pae_contacts, 10.0)
-        mean_pTM = pae_ptm.mean()
-        x = mean_pLDDT * mean_pTM
-        pDockQ2 = self.pDockQ2_score(x)
-
-        return pDockQ, pDockQ2
-
-    def compute_LIS(self, chain1: str, chain2: str) -> float:
-        """Compute Local Interaction Score (LIS) for a chain pair.
-
-        LIS is based on a subset of the predicted aligned error using
-        a cutoff of 12 Å. Values range in (0, 1] where 1 indicates
-        perfect accuracy.
-
-        Adapted from: https://doi.org/10.1101/2024.02.19.580970
-
-        Args:
-            chain1: First chain identifier.
-            chain2: Second chain identifier.
-
-        Returns:
-            LIS value for the chain pair.
-        """
-        mask = (self.chains[:, None] == chain1) & (self.chains[None, :] == chain2)
-        selected_pae = self.PAE[mask]
-
-        LIS = 0.0
-        if selected_pae.size:
-            valid_pae = selected_pae[selected_pae < self.PAE_cutoff]
-            if valid_pae.size:
-                scores = (self.PAE_cutoff - valid_pae) / self.PAE_cutoff
-                LIS = np.mean(scores)
-
-        return LIS
-
-    def compute_ipTM_ipSAE(self, chain1: str, chain2: str) -> tuple[Any, Any]:
-        """Compute ipTM and ipSAE scores for a chain pair.
-
-        ipTM uses d0 based on total chain pair length and averages over
-        all chain2 residues. ipSAE uses a per-residue d0 based on the
-        count of chain2 residues with PAE below the cutoff for each
-        aligned residue in chain1, averaging only over those valid
-        residues.
-
-        Args:
-            chain1: First chain identifier (aligned chain).
-            chain2: Second chain identifier (scored chain).
-
-        Returns:
-            Tuple of (ipTM, ipSAE) scores.
-        """
-        pair_type = 'protein'
-        if (
-            self.chain_pair_type[chain1] == 'nucleic_acid'
-            or self.chain_pair_type[chain2] == 'nucleic_acid'
-        ):
-            pair_type = 'nucleic_acid'
-
-        mask_c1 = self.chains == chain1
-        mask_c2 = self.chains == chain2
-
-        # ipTM: d0 from total chain pair length
-        L = np.sum(mask_c1) + np.sum(mask_c2)
-        d0_chain = self.compute_d0(L, pair_type)
-
-        pae_sub = self.PAE[np.ix_(mask_c1, mask_c2)]
-
-        # ipTM: mean pTM over all chain2 residues per chain1 residue
-        ptm_sub_chain = self.compute_pTM(pae_sub, d0_chain)
-        ipTM_byres = np.array([0.0])
-        if mask_c2.any():
-            ipTM_byres = np.mean(ptm_sub_chain, axis=1)
-
-        # ipSAE: PAE filtering + per-residue d0
-        valid_mask = pae_sub < self.PAE_cutoff
-        n_valid_per_row = valid_mask.sum(axis=1)
-
-        d0_per_res = self.compute_d0_array(n_valid_per_row, pair_type)
-        ptm_sub_res = 1.0 / (1 + (pae_sub / d0_per_res[:, None]) ** 2)
-
-        ipSAE_byres = np.zeros(mask_c1.sum())
-        rows_with_valid = n_valid_per_row > 0
-        if rows_with_valid.any():
-            masked_ptm = np.where(valid_mask, ptm_sub_res, 0.0)
-            ipSAE_byres[rows_with_valid] = (
-                masked_ptm[rows_with_valid].sum(axis=1)
-                / n_valid_per_row[rows_with_valid]
-            )
-
-        ipTM = np.max(ipTM_byres)
-        ipSAE = np.max(ipSAE_byres) if ipSAE_byres.size > 0 else 0.0
-
-        return ipTM, ipSAE
-
-    def get_max_values(self) -> None:
-        """Extract maximum scores for undirected chain pairs.
-
-        Because some scores like ipSAE are asymmetric (A->B != B->A),
-        takes the maximum score for either direction as the undirected
-        score.
-        """
         self.scores = (
-            self.df.with_columns(
+            df.with_columns(
                 pl.when(pl.col('chain1') < pl.col('chain2'))
                 .then(pl.concat_str(['chain1', 'chain2'], separator='_'))
                 .otherwise(pl.concat_str(['chain2', 'chain1'], separator='_'))
@@ -686,106 +516,101 @@ class ScoreCalculator:
             .unique(subset=['pair_key'], keep='first')
             .drop('pair_key')
         )
+        return self.scores
 
-    def permute_chains(self) -> None:
-        """Generate all permutations of chain pairs.
+    def score_pair(
+        self,
+        chain1: str,
+        chain2: str,
+        distances: np.ndarray,
+        pLDDT: np.ndarray,
+        PAE: np.ndarray,
+    ) -> tuple[float, float, float, float, float]:
+        """Score chain2 aligned on chain1.
 
-        Creates all unique ordered pairs of chains, excluding self-pairs.
-        """
-        self.permuted = list(permutations(self.unique_chains, 2))
-
-    @staticmethod
-    def pDockQ_score(x: float) -> float:
-        """Compute pDockQ score.
-
-        Formula: pDockQ = 0.724 / (1 + exp(-0.052 * (x - 152.611))) + 0.018
-
-        Reference: https://doi.org/10.1038/s41467-022-28865-w
-
-        Args:
-            x: Mean pLDDT scaled by log10 of the number of residue pairs
-                within the distance cutoff.
-
-        Returns:
-            pDockQ score.
-        """
-        return 0.724 / (1 + np.exp(-0.052 * (x - 152.611))) + 0.018
-
-    @staticmethod
-    def pDockQ2_score(x: float) -> float:
-        """Compute pDockQ2 score.
-
-        Formula: pDockQ2 = 1.31 / (1 + exp(-0.075 * (x - 84.733))) + 0.005
-
-        Reference: https://doi.org/10.1093/bioinformatics/btad424
+        pDockQ (https://doi.org/10.1038/s41467-022-28865-w) and pDockQ2
+        (https://doi.org/10.1093/bioinformatics/btad424) use the residue
+        pairs within ``pdockq_cutoff``. LIS
+        (https://doi.org/10.1101/2024.02.19.580970) averages
+        ``(pae_cutoff - PAE) / pae_cutoff`` over PAE below the cutoff. ipTM
+        takes d0 from the pair length and averages over all chain2
+        residues; ipSAE takes d0 per chain1 residue from the chain2
+        residues below the PAE cutoff and averages over those only. Both
+        report the best chain1 residue.
 
         Args:
-            x: Mean pLDDT scaled by the mean pTM derived from the PAE
-                values of contacting residue pairs.
+            chain1: Aligned chain.
+            chain2: Scored chain.
+            distances: Pairwise distance matrix between all residues.
+            pLDDT: Per-residue pLDDT values (0-100 scale).
+            PAE: Predicted aligned error matrix.
 
         Returns:
-            pDockQ2 score.
+            Tuple of (pDockQ, pDockQ2, LIS, ipTM, ipSAE).
         """
-        return 1.31 / (1 + np.exp(-0.075 * (x - 84.733))) + 0.005
+        idx1 = np.flatnonzero(self.chains == chain1)
+        idx2 = np.flatnonzero(self.chains == chain2)
+        pae = PAE[np.ix_(idx1, idx2)]
+
+        pDockQ = pDockQ2 = 0.0
+        contact = distances[np.ix_(idx1, idx2)] <= self.pdockq_cutoff
+        n_pairs = contact.sum()
+        if n_pairs:
+            residues = np.concatenate(
+                [idx1[contact.any(axis=1)], idx2[contact.any(axis=0)]]
+            )
+            mean_pLDDT = pLDDT[residues].mean()
+            x = mean_pLDDT * np.log10(n_pairs)
+            pDockQ = 0.724 / (1 + np.exp(-0.052 * (x - 152.611))) + 0.018
+            x = mean_pLDDT * self.ptm(pae[contact], 10.0).mean()
+            pDockQ2 = 1.31 / (1 + np.exp(-0.075 * (x - 84.733))) + 0.005
+
+        below = pae[pae < self.pae_cutoff]
+        LIS = (
+            ((self.pae_cutoff - below) / self.pae_cutoff).mean() if below.size else 0.0
+        )
+
+        nucleic = 'nucleic_acid' in (self.chain_types[chain1], self.chain_types[chain2])
+        ipTM = 0.0
+        if len(idx2):
+            d0 = self.d0(len(idx1) + len(idx2), nucleic, min_length=27)
+            ipTM = self.ptm(pae, d0).mean(axis=1).max()
+
+        valid = pae < self.pae_cutoff
+        n_valid = valid.sum(axis=1)
+        d0 = self.d0(n_valid, nucleic, min_length=26)
+        ptm = np.where(valid, self.ptm(pae, d0[:, None]), 0.0)
+        by_residue = np.divide(
+            ptm.sum(axis=1), n_valid, out=np.zeros(len(idx1)), where=n_valid > 0
+        )
+        ipSAE = by_residue.max() if len(idx1) else 0.0
+
+        return tuple(float(v) for v in (pDockQ, pDockQ2, LIS, ipTM, ipSAE))
 
     @staticmethod
-    def compute_pTM(x: np.ndarray, d0: float) -> np.ndarray:
-        """Compute pTM score.
-
-        Formula: pTM = 1.0 / (1 + (x / d0)^2)
-
-        Args:
-            x: PAE values (scalar or array).
-            d0: Distance parameter from compute_d0.
-
-        Returns:
-            pTM score(s).
-        """
-        return 1.0 / (1 + (x / d0) ** 2)
+    def ptm(pae: np.ndarray, d0: float | np.ndarray) -> np.ndarray:
+        """TM-score kernel ``1 / (1 + (PAE / d0)^2)``."""
+        return 1.0 / (1 + (pae / d0) ** 2)
 
     @staticmethod
-    def compute_d0(L: int, pair_type: str) -> float:
-        """Compute d0 parameter for pTM calculation.
+    def d0(L: int | np.ndarray, nucleic_acid: bool, min_length: int = 27) -> np.ndarray:
+        """TM-score d0 ``1.24 * (L - 15)^(1/3) - 1.8``.
 
-        Formula: d0 = max(min_value, 1.24 * (L - 15)^(1/3) - 1.8)
-
-        Args:
-            L: Sequence length (minimum 27).
-            pair_type: 'protein' or 'nucleic_acid'.
-
-        Returns:
-            d0 parameter value.
-        """
-        L = max(27, L)
-
-        min_value = 1.0
-        if pair_type == 'nucleic_acid':
-            min_value = 2.0
-
-        return max(min_value, 1.24 * (L - 15) ** (1 / 3) - 1.8)
-
-    @staticmethod
-    def compute_d0_array(L: np.ndarray, pair_type: str) -> np.ndarray:
-        """Compute d0 parameter for an array of sequence lengths.
-
-        Vectorized version of compute_d0 for per-residue d0 calculation
-        used in ipSAE scoring.
+        L is floored at ``min_length`` and d0 at 1 (protein) or 2 (nucleic
+        acid). ipTM uses a length floor of 27 and ipSAE one of 26.
 
         Args:
-            L: Array of sequence lengths.
-            pair_type: 'protein' or 'nucleic_acid'.
+            L: Length or lengths.
+            nucleic_acid: Whether either chain is a nucleic acid.
+            min_length: Floor applied to L.
 
         Returns:
-            Array of d0 parameter values.
+            d0 with the shape of L.
         """
-        L = np.asarray(L, dtype=float)
-        L = np.maximum(26.0, L)
-
-        min_value = 1.0
-        if pair_type == 'nucleic_acid':
-            min_value = 2.0
-
-        return np.maximum(min_value, 1.24 * (L - 15) ** (1 / 3) - 1.8)
+        L = np.maximum(min_length, np.asarray(L, dtype=float))
+        return np.maximum(
+            2.0 if nucleic_acid else 1.0, 1.24 * (L - 15) ** (1 / 3) - 1.8
+        )
 
 
 class TokenMismatchError(ValueError):
@@ -934,7 +759,6 @@ class ModelParser:
         CANONICAL_NUCLEIC: Standard RNA and DNA residue names.
         IONS: Residue or element names of single-atom ions.
         WATER: Water residue names, dropped on read.
-        CIF_TOKEN: Regex splitting an mmCIF row into values.
 
     Args:
         structure: Path to PDB or CIF file.
@@ -946,71 +770,21 @@ class ModelParser:
         >>> parser.classify_chains()
     """
 
-    CANONICAL_PROTEIN = frozenset(
-        [
-            'ALA',
-            'ARG',
-            'ASN',
-            'ASP',
-            'CYS',
-            'GLN',
-            'GLU',
-            'GLY',
-            'HIS',
-            'ILE',
-            'LEU',
-            'LYS',
-            'MET',
-            'PHE',
-            'PRO',
-            'SER',
-            'THR',
-            'TRP',
-            'TYR',
-            'VAL',
-        ]
-    )
-    CANONICAL_NUCLEIC = frozenset(
-        ['A', 'C', 'G', 'U', 'I', 'DA', 'DC', 'DG', 'DT', 'DI', 'DU']
-    )
-    IONS = frozenset(
-        [
-            'LI',
-            'NA',
-            'K',
-            'RB',
-            'CS',
-            'MG',
-            'CA',
-            'SR',
-            'BA',
-            'MN',
-            'FE',
-            'FE2',
-            'FE3',
-            'CO',
-            'NI',
-            'CU',
-            'CU1',
-            'CU2',
-            'ZN',
-            'CD',
-            'AL',
-            'GA',
-            'HG',
-            'PB',
-            'F',
-            'CL',
-            'BR',
-            'IOD',
-            'I',
-        ]
-    )
+    # fmt: off
+    CANONICAL_PROTEIN = frozenset([
+        'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
+        'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL',
+    ])
+    CANONICAL_NUCLEIC = frozenset([
+        'A', 'C', 'G', 'U', 'I', 'DA', 'DC', 'DG', 'DT', 'DI', 'DU',
+    ])
+    IONS = frozenset([
+        'LI', 'NA', 'K', 'RB', 'CS', 'MG', 'CA', 'SR', 'BA', 'MN', 'FE', 'FE2',
+        'FE3', 'CO', 'NI', 'CU', 'CU1', 'CU2', 'ZN', 'CD', 'AL', 'GA', 'HG',
+        'PB', 'F', 'CL', 'BR', 'IOD', 'I',
+    ])
     WATER = frozenset(['HOH', 'WAT', 'DOD'])
-
-    CIF_TOKEN = re.compile(
-        r"""'(?:[^']|'(?=\S))*'(?=\s|$)|"(?:[^"]|"(?=\S))*"(?=\s|$)|\S+"""
-    )
+    # fmt: on
 
     def __init__(
         self,
@@ -1050,24 +824,40 @@ class ModelParser:
         """
         if self.atoms is not None:
             return self.atoms
-        if self.structure.suffix.lower() == '.pdb':
-            rows = self._read_pdb_rows(self.structure)
-        else:
-            rows = self._read_cif_rows(self.structure)
-
-        kept = []
-        for row in rows:
-            record, chain, resnum, resname, atom_name, element = row[:6]
-            if resname in self.WATER:
-                continue
-            element = (element or self._infer_element(atom_name, resname)).upper()
-            if element in ('H', 'D'):
-                continue
-            kept.append((record, chain, resnum, resname, atom_name, element, *row[6:]))
-        if not kept:
+        structure = gemmi.read_structure(str(self.structure))
+        is_cif = structure.input_format == gemmi.CoorFormat.Mmcif
+        rows = []
+        for chain in structure[0]:
+            for res in chain:
+                if res.name in self.WATER:
+                    continue
+                # mmCIF chains are label_asym_id, the IDs predictors use,
+                # falling back to auth_asym_id.
+                chain_id = (is_cif and res.subchain) or chain.name or '_'
+                if res.label_seq is not None:
+                    resnum = str(res.label_seq)
+                else:
+                    resnum = f'{res.seqid.num}{res.seqid.icode}'.strip()
+                record = 'HETATM' if res.het_flag == 'H' else 'ATOM'
+                for atom in res:
+                    element = atom.element.name.upper()
+                    if element in ('H', 'D') or atom.altloc not in ('\0', 'A', '1'):
+                        continue
+                    rows.append(
+                        (
+                            record,
+                            chain_id,
+                            resnum,
+                            res.name,
+                            atom.name,
+                            element,
+                            *atom.pos.tolist(),
+                        )
+                    )
+        if not rows:
             raise ValueError(f'No coordinate atoms in {self.structure}')
 
-        columns = list(zip(*kept, strict=True))
+        columns = list(zip(*rows, strict=True))
         self.atoms = AtomTable(
             record=np.array(columns[0], dtype=object),
             chain=np.array(columns[1], dtype=object),
@@ -1513,96 +1303,6 @@ class ModelParser:
         expected = dict(zip(seen, chains, strict=True))
         return [expected[c] for c in reference] == list(token_chains)
 
-    @classmethod
-    def _split_cif_row(cls, line: str) -> list[str]:
-        """Split an mmCIF data row, removing quotes around values like "C1'"."""
-        values = []
-        for token in cls.CIF_TOKEN.findall(line):
-            if len(token) >= 2 and token[0] == token[-1] and token[0] in '\'"':
-                token = token[1:-1]
-            values.append(token)
-        return values
-
-    @staticmethod
-    def _read_pdb_rows(path: Path) -> list[tuple]:
-        rows = []
-        with open(path) as f:
-            for line in f:
-                record = line[:6].strip()
-                if record == 'ENDMDL':
-                    break
-                if record not in ('ATOM', 'HETATM'):
-                    continue
-                if line[16:17].strip() not in ('', 'A', '1'):
-                    continue
-                element = line[76:78].strip() if len(line) >= 78 else ''
-                rows.append(
-                    (
-                        record,
-                        line[21:22].strip() or '_',
-                        line[22:27].strip() or '1',
-                        line[17:20].strip(),
-                        line[12:16].strip(),
-                        element,
-                        float(line[30:38]),
-                        float(line[38:46]),
-                        float(line[46:54]),
-                    )
-                )
-        return rows
-
-    @classmethod
-    def _read_cif_rows(cls, path: Path) -> list[tuple]:
-        fields: dict[str, int] = {}
-        rows = []
-        first_model = None
-        with open(path) as f:
-            for line in f:
-                if line.startswith('_atom_site.'):
-                    fields[line.strip().split('.', 1)[1].strip()] = len(fields)
-                    continue
-                if not fields or not line.startswith(('ATOM', 'HETATM')):
-                    continue
-                values = cls._split_cif_row(line)
-
-                def get(name: str, values: list[str] = values) -> str:
-                    idx = fields.get(name)
-                    if idx is None:
-                        return ''
-                    value = values[idx]
-                    return '' if value in ('.', '?') else value
-
-                model = get('pdbx_PDB_model_num')
-                if first_model is None:
-                    first_model = model
-                elif model != first_model:
-                    break
-                if get('label_alt_id') not in ('', 'A', '1'):
-                    continue
-                rows.append(
-                    (
-                        get('group_PDB'),
-                        get('label_asym_id') or get('auth_asym_id') or '_',
-                        get('label_seq_id') or get('auth_seq_id') or '1',
-                        get('label_comp_id'),
-                        get('label_atom_id'),
-                        get('type_symbol'),
-                        float(get('Cartn_x')),
-                        float(get('Cartn_y')),
-                        float(get('Cartn_z')),
-                    )
-                )
-        return rows
-
-    @classmethod
-    def _infer_element(cls, atom_name: str, resname: str) -> str:
-        name = atom_name.upper().lstrip('0123456789')
-        if name.startswith(('H', 'D')):
-            return 'H'
-        if resname.upper() in cls.IONS:
-            return resname.upper()
-        return name[:1]
-
 
 class IpSAE2Calculator:
     """Compute directional ipSAE2 scores for all contacting molecule pairs.
@@ -1633,7 +1333,15 @@ class IpSAE2Calculator:
         >>> print(calc.scores)
     """
 
-    DIRECTIONAL = ('ipSAE2', 'iPAE', 'n0', 'd0', 'n_contact', 'align_token')
+    # DirectionResult field -> (column prefix, dtype); columns end in _12/_21.
+    DIRECTIONAL: ClassVar[dict[str, tuple[str, pl.DataType]]] = {
+        'score': ('ipSAE2', pl.Float64),
+        'ipae': ('ipSAE2_iPAE', pl.Float64),
+        'n0': ('ipSAE2_n0', pl.Int64),
+        'd0': ('ipSAE2_d0', pl.Float64),
+        'n_contact': ('ipSAE2_n_contact', pl.Int64),
+        'align_token': ('ipSAE2_align_token', pl.String),
+    }
     TYPE_ORDER: ClassVar[dict[str, int]] = {'prot': 0, 'nuc': 1, 'lig': 2, 'ion': 3}
 
     def __init__(
@@ -1782,19 +1490,15 @@ class IpSAE2Calculator:
                     'ipSAE2_source': source,
                 }
                 for suffix, result in (('12', d12), ('21', d21)):
-                    row[f'ipSAE2_{suffix}'] = result.score
-                    row[f'ipSAE2_iPAE_{suffix}'] = result.ipae
-                    row[f'ipSAE2_n0_{suffix}'] = result.n0
-                    row[f'ipSAE2_d0_{suffix}'] = result.d0
-                    row[f'ipSAE2_n_contact_{suffix}'] = result.n_contact
-                    row[f'ipSAE2_align_token_{suffix}'] = result.align_token
+                    for attr, (prefix, _) in self.DIRECTIONAL.items():
+                        row[f'{prefix}_{suffix}'] = getattr(result, attr)
                 rows.append(row)
 
         self.scores = pl.DataFrame(rows, schema=self.schema())
         return self.scores
 
-    @staticmethod
-    def schema() -> dict[str, pl.DataType]:
+    @classmethod
+    def schema(cls) -> dict[str, pl.DataType]:
         """Return the polars schema of the score table."""
         schema = {
             'chain1': pl.String,
@@ -1805,12 +1509,8 @@ class IpSAE2Calculator:
             'ipSAE2_source': pl.String,
         }
         for suffix in ('12', '21'):
-            schema[f'ipSAE2_{suffix}'] = pl.Float64
-            schema[f'ipSAE2_iPAE_{suffix}'] = pl.Float64
-            schema[f'ipSAE2_n0_{suffix}'] = pl.Int64
-            schema[f'ipSAE2_d0_{suffix}'] = pl.Float64
-            schema[f'ipSAE2_n_contact_{suffix}'] = pl.Int64
-            schema[f'ipSAE2_align_token_{suffix}'] = pl.String
+            for prefix, dtype in cls.DIRECTIONAL.values():
+                schema[f'{prefix}_{suffix}'] = dtype
         return schema
 
     def score_direction(

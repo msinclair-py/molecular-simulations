@@ -35,6 +35,7 @@ def test_ipSAE_cif_atom_line_parsing(tmp_path):
     cif.write_text(
         '\n'.join(
             [
+                'data_test',
                 'loop_',
                 '_atom_site.group_PDB',
                 '_atom_site.id',

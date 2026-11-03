@@ -21,6 +21,7 @@ license = 'MIT'
 license-files = ['LICEN[CS]E*']
 dependencies = [
     'pdbfixer',
+    'gemmi',
     'MDAnalysis>=2.7',
     'mdtraj',
     'natsort',
@@ -62,7 +63,6 @@ dev = [
     'numpy>=2.0',
     'ruff>=0.15',
     'pre-commit>=3.5',
-    'gemmi',
 ]
 
 [tool.hatch.metadata]

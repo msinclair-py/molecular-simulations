@@ -1,5 +1,5 @@
 ---
-name: analyze-interactions
+name: molsim-analyze-interactions
 description: Analyze protein-protein/ligand interactions from MD trajectories with molecular-simulations — per-residue interaction-energy fingerprinting (electrostatic + Lennard-Jones), linear interaction energy (static structure or dynamic trajectory), and KMeans clustering of per-frame feature data. Use when characterizing binding interfaces, footprinting which residues drive an interaction, computing chain-chain interaction energies, or clustering conformations/fingerprints.
 ---
 
@@ -13,8 +13,8 @@ system interact and for grouping the resulting per-frame data:
   energy between a chain and the rest of the system.
 - **`AutoKMeans`** — automatic KMeans++ clustering (with PCA) of `.npy` features.
 
-For surface accessibility see `analyze-sasa`; for predicted-complex interface
-scoring see `analyze-ipsae`.
+For surface accessibility see `molsim-analyze-sasa`; for predicted-complex interface
+scoring see `molsim-analyze-ipsae`.
 
 ## Fingerprinter — per-residue interaction energy
 
@@ -130,4 +130,4 @@ per-residue mean LJ+ES) and `np.save` it per system into the features directory.
 Each of these is per-system/per-trajectory work. To process many trajectories,
 wrap the `.run()` / `.compute_energies()` call in a `@python_app` (GPU for the
 OpenMM-based interaction energies, CPU for fingerprinting/clustering) and fan out
-with the `parsl-hpc` skill, then aggregate the outputs.
+with the `molsim-parsl-hpc` skill, then aggregate the outputs.

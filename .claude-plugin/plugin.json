@@ -1,0 +1,8 @@
+{
+  "name": "molecular-simulations",
+  "description": "Agent skills for the molecular-simulations package: AMBER/OpenMM system building, GPU MD, MM-PBSA, trajectory analysis, ipSAE2 interface scoring and Parsl HPC deployment.",
+  "author": {"name": "Matt Sinclair"},
+  "homepage": "https://molecular-simulations.readthedocs.io/en/latest/",
+  "repository": "https://github.com/msinclair-py/molecular-simulations",
+  "license": "MIT"
+}

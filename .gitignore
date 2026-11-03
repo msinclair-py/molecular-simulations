@@ -17,6 +17,7 @@ leap.log
 !CHANGELOG.md
 !docs/changelog.md
 !skills/**/*.md
+!SKILL.md
 
 # coverage data
 .coverage

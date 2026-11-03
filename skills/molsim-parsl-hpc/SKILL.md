@@ -1,5 +1,5 @@
 ---
-name: parsl-hpc
+name: molsim-parsl-hpc
 description: Configure Parsl to deploy molecular-simulations builds, MD runs, and analyses across HPC. Use when running many systems/replicas in parallel, picking a compute platform (Local single-node GPU, Heterogeneous GPU+CPU, Polaris, or Aurora via PBSPro), pinning workers to GPUs, or writing/loading a YAML settings file for a cluster job.
 ---
 

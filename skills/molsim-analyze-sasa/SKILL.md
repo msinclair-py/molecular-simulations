@@ -1,5 +1,5 @@
 ---
-name: analyze-sasa
+name: molsim-analyze-sasa
 description: Compute solvent-accessible surface area on a structure or MD trajectory with molecular-simulations — absolute per-residue SASA (Shrake-Rupley) and RelativeSASA fractional exposure (0=buried, 1=exposed). Use when measuring residue burial/exposure, finding solvent-exposed surfaces or buried interfaces, or quantifying conformational changes in accessibility over a trajectory.
 ---
 
@@ -73,7 +73,7 @@ SASA(u.select_atoms('protein')).run()
   `ag.residues.resids` / `.resnames`.
 - For interface burial, compute SASA of each partner alone vs. the complex and
   take the difference (buried surface area).
-- Parallelize across many trajectories with the `parsl-hpc` skill — wrap the
+- Parallelize across many trajectories with the `molsim-parsl-hpc` skill — wrap the
   `SASA(...).run()` call in a CPU `@python_app`.
 
-See also: `analyze-ipsae` (interface scoring of predicted complexes).
+See also: `molsim-analyze-ipsae` (interface scoring of predicted complexes).

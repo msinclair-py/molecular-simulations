@@ -1,0 +1,14 @@
+{
+  "name": "molecular-simulations",
+  "description": "Agent skills for the molecular-simulations Python package.",
+  "owner": {
+    "name": "Matt Sinclair"
+  },
+  "plugins": [
+    {
+      "name": "molecular-simulations",
+      "source": "./",
+      "description": "Agent skills for the molecular-simulations package: AMBER/OpenMM system building, GPU MD, MM-PBSA, trajectory analysis, ipSAE2 interface scoring and Parsl HPC deployment."
+    }
+  ]
+}

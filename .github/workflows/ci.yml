@@ -104,8 +104,10 @@ jobs:
           "$RUNNER_TEMP/user/bin/pip" install dist/*.whl
           echo "$RUNNER_TEMP/user/bin" >> "$GITHUB_PATH"
 
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+      - name: Install Claude Code and Codex
+        # Codex is pinned: the check reads `codex debug prompt-input`, a debug
+        # command whose output may change between releases.
+        run: npm install -g @anthropic-ai/claude-code @openai/codex@0.166.0
 
-      - name: Check that Claude Code discovers every skill install route
+      - name: Check that Claude Code and Codex discover every skill install route
         run: .github/scripts/skills_e2e.sh

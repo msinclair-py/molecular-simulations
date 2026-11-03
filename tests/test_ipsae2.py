@@ -11,7 +11,7 @@ from scipy.spatial import cKDTree
 
 from molecular_simulations.analysis.ipSAE import (
     IpSAE2Calculator,
-    IpSAE2Parser,
+    ModelParser,
     MoleculeGeometry,
     TokenMismatchError,
     TokenTable,
@@ -100,12 +100,20 @@ def write_cif(path, atoms, label_asym=False):
 
 def load(path, pae, metadata=None):
     """Parse, tokenize and assign frames for a model."""
-    atoms = IpSAE2Parser.read_atoms(path)
-    tokens = IpSAE2Parser.infer_tokens(
-        atoms, IpSAE2Parser.classify_molecules(atoms), len(pae), metadata
-    )
-    tokens.frame_valid = IpSAE2Parser.frame_validity(atoms, tokens, metadata)
-    return atoms, tokens
+    parser = ModelParser(path)
+    tokens = parser.infer_tokens(len(pae), metadata)
+    tokens.frame_valid = parser.frame_validity(tokens, metadata)
+    return parser.atoms, tokens
+
+
+def molecule_types(path):
+    parser = ModelParser(path)
+    parser.read_atoms()
+    return parser.molecule_types
+
+
+def pae_metadata(model, path):
+    return ipSAE(model, None, path, scores=['ipsae2']).load_pae_metadata()
 
 
 def make_tokens(rows):
@@ -170,8 +178,8 @@ class TestUpstreamExample:
         return writer(tmp_path / f'model.{request.param}', UPSTREAM_ATOMS)
 
     def test_tokens(self, model):
-        atoms, tokens = load(model, UPSTREAM_PAE)
-        assert IpSAE2Parser.classify_molecules(atoms) == {
+        _, tokens = load(model, UPSTREAM_PAE)
+        assert molecule_types(model) == {
             'A': 'prot',
             'B': 'prot',
             'C': 'lig',
@@ -214,18 +222,18 @@ class TestUpstreamExample:
     def test_npz_metadata(self, model, tmp_path):
         good = tmp_path / 'good.npz'
         np.savez(good, pae=UPSTREAM_PAE, token_asym_id=[0, 1, 2, 2, 2, 3])
-        _, tokens = load(model, UPSTREAM_PAE, IpSAE2Parser.read_pae_metadata(good))
+        _, tokens = load(model, UPSTREAM_PAE, pae_metadata(model, good))
         assert list(tokens.chain) == ['A', 'B', 'C', 'C', 'C', 'D']
 
         bad = tmp_path / 'bad.npz'
         np.savez(bad, pae=UPSTREAM_PAE, token_asym_id=[0, 1, 1, 2, 2, 3])
         with pytest.raises(ValueError, match='token mapping'):
-            load(model, UPSTREAM_PAE, IpSAE2Parser.read_pae_metadata(bad))
+            load(model, UPSTREAM_PAE, pae_metadata(model, bad))
 
     def test_frame_mask_metadata(self, model, tmp_path):
         path = tmp_path / 'pae.npz'
         np.savez(path, pae=UPSTREAM_PAE, frame_mask=[0, 1, 1, 1, 1, 1])
-        _, tokens = load(model, UPSTREAM_PAE, IpSAE2Parser.read_pae_metadata(path))
+        _, tokens = load(model, UPSTREAM_PAE, pae_metadata(model, path))
         # Ions never define a frame, even when the predictor says so.
         assert list(tokens.frame_valid) == [False, True, True, True, True, False]
 
@@ -354,8 +362,8 @@ class TestGlycan:
 
     def test_glycan_is_one_atom_tokenized_ligand(self, model):
         n = 2 + 6 + 1
-        atoms, tokens = load(model, np.full((n, n), 5.0))
-        assert IpSAE2Parser.classify_molecules(atoms)['G'] == 'lig'
+        _, tokens = load(model, np.full((n, n), 5.0))
+        assert molecule_types(model)['G'] == 'lig'
         assert list(tokens.chain) == ['A', 'A'] + ['G'] * 6 + ['B']
         assert tokens.policy == 'modified=none;ligand=atom'
         assert len(set(tokens.unit_key[2:8])) == 6
@@ -427,7 +435,8 @@ class TestLegacyTokenMapping:
         scorer = ipSAE(model, npz, npz)
         scorer.run()
         assert scorer.parser.chain_residue_counts == {'A': 2, 'C': 1}
-        assert scorer.parser.cb_residues[2]['atom_name'] == '"C3\'"'
+        parser = scorer.parser
+        assert parser.atoms.atom_name[parser.cb_residues[2]] == "C3'"
         assert list(scorer.legacy_token_indices()) == [0, 1, 2]
 
 
@@ -507,9 +516,7 @@ def test_selenocysteine_is_a_modified_residue(tmp_path, n_tokens, policy):
 def test_ion_in_protein_chain_raises(tmp_path):
     atoms = [*ala('A', 1, 0.0), ('HETATM', 'ZN', 'ZN', 'A', 2, (5.0, 0, 0), 'ZN')]
     with pytest.raises(ValueError, match='shares protein chain'):
-        IpSAE2Parser.classify_molecules(
-            IpSAE2Parser.read_atoms(write_pdb(tmp_path / 'zn.pdb', atoms))
-        )
+        load(write_pdb(tmp_path / 'zn.pdb', atoms), np.zeros((2, 2)))
 
 
 class TestScoreSelection:

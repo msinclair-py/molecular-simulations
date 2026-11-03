@@ -55,7 +55,9 @@ class ipSAE:
     scored by ipSAE2.
 
     Attributes:
-        parser: ModelParser instance for structure file.
+        parser: ModelParser instance for structure file, shared by all
+            scores.
+        calculator: IpSAE2Calculator instance for ipSAE2.
         plddt_file: Path to pLDDT data file.
         pae_file: Path to PAE data file.
         path: Output directory path.
@@ -92,6 +94,12 @@ class ipSAE:
         'lis': ('LIS',),
         'ipsae': ('ipTM', 'ipSAE'),
     }
+    PAE_METADATA_KEYS = (
+        'frame_mask',
+        'token_has_frame',
+        'asym_id',
+        'token_asym_id',
+    )
 
     def __init__(
         self,
@@ -128,9 +136,9 @@ class ipSAE:
             raise ValueError('plddt_file is required for scores other than ipsae2')
 
         self.skip_chains = set(skip_chains) if skip_chains else set()
-        self.ipsae2_kwargs = ipsae2_kwargs or {}
         self.tokens: TokenTable | None = None
         self.parser = ModelParser(structure_file, skip_chains=skip_chains)
+        self.calculator = IpSAE2Calculator(**(ipsae2_kwargs or {}))
         self.plddt_file = Path(plddt_file) if plddt_file is not None else None
         self.pae_file = Path(pae_file)
 
@@ -148,13 +156,9 @@ class ipSAE:
         """
         self.parser.parse_structure_file()
         self.parser.classify_chains()
-        self.coordinates = np.vstack([res['coor'] for res in self.parser.residues])
-        if self.parser.cb_residues:
-            self.cb_coordinates = np.vstack(
-                [res['coor'] for res in self.parser.cb_residues]
-            )
-        else:
-            self.cb_coordinates = self.coordinates
+        xyz = self.parser.atoms.xyz
+        self.coordinates = xyz[self.parser.residues]
+        self.cb_coordinates = xyz[self.parser.cb_residues]
 
     def prepare_scorer(self) -> None:
         """Initialize the ScoreCalculator for computing scores.
@@ -258,18 +262,19 @@ class ipSAE:
         """
         self.tokenize(len(PAE))
         PAE = PAE[np.ix_(self.token_index, self.token_index)]
-        calculator = IpSAE2Calculator(**self.ipsae2_kwargs)
-        return calculator.compute_scores(PAE, self.atoms, self.tokens, self.skip_chains)
+        return self.calculator.compute_scores(
+            PAE, self.parser.atoms, self.tokens, self.skip_chains
+        )
 
     def tokenize(self, n_tokens: int) -> None:
         """Reconstruct the predictor's token order from the structure.
 
-        Sets ``atoms``, ``tokens`` and ``token_index``, the PAE index of
-        each token. Tokens without coordinates are dropped when the full PAE
-        matches no tokenization: Chai-1 keeps glycan leaving atoms (e.g. the
-        O1 of each linked sugar) as tokens but does not write them, and
-        their per-token pLDDT is exactly 0, as it averages over existing
-        atoms only. The result is cached.
+        Sets ``tokens`` and ``token_index``, the PAE index of each token.
+        Tokens without coordinates are dropped when the full PAE matches no
+        tokenization: Chai-1 keeps glycan leaving atoms (e.g. the O1 of each
+        linked sugar) as tokens but does not write them, and their per-token
+        pLDDT is exactly 0, as it averages over existing atoms only. The
+        result is cached.
 
         Args:
             n_tokens: PAE matrix dimension.
@@ -282,12 +287,10 @@ class ipSAE:
         """
         if self.tokens is not None:
             return
-        atoms = IpSAE2Parser.read_atoms(self.parser.structure)
-        metadata = IpSAE2Parser.read_pae_metadata(self.pae_file)
-        chain_types = IpSAE2Parser.classify_molecules(atoms)
+        metadata = self.load_pae_metadata()
         keep = np.arange(n_tokens)
         try:
-            tokens = IpSAE2Parser.infer_tokens(atoms, chain_types, n_tokens, metadata)
+            tokens = self.parser.infer_tokens(n_tokens, metadata)
         except TokenMismatchError:
             missing = self.uncoordinated_tokens(n_tokens)
             if not len(missing):
@@ -298,9 +301,9 @@ class ipSAE:
                 for k, v in metadata.items()
                 if v.ndim == 1 and len(v) == n_tokens
             }
-            tokens = IpSAE2Parser.infer_tokens(atoms, chain_types, len(keep), metadata)
-        tokens.frame_valid = IpSAE2Parser.frame_validity(atoms, tokens, metadata)
-        self.atoms, self.tokens, self.token_index = atoms, tokens, keep
+            tokens = self.parser.infer_tokens(len(keep), metadata)
+        tokens.frame_valid = self.parser.frame_validity(tokens, metadata)
+        self.tokens, self.token_index = tokens, keep
 
     def legacy_token_indices(self) -> np.ndarray:
         """Map each legacy residue to the PAE index of its anchor atom.
@@ -310,26 +313,8 @@ class ipSAE:
 
         Returns:
             PAE indices, one per residue in ``parser.residues``.
-
-        Raises:
-            ValueError: If an anchor atom is missing from the token table.
         """
-        atom_of = {
-            (name, *xyz): i
-            for i, (name, xyz) in enumerate(
-                zip(self.atoms.atom_name, map(tuple, self.atoms.xyz), strict=True)
-            )
-        }
-        indices = []
-        for res in self.parser.residues:
-            atom = atom_of.get((ModelParser.unquote(res['atom_name']), *res['coor']))
-            if atom is None:
-                raise ValueError(
-                    f'Residue {res["chain_id"]}:{res["res"]}{res["resid"]} '
-                    'has no token in the ipSAE2 token table'
-                )
-            indices.append(self.token_index[self.tokens.atom_token[atom]])
-        return np.array(indices, dtype=int)
+        return self.token_index[self.tokens.atom_token[self.parser.residues]]
 
     def uncoordinated_tokens(self, n_tokens: int) -> np.ndarray:
         """Find tokens whose per-token pLDDT is exactly 0.
@@ -445,6 +430,15 @@ class ipSAE:
         """
         data = np.load(self.pae_file)['pae']
         return data
+
+    def load_pae_metadata(self) -> dict[str, np.ndarray]:
+        """Load optional per-token metadata stored next to the PAE.
+
+        Returns:
+            Arrays for any of ``PAE_METADATA_KEYS`` present in the PAE file.
+        """
+        with np.load(self.pae_file, allow_pickle=False) as data:
+            return {k: np.asarray(data[k]) for k in self.PAE_METADATA_KEYS if k in data}
 
 
 class ScoreCalculator:
@@ -794,387 +788,6 @@ class ScoreCalculator:
         return np.maximum(min_value, 1.24 * (L - 15) ** (1 / 3) - 1.8)
 
 
-class ModelParser:
-    """Parse structure files to extract residue and atom information.
-
-    Handles both PDB and CIF format files, extracting C-alpha, C-beta,
-    and nucleic acid backbone atom coordinates.
-
-    Attributes:
-        structure: Path to the structure file.
-        protein_token_indices: pLDDT/PAE indices for kept-chain anchor
-            tokens; populated by :meth:`build_protein_token_indices`.
-        residues: List of dictionaries containing residue information.
-        chains: List of chain IDs for each residue.
-        chain_types: Dictionary mapping chain ID to type after
-            classify_chains().
-
-    Args:
-        structure: Path to PDB or CIF file.
-        skip_chains: Chain IDs to exclude (e.g. glycan/ligand chains
-            whose per-atom token counts in the pLDDT/PAE arrays
-            aren't recoverable from the structure file alone).
-
-    Example:
-        >>> parser = ModelParser('model.pdb')
-        >>> parser.parse_structure_file()
-        >>> parser.classify_chains()
-    """
-
-    def __init__(
-        self,
-        structure: PathLike,
-        skip_chains: set[str] | list[str] | None = None,
-    ):
-        """Initialize the ModelParser.
-
-        Args:
-            structure: Path to PDB or CIF file.
-            skip_chains: Chain IDs to exclude (e.g. glycan/ligand chains
-                whose per-atom token counts in the pLDDT/PAE arrays
-                aren't recoverable from the structure file alone).
-        """
-        self.structure = Path(structure)
-        self.skip_chains = set(skip_chains) if skip_chains else set()
-
-        self.residues = []
-        self.cb_residues = []
-        self.chains = []
-        self.chain_order: list[str] = []
-        self.chain_residue_counts: dict[str, int] = {}
-        self.protein_token_indices: list[int] = []
-
-    def parse_structure_file(self) -> None:
-        """Parse the structure file and extract atom/residue data.
-
-        Atoms in ``skip_chains`` are ignored. Chain order is preserved
-        so that :meth:`build_protein_token_indices` can later infer the
-        token span of skipped chains by arithmetic.
-        """
-        if self.structure.suffix == '.pdb':
-            line_parser = self.parse_pdb_line
-        else:
-            line_parser = self.parse_cif_line
-
-        field_num = 0
-        fields = {}
-        with open(self.structure) as f:
-            lines = f.readlines()
-
-        chain_atoms: dict[str, list[dict[str, Any]]] = {}
-        seen_chains: set[str] = set()
-
-        for line in lines:
-            if line.startswith('_atom_site.'):
-                _, field_name = line.strip().split('.')
-                fields[field_name] = field_num
-                field_num += 1
-
-            if line.startswith(('ATOM', 'HETATM')):
-                atom = line_parser(line, fields, allow_missing_seq_id=True)
-                if atom is None:
-                    continue
-
-                cid = atom['chain_id']
-                if cid not in seen_chains:
-                    seen_chains.add(cid)
-                    self.chain_order.append(cid)
-                    chain_atoms[cid] = []
-
-                if cid not in self.skip_chains:
-                    chain_atoms[cid].append(atom)
-
-        for cid in self.chain_order:
-            if cid in self.skip_chains:
-                continue
-            residues, cb_residues = self.polymer_residues(chain_atoms[cid])
-            self.residues.extend(residues)
-            self.cb_residues.extend(cb_residues)
-            self.chains.extend([cid] * len(residues))
-            self.chain_residue_counts[cid] = len(residues)
-
-    def polymer_residues(
-        self, atoms: list[dict[str, Any]]
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """Pick each residue's anchor and distance atoms in one chain.
-
-        Anchors are CA (protein) or C1' (nucleotide); distance atoms are
-        CB, falling back to CA, or C3'. In a chain with standard residues,
-        modified residues (e.g. SEP, MSE) with an anchor atom are kept too.
-        A chain without standard residues (ligand, glycan, ion) yields none.
-
-        Args:
-            atoms: Parsed atoms of one chain, in file order.
-
-        Returns:
-            Tuple of (anchor atoms, distance atoms), one of each per residue.
-        """
-        groups: list[tuple[tuple, list[dict[str, Any]]]] = []
-        for atom in atoms:
-            key = (atom['resid'], atom.get('icode', ''), atom['res'])
-            if not groups or groups[-1][0] != key:
-                groups.append((key, []))
-            groups[-1][1].append(atom)
-        if not any(key[2] in self.STANDARD_RESIDUES for key, _ in groups):
-            return [], []
-
-        anchors, distance_atoms = [], []
-        for _, group in groups:
-            by_name: dict[str, dict[str, Any]] = {}
-            for atom in group:
-                by_name.setdefault(self.unquote(atom['atom_name']), atom)
-            anchor = by_name.get('CA') or by_name.get("C1'") or by_name.get('C1*')
-            if anchor is None:
-                continue
-            if anchor['atom_name'] == 'CA':
-                distance = by_name.get('CB', anchor)
-            else:
-                distance = by_name.get("C3'") or by_name.get('C3*') or anchor
-            anchors.append(anchor)
-            distance_atoms.append(distance)
-        return anchors, distance_atoms
-
-    def nonpolymer_chains(self) -> list[str]:
-        """Return kept chains without standard residues.
-
-        These are ligand, glycan or ion chains that the residue-based
-        scores cannot handle and that occupy PAE tokens.
-
-        Returns:
-            Chain IDs in file order.
-        """
-        return [
-            cid
-            for cid in self.chain_order
-            if cid not in self.skip_chains and self.chain_residue_counts.get(cid) == 0
-        ]
-
-    def skip_chain(self, chain: str) -> None:
-        """Mark an already-parsed chain without residues as skipped.
-
-        Args:
-            chain: Chain ID with no standard residues.
-        """
-        self.skip_chains.add(chain)
-        self.chain_residue_counts.pop(chain, None)
-
-    def build_protein_token_indices(self, total_tokens: int) -> None:
-        """Derive pLDDT/PAE indices for kept-chain anchor tokens.
-
-        Each kept chain contributes one token per residue; any run of
-        consecutive skipped chains occupies the token span left over
-        between kept chains. Solvable when skipped chains form at most
-        one contiguous block in ``chain_order`` — the default layout
-        emitted by Chai, Boltz, and AlphaFold (polymers first, then
-        non-polymer chains).
-
-        Args:
-            total_tokens: Length of the pLDDT array (== PAE dim).
-
-        Raises:
-            ValueError: If skipped chains appear in multiple
-                non-contiguous runs, making per-run sizes ambiguous.
-        """
-        runs: list[tuple[bool, list[str]]] = []
-        for cid in self.chain_order:
-            is_kept = cid not in self.skip_chains
-            if runs and runs[-1][0] == is_kept:
-                runs[-1][1].append(cid)
-            else:
-                runs.append((is_kept, [cid]))
-
-        skipped_runs = [r for r in runs if not r[0]]
-        total_kept_tokens = sum(self.chain_residue_counts.values())
-        skipped_span = total_tokens - total_kept_tokens
-
-        if len(skipped_runs) > 1:
-            raise ValueError(
-                f'Cannot infer token layout: skipped chains appear in '
-                f'{len(skipped_runs)} non-contiguous runs. Reorder input '
-                'so non-polymer chains are grouped.'
-            )
-        if skipped_span < 0:
-            raise ValueError(
-                f'Kept residue count ({total_kept_tokens}) exceeds '
-                f'total tokens ({total_tokens}); structure and score '
-                'files are inconsistent.'
-            )
-
-        indices: list[int] = []
-        offset = 0
-        for is_kept, chain_ids in runs:
-            if is_kept:
-                for cid in chain_ids:
-                    n = self.chain_residue_counts[cid]
-                    indices.extend(range(offset, offset + n))
-                    offset += n
-            else:
-                offset += skipped_span
-
-        self.protein_token_indices = indices
-
-    def classify_chains(self) -> None:
-        """Classify chains as protein or nucleic acid.
-
-        Reads through residue data to assign chain identity based on
-        whether nucleic acid residues are detected.
-        """
-        self.residue_types = np.array([res['res'] for res in self.residues])
-        unique_chains = np.unique(self.chains)
-        chains_array = np.array(self.chains)
-        self.chain_types = {chain: 'protein' for chain in unique_chains}
-        for chain in unique_chains:
-            indices = np.where(chains_array == chain)[0]
-            chain_residues = self.residue_types[indices]
-            if set(chain_residues) & self.NUCLEIC_ACIDS:
-                self.chain_types[chain] = 'nucleic_acid'
-
-    NUCLEIC_ACIDS = frozenset(['DA', 'DC', 'DT', 'DG', 'A', 'C', 'U', 'G'])
-
-    STANDARD_RESIDUES = frozenset(
-        [
-            'ALA',
-            'ARG',
-            'ASN',
-            'ASP',
-            'CYS',
-            'GLN',
-            'GLU',
-            'GLY',
-            'HIS',
-            'ILE',
-            'LEU',
-            'LYS',
-            'MET',
-            'PHE',
-            'PRO',
-            'SER',
-            'THR',
-            'TRP',
-            'TYR',
-            'VAL',
-            'DA',
-            'DC',
-            'DT',
-            'DG',
-            'A',
-            'C',
-            'U',
-            'G',
-        ]
-    )
-
-    @staticmethod
-    def unquote(name: str) -> str:
-        """Remove mmCIF quotes around an atom name, e.g. ``"C1'"``."""
-        if len(name) >= 2 and name[0] == name[-1] and name[0] in '\'"':
-            return name[1:-1]
-        return name
-
-    @staticmethod
-    def parse_pdb_line(line: str, *args, **kwargs) -> dict[str, Any]:
-        """Parse a single line of a PDB file.
-
-        Args:
-            line: Line from the PDB file.
-            *args: Unused, for API compatibility with parse_cif_line.
-
-        Returns:
-            Dictionary with atom/residue information.
-        """
-        atom_num = line[6:11].strip()
-        atom_name = line[12:16].strip()
-        residue_name = line[17:20].strip()
-        chain_id = line[21]
-        residue_id = line[22:26].strip()
-        x = line[30:38].strip()
-        y = line[38:46].strip()
-        z = line[46:54].strip()
-
-        atom = ModelParser.package_line(
-            atom_num, atom_name, residue_name, chain_id, residue_id, x, y, z
-        )
-        atom['icode'] = line[26:27].strip()
-        return atom
-
-    @staticmethod
-    def parse_cif_line(
-        line: str,
-        fields: dict[str, int],
-        allow_missing_seq_id: bool = False,
-    ) -> dict[str, Any] | None:
-        """Parse a single line of a CIF file.
-
-        Args:
-            line: Line from the CIF file.
-            fields: Dictionary mapping field names to column indices.
-            allow_missing_seq_id: If True, fall back to auth_seq_id when
-                label_seq_id is '.'. Used for non-polymer residues
-                (ligands, glycans) which lack a label_seq_id.
-
-        Returns:
-            Dictionary with atom/residue information, or None if
-            residue_id is missing and fallback is disabled.
-        """
-        _split = line.split()
-        atom_num = _split[fields['id']]
-        atom_name = _split[fields['label_atom_id']]
-        residue_name = _split[fields['label_comp_id']]
-        chain_id = _split[fields['label_asym_id']]
-        residue_id = _split[fields['label_seq_id']]
-        x = _split[fields['Cartn_x']]
-        y = _split[fields['Cartn_y']]
-        z = _split[fields['Cartn_z']]
-
-        if residue_id == '.':
-            if not allow_missing_seq_id or 'auth_seq_id' not in fields:
-                return None
-            residue_id = _split[fields['auth_seq_id']]
-
-        atom = ModelParser.package_line(
-            atom_num, atom_name, residue_name, chain_id, residue_id, x, y, z
-        )
-        if 'pdbx_PDB_ins_code' in fields:
-            icode = _split[fields['pdbx_PDB_ins_code']]
-            atom['icode'] = '' if icode in ('.', '?') else icode
-        return atom
-
-    @staticmethod
-    def package_line(
-        atom_num: str,
-        atom_name: str,
-        residue_name: str,
-        chain_id: str,
-        residue_id: str,
-        x: str,
-        y: str,
-        z: str,
-    ) -> dict[str, Any]:
-        """Package parsed line data into a dictionary.
-
-        Args:
-            atom_num: Atom index.
-            atom_name: Atom name (e.g., 'CA', 'CB').
-            residue_name: Residue name (e.g., 'ALA').
-            chain_id: Chain identifier.
-            residue_id: Residue sequence number.
-            x: X coordinate as string.
-            y: Y coordinate as string.
-            z: Z coordinate as string.
-
-        Returns:
-            Dictionary containing parsed atom/residue data.
-        """
-        return {
-            'atom_num': int(atom_num),
-            'atom_name': atom_name,
-            'coor': np.array([x, y, z], dtype=float),
-            'res': residue_name,
-            'chain_id': chain_id,
-            'resid': int(residue_id),
-        }
-
-
 class TokenMismatchError(ValueError):
     """No tokenization of the structure matches the PAE dimension."""
 
@@ -1288,8 +901,13 @@ class MoleculeGeometry:
     tree: cKDTree
 
 
-class IpSAE2Parser:
-    """Read structures and rebuild predictor token order for ipSAE2.
+class ModelParser:
+    """Read a structure model and derive residues and predictor tokens.
+
+    The model is read once into an :class:`AtomTable`. The legacy scores
+    take one anchor and one distance atom per polymer residue from it
+    (:meth:`parse_structure_file`), and ipSAE2 rebuilds the predictor's
+    token order from the same atoms (:meth:`infer_tokens`).
 
     Canonical residues are the ones every predictor tokenizes as a single
     residue token. Any other residue in a protein or nucleic acid chain
@@ -1298,12 +916,34 @@ class IpSAE2Parser:
     from the PAE dimension.
 
     Attributes:
+        structure: Path to the structure file.
+        skip_chains: Chain IDs left out of the legacy residues.
+        atoms: Heavy atoms of the model, after :meth:`read_atoms`.
+        molecule_types: Chain ID to prot, nuc, lig or ion, after
+            :meth:`read_atoms`.
+        residues: Anchor atom index (CA or C1') per legacy residue.
+        cb_residues: Distance atom index (CB or C3') per legacy residue.
+        chains: Chain ID per legacy residue.
+        chain_order: Chain IDs in file order, skipped chains included.
+        chain_residue_counts: Legacy residues per kept chain.
+        chain_types: Chain ID to protein or nucleic_acid, after
+            :meth:`classify_chains`.
+        protein_token_indices: pLDDT/PAE indices for kept-chain anchor
+            tokens; populated by :meth:`build_protein_token_indices`.
         CANONICAL_PROTEIN: Standard amino acid residue names.
         CANONICAL_NUCLEIC: Standard RNA and DNA residue names.
         IONS: Residue or element names of single-atom ions.
         WATER: Water residue names, dropped on read.
-        PAE_METADATA_KEYS: Optional per-token arrays read from the PAE file.
         CIF_TOKEN: Regex splitting an mmCIF row into values.
+
+    Args:
+        structure: Path to PDB or CIF file.
+        skip_chains: Chain IDs to exclude from the legacy residues.
+
+    Example:
+        >>> parser = ModelParser('model.pdb')
+        >>> parser.parse_structure_file()
+        >>> parser.classify_chains()
     """
 
     CANONICAL_PROTEIN = frozenset(
@@ -1368,16 +1008,510 @@ class IpSAE2Parser:
     )
     WATER = frozenset(['HOH', 'WAT', 'DOD'])
 
-    PAE_METADATA_KEYS = (
-        'frame_mask',
-        'token_has_frame',
-        'asym_id',
-        'token_asym_id',
-    )
-
     CIF_TOKEN = re.compile(
         r"""'(?:[^']|'(?=\S))*'(?=\s|$)|"(?:[^"]|"(?=\S))*"(?=\s|$)|\S+"""
     )
+
+    def __init__(
+        self,
+        structure: PathLike,
+        skip_chains: set[str] | list[str] | None = None,
+    ):
+        """Initialize the ModelParser.
+
+        Args:
+            structure: Path to PDB or CIF file.
+            skip_chains: Chain IDs to exclude from the legacy residues.
+        """
+        self.structure = Path(structure)
+        self.skip_chains = set(skip_chains) if skip_chains else set()
+
+        self.atoms: AtomTable | None = None
+        self.molecule_types: dict[str, str] = {}
+        self.residues: list[int] = []
+        self.cb_residues: list[int] = []
+        self.chains: list[str] = []
+        self.chain_order: list[str] = []
+        self.chain_residue_counts: dict[str, int] = {}
+        self.protein_token_indices: list[int] = []
+
+    def read_atoms(self) -> AtomTable:
+        """Read heavy atoms from the model and classify its chains.
+
+        Waters, hydrogens and alternate locations other than the first are
+        dropped, and only the first model is read. The result is cached.
+
+        Returns:
+            AtomTable of the model's heavy atoms.
+
+        Raises:
+            ValueError: If the file contains no atoms, or a chain mixes
+                protein and nucleic acid residues.
+        """
+        if self.atoms is not None:
+            return self.atoms
+        if self.structure.suffix.lower() == '.pdb':
+            rows = self._read_pdb_rows(self.structure)
+        else:
+            rows = self._read_cif_rows(self.structure)
+
+        kept = []
+        for row in rows:
+            record, chain, resnum, resname, atom_name, element = row[:6]
+            if resname in self.WATER:
+                continue
+            element = (element or self._infer_element(atom_name, resname)).upper()
+            if element in ('H', 'D'):
+                continue
+            kept.append((record, chain, resnum, resname, atom_name, element, *row[6:]))
+        if not kept:
+            raise ValueError(f'No coordinate atoms in {self.structure}')
+
+        columns = list(zip(*kept, strict=True))
+        self.atoms = AtomTable(
+            record=np.array(columns[0], dtype=object),
+            chain=np.array(columns[1], dtype=object),
+            resnum=np.array(columns[2], dtype=object),
+            resname=np.array(columns[3], dtype=object),
+            atom_name=np.array(columns[4], dtype=object),
+            element=np.array(columns[5], dtype=object),
+            xyz=np.array(columns[6:9], dtype=float).T,
+        )
+        self.molecule_types = self.classify_molecules()
+        return self.atoms
+
+    def parse_structure_file(self) -> None:
+        """Pick each polymer residue's anchor and distance atoms.
+
+        Anchors are CA (protein) or C1' (nucleotide); distance atoms are
+        CB, falling back to CA, or C3'. Modified residues (e.g. SEP, MSE)
+        with an anchor atom are kept. Chains in ``skip_chains`` and chains
+        without canonical residues (ligand, glycan, ion) yield none.
+        """
+        atoms = self.read_atoms()
+        self.chain_order = list(self.molecule_types)
+        self.residues, self.cb_residues, self.chains = [], [], []
+        self.chain_residue_counts = {}
+
+        chain_residues: dict[str, list[list[int]]] = {
+            chain: [] for chain in self.chain_order
+        }
+        for (chain, _, _), idx in atoms.residues().items():
+            chain_residues[chain].append(idx)
+
+        for chain in self.chain_order:
+            if chain in self.skip_chains:
+                continue
+            count = 0
+            if self.molecule_types[chain] in ('prot', 'nuc'):
+                for idx in chain_residues[chain]:
+                    picked = self.residue_atoms(idx)
+                    if picked is None:
+                        continue
+                    self.residues.append(picked[0])
+                    self.cb_residues.append(picked[1])
+                    count += 1
+            self.chains.extend([chain] * count)
+            self.chain_residue_counts[chain] = count
+
+    def residue_atoms(self, idx: list[int]) -> tuple[int, int] | None:
+        """Pick the anchor and distance atom of one residue.
+
+        Args:
+            idx: Atom indices of the residue.
+
+        Returns:
+            Tuple of (anchor, distance) atom indices, or None without an
+            anchor atom.
+        """
+        by_name: dict[str, int] = {}
+        for i in idx:
+            by_name.setdefault(self.atoms.atom_name[i], i)
+        anchor = next(
+            (by_name[name] for name in ('CA', "C1'", 'C1*') if name in by_name), None
+        )
+        if anchor is None:
+            return None
+        names = ('CB',) if self.atoms.atom_name[anchor] == 'CA' else ("C3'", 'C3*')
+        distance = next((by_name[name] for name in names if name in by_name), anchor)
+        return anchor, distance
+
+    def nonpolymer_chains(self) -> list[str]:
+        """Return kept chains without canonical residues.
+
+        These are ligand, glycan or ion chains that the residue-based
+        scores cannot handle and that occupy PAE tokens.
+
+        Returns:
+            Chain IDs in file order.
+        """
+        return [
+            chain
+            for chain in self.chain_order
+            if chain not in self.skip_chains
+            and self.molecule_types[chain] in ('lig', 'ion')
+        ]
+
+    def skip_chain(self, chain: str) -> None:
+        """Mark an already-parsed chain without residues as skipped.
+
+        Args:
+            chain: Chain ID with no canonical residues.
+        """
+        self.skip_chains.add(chain)
+        self.chain_residue_counts.pop(chain, None)
+
+    def build_protein_token_indices(self, total_tokens: int) -> None:
+        """Derive pLDDT/PAE indices for kept-chain anchor tokens.
+
+        Each kept chain contributes one token per residue; any run of
+        consecutive skipped chains occupies the token span left over
+        between kept chains. Solvable when skipped chains form at most
+        one contiguous block in ``chain_order`` — the default layout
+        emitted by Chai, Boltz, and AlphaFold (polymers first, then
+        non-polymer chains).
+
+        Args:
+            total_tokens: Length of the pLDDT array (== PAE dim).
+
+        Raises:
+            ValueError: If skipped chains appear in multiple
+                non-contiguous runs, making per-run sizes ambiguous.
+        """
+        runs: list[tuple[bool, list[str]]] = []
+        for cid in self.chain_order:
+            is_kept = cid not in self.skip_chains
+            if runs and runs[-1][0] == is_kept:
+                runs[-1][1].append(cid)
+            else:
+                runs.append((is_kept, [cid]))
+
+        skipped_runs = [r for r in runs if not r[0]]
+        total_kept_tokens = sum(self.chain_residue_counts.values())
+        skipped_span = total_tokens - total_kept_tokens
+
+        if len(skipped_runs) > 1:
+            raise ValueError(
+                f'Cannot infer token layout: skipped chains appear in '
+                f'{len(skipped_runs)} non-contiguous runs. Reorder input '
+                'so non-polymer chains are grouped.'
+            )
+        if skipped_span < 0:
+            raise ValueError(
+                f'Kept residue count ({total_kept_tokens}) exceeds '
+                f'total tokens ({total_tokens}); structure and score '
+                'files are inconsistent.'
+            )
+
+        indices: list[int] = []
+        offset = 0
+        for is_kept, chain_ids in runs:
+            if is_kept:
+                for cid in chain_ids:
+                    n = self.chain_residue_counts[cid]
+                    indices.extend(range(offset, offset + n))
+                    offset += n
+            else:
+                offset += skipped_span
+
+        self.protein_token_indices = indices
+
+    def classify_chains(self) -> None:
+        """Label each chain with legacy residues as protein or nucleic acid."""
+        names = {'prot': 'protein', 'nuc': 'nucleic_acid'}
+        self.chain_types = {
+            chain: names[self.molecule_types[chain]] for chain in np.unique(self.chains)
+        }
+
+    def classify_molecules(self) -> dict[str, str]:
+        """Assign each chain a molecule type: prot, nuc, lig or ion.
+
+        A chain with any canonical amino acid is ``prot`` and one with any
+        canonical nucleotide is ``nuc``. A chain of a single ion atom is
+        ``ion``; every other non-polymer chain, including multi-residue chains
+        such as glycans, is ``lig``.
+
+        Returns:
+            Mapping of chain ID to molecule type, in order of first appearance.
+
+        Raises:
+            ValueError: If a chain mixes protein and nucleic acid residues.
+        """
+        atoms = self.atoms
+        residues = atoms.residues()
+        chain_residues: OrderedDict[str, list[tuple[str, str, str]]] = OrderedDict()
+        for key in residues:
+            chain_residues.setdefault(key[0], []).append(key)
+
+        chain_types = {}
+        for chain, keys in chain_residues.items():
+            names = [key[2] for key in keys]
+            has_prot = any(name in self.CANONICAL_PROTEIN for name in names)
+            has_nuc = any(name in self.CANONICAL_NUCLEIC for name in names)
+            if has_prot and has_nuc:
+                raise ValueError(
+                    f'Chain {chain} mixes protein and nucleic acid residues'
+                )
+            if has_prot:
+                chain_types[chain] = 'prot'
+            elif has_nuc:
+                chain_types[chain] = 'nuc'
+            else:
+                idx = residues[keys[0]]
+                is_ion = (
+                    len(keys) == 1
+                    and len(idx) == 1
+                    and (
+                        names[0].upper() in self.IONS
+                        or atoms.element[idx[0]] in self.IONS
+                    )
+                )
+                chain_types[chain] = 'ion' if is_ion else 'lig'
+        return chain_types
+
+    def infer_tokens(
+        self,
+        n_tokens: int,
+        metadata: dict[str, np.ndarray] | None = None,
+    ) -> TokenTable:
+        """Reconstruct the predictor's token order to match the PAE matrix.
+
+        Canonical residues are one token each. Modified residues may be atom-
+        or residue-tokenized and ligands atom-, residue- or chain-tokenized;
+        every combination whose token count equals ``n_tokens`` (and agrees
+        with any per-token chain metadata) is a candidate.
+
+        Args:
+            n_tokens: PAE matrix dimension.
+            metadata: Optional per-token arrays from the PAE file.
+
+        Returns:
+            The unique matching TokenTable.
+
+        Raises:
+            TokenMismatchError: If no tokenization matches.
+            ValueError: If several distinct tokenizations match, or an ion
+                shares a protein chain.
+        """
+        atoms = self.read_atoms()
+        chain_types = self.molecule_types
+        metadata = metadata or {}
+        residues = atoms.residues()
+        n_canonical = mod_count = mod_atoms = lig_count = lig_atoms = 0
+        lig_chains = set()
+        for (chain, _, resname), idx in residues.items():
+            mol_type = chain_types[chain]
+            if mol_type in ('lig', 'ion'):
+                lig_count += 1
+                lig_atoms += len(idx)
+                lig_chains.add(chain)
+            elif resname in self._canonical(mol_type):
+                n_canonical += 1
+            else:
+                # Folding an ion into a protein would silently misassign its
+                # token.
+                if (
+                    mol_type == 'prot'
+                    and len(idx) == 1
+                    and atoms.record[idx[0]] == 'HETATM'
+                    and atoms.element[idx[0]] in self.IONS
+                ):
+                    raise ValueError(
+                        f'Ion {resname} shares protein chain {chain}; use '
+                        'unique per-molecule chain IDs'
+                    )
+                mod_count += 1
+                mod_atoms += len(idx)
+
+        mod_tokens = {'atom': mod_atoms, 'residue': mod_count}
+        lig_tokens = {'atom': lig_atoms, 'residue': lig_count, 'chain': len(lig_chains)}
+        reference = self._metadata_chains(metadata, n_tokens)
+
+        descriptions = []
+        candidates: dict[tuple[str, str], TokenTable] = {}
+        for mod_mode, n_mod in mod_tokens.items():
+            for lig_mode, n_lig in lig_tokens.items():
+                estimate = n_canonical + n_mod + n_lig
+                descriptions.append(
+                    f'modified={mod_mode},ligand={lig_mode}: {estimate} tokens'
+                )
+                if estimate != n_tokens:
+                    continue
+                # Policies for absent PTMs or ligands are identical.
+                effective = (
+                    mod_mode if mod_count else 'none',
+                    lig_mode if lig_count else 'none',
+                )
+                if effective in candidates:
+                    continue
+                tokens = self._build_tokens(residues, mod_mode, lig_mode)
+                if reference is not None and not self._chains_match(
+                    tokens.chain, reference
+                ):
+                    continue
+                candidates[effective] = tokens
+
+        if not candidates:
+            raise TokenMismatchError(
+                f'No token mapping matches the {n_tokens}-token PAE matrix: '
+                + '; '.join(descriptions)
+            )
+        signatures = {
+            tuple(zip(t.chain, t.resnum, t.resname, t.atom_name, strict=True))
+            for t in candidates.values()
+        }
+        if len(signatures) > 1:
+            raise ValueError(
+                f'Ambiguous token order: {len(signatures)} count-compatible '
+                'mappings. Provide per-token chain metadata in the PAE file.'
+            )
+        (mod_mode, lig_mode), tokens = next(iter(candidates.items()))
+        tokens.policy = f'modified={mod_mode};ligand={lig_mode}'
+        return tokens
+
+    def frame_validity(
+        self,
+        tokens: TokenTable,
+        metadata: dict[str, np.ndarray] | None = None,
+    ) -> np.ndarray:
+        """Decide which tokens define a valid alignment frame.
+
+        A predictor-supplied ``token_has_frame``/``frame_mask`` is used when
+        present. Otherwise residue tokens need non-collinear N/CA/C (protein)
+        or C1'/C3'/C4' (nucleotide) atoms, and other tokens need two
+        non-collinear neighbouring atoms in the same residue. Ions never
+        define a frame.
+
+        Args:
+            tokens: Output of :meth:`infer_tokens`.
+            metadata: Optional per-token arrays from the PAE file.
+
+        Returns:
+            Boolean array with one entry per token.
+        """
+        not_ion = tokens.mol_type != 'ion'
+        for key in ('token_has_frame', 'frame_mask'):
+            mask = (metadata or {}).get(key)
+            if mask is not None and mask.ndim == 1 and len(mask) == len(tokens):
+                return mask.astype(bool) & not_ion
+
+        atoms = self.read_atoms()
+        residues = atoms.residues()
+        required = {'prot': ('N', 'CA', 'C'), 'nuc': ("C1'", "C3'", "C4'")}
+        valid = np.zeros(len(tokens), dtype=bool)
+        for t in range(len(tokens)):
+            mol_type = tokens.mol_type[t]
+            if mol_type == 'ion':
+                continue
+            idx = residues[(tokens.chain[t], tokens.resnum[t], tokens.resname[t])]
+            if tokens.tokenization[t] == 'residue' and mol_type in required:
+                positions = {atoms.atom_name[i]: atoms.xyz[i] for i in idx}
+                if not all(name in positions for name in required[mol_type]):
+                    continue
+                p0, p1, p2 = (positions[name] for name in required[mol_type])
+            else:
+                p0 = atoms.xyz[tokens.rep_atom[t]]
+                xyz = atoms.xyz[idx]
+                dist = np.linalg.norm(xyz - p0, axis=1)
+                others = xyz[dist > 1e-5]
+                if len(others) < 2:
+                    continue
+                nearest = np.argsort(dist[dist > 1e-5])[:2]
+                p1, p2 = others[nearest[0]], others[nearest[1]]
+            valid[t] = bool(np.linalg.norm(np.cross(p1 - p0, p2 - p0)) > 1e-4)
+        return valid
+
+    def _canonical(self, mol_type: str) -> frozenset:
+        return self.CANONICAL_PROTEIN if mol_type == 'prot' else self.CANONICAL_NUCLEIC
+
+    def _build_tokens(
+        self,
+        residues: 'OrderedDict[tuple[str, str, str], list[int]]',
+        mod_mode: str,
+        lig_mode: str,
+    ) -> TokenTable:
+        atoms = self.atoms
+        chunks: list[tuple[tuple[str, str, str], str, list[int], bool]] = []
+        lig_chain_chunk: dict[str, int] = {}
+        for key, idx in residues.items():
+            chain, _, resname = key
+            mol_type = self.molecule_types[chain]
+            if mol_type in ('lig', 'ion'):
+                if lig_mode == 'atom':
+                    chunks.extend((key, mol_type, [i], True) for i in idx)
+                elif lig_mode == 'residue':
+                    chunks.append((key, mol_type, list(idx), False))
+                elif chain in lig_chain_chunk:
+                    chunks[lig_chain_chunk[chain]][2].extend(idx)
+                else:
+                    lig_chain_chunk[chain] = len(chunks)
+                    chunks.append((key, mol_type, list(idx), False))
+            elif resname not in self._canonical(mol_type) and mod_mode == 'atom':
+                chunks.extend((key, mol_type, [i], True) for i in idx)
+            else:
+                chunks.append((key, mol_type, list(idx), False))
+
+        rep_names = {'prot': ('CA', 'C', 'N'), 'nuc': ("C3'", 'C3*', 'P')}
+        atom_token = np.empty(len(atoms), dtype=int)
+        rep_atom = np.empty(len(chunks), dtype=int)
+        columns: dict[str, list] = {
+            k: []
+            for k in (
+                'chain',
+                'resnum',
+                'resname',
+                'atom_name',
+                'mol_type',
+                'tokenization',
+                'unit_key',
+            )
+        }
+        for t, (key, mol_type, idx, atom_tokenized) in enumerate(chunks):
+            chain, resnum, resname = key
+            rep = idx[0]
+            for name in rep_names.get(mol_type, ()):
+                match = [i for i in idx if atoms.atom_name[i] == name]
+                if match:
+                    rep = match[0]
+                    break
+            single = len(idx) == 1 and (atom_tokenized or mol_type in ('lig', 'ion'))
+            if mol_type in ('prot', 'nuc'):
+                unit = f'{chain}:res:{resnum}:{resname}'
+            else:
+                unit = f'{chain}:token:{t + 1}'
+            columns['chain'].append(chain)
+            columns['resnum'].append(resnum)
+            columns['resname'].append(resname)
+            columns['atom_name'].append(atoms.atom_name[rep])
+            columns['mol_type'].append(mol_type)
+            columns['tokenization'].append('atom' if single else 'residue')
+            columns['unit_key'].append(unit)
+            rep_atom[t] = rep
+            atom_token[idx] = t
+
+        return TokenTable(
+            **{k: np.array(v, dtype=object) for k, v in columns.items()},
+            rep_atom=rep_atom,
+            atom_token=atom_token,
+        )
+
+    @staticmethod
+    def _metadata_chains(metadata: dict[str, np.ndarray], n: int) -> list | None:
+        for key in ('token_asym_id', 'asym_id'):
+            values = metadata.get(key)
+            if values is not None and values.ndim == 1 and len(values) == n:
+                return [str(v) for v in values]
+        return None
+
+    @staticmethod
+    def _chains_match(token_chains: np.ndarray, reference: list) -> bool:
+        """Check token chains against numeric per-token chain assignments."""
+        seen = list(dict.fromkeys(reference))
+        chains = list(dict.fromkeys(token_chains))
+        if len(seen) != len(chains):
+            return False
+        expected = dict(zip(seen, chains, strict=True))
+        return [expected[c] for c in reference] == list(token_chains)
 
     @classmethod
     def _split_cif_row(cls, line: str) -> list[str]:
@@ -1468,368 +1602,6 @@ class IpSAE2Parser:
         if resname.upper() in cls.IONS:
             return resname.upper()
         return name[:1]
-
-    @classmethod
-    def read_atoms(cls, path: PathLike) -> AtomTable:
-        """Read heavy atoms from a PDB or mmCIF model.
-
-        Waters, hydrogens and alternate locations other than the first are
-        dropped, and only the first model is read.
-
-        Args:
-            path: Path to a ``.pdb`` or ``.cif``/``.mmcif`` file.
-
-        Returns:
-            AtomTable of the model's heavy atoms.
-
-        Raises:
-            ValueError: If the file contains no atoms.
-        """
-        path = Path(path)
-        if path.suffix.lower() == '.pdb':
-            rows = cls._read_pdb_rows(path)
-        else:
-            rows = cls._read_cif_rows(path)
-
-        kept = []
-        for row in rows:
-            record, chain, resnum, resname, atom_name, element = row[:6]
-            if resname in cls.WATER:
-                continue
-            element = (element or cls._infer_element(atom_name, resname)).upper()
-            if element in ('H', 'D'):
-                continue
-            kept.append((record, chain, resnum, resname, atom_name, element, *row[6:]))
-        if not kept:
-            raise ValueError(f'No coordinate atoms in {path}')
-
-        columns = list(zip(*kept, strict=True))
-        return AtomTable(
-            record=np.array(columns[0], dtype=object),
-            chain=np.array(columns[1], dtype=object),
-            resnum=np.array(columns[2], dtype=object),
-            resname=np.array(columns[3], dtype=object),
-            atom_name=np.array(columns[4], dtype=object),
-            element=np.array(columns[5], dtype=object),
-            xyz=np.array(columns[6:9], dtype=float).T,
-        )
-
-    @classmethod
-    def classify_molecules(cls, atoms: AtomTable) -> dict[str, str]:
-        """Assign each chain a molecule type: prot, nuc, lig or ion.
-
-        A chain with any canonical amino acid is ``prot`` and one with any
-        canonical nucleotide is ``nuc``. A chain of a single ion atom is
-        ``ion``; every other non-polymer chain, including multi-residue chains
-        such as glycans, is ``lig``.
-
-        Args:
-            atoms: Parsed heavy atoms.
-
-        Returns:
-            Mapping of chain ID to molecule type, in order of first appearance.
-
-        Raises:
-            ValueError: If a chain mixes protein and nucleic acid residues, or
-                an ion shares a protein chain.
-        """
-        residues = atoms.residues()
-        chain_residues: OrderedDict[str, list[tuple[str, str, str]]] = OrderedDict()
-        for key in residues:
-            chain_residues.setdefault(key[0], []).append(key)
-
-        chain_types = {}
-        for chain, keys in chain_residues.items():
-            names = [key[2] for key in keys]
-            has_prot = any(name in cls.CANONICAL_PROTEIN for name in names)
-            has_nuc = any(name in cls.CANONICAL_NUCLEIC for name in names)
-            if has_prot and has_nuc:
-                raise ValueError(
-                    f'Chain {chain} mixes protein and nucleic acid residues'
-                )
-            if has_prot:
-                chain_types[chain] = 'prot'
-            elif has_nuc:
-                chain_types[chain] = 'nuc'
-            else:
-                idx = residues[keys[0]]
-                is_ion = (
-                    len(keys) == 1
-                    and len(idx) == 1
-                    and (
-                        names[0].upper() in cls.IONS
-                        or atoms.element[idx[0]] in cls.IONS
-                    )
-                )
-                chain_types[chain] = 'ion' if is_ion else 'lig'
-
-        # Folding an ion into a protein would silently misassign its token.
-        for key, idx in residues.items():
-            if chain_types[key[0]] != 'prot' or key[2] in cls.CANONICAL_PROTEIN:
-                continue
-            if (
-                len(idx) == 1
-                and atoms.record[idx[0]] == 'HETATM'
-                and atoms.element[idx[0]] in cls.IONS
-            ):
-                raise ValueError(
-                    f'Ion {key[2]} shares protein chain {key[0]}; use unique '
-                    'per-molecule chain IDs'
-                )
-        return chain_types
-
-    @classmethod
-    def read_pae_metadata(cls, path: PathLike) -> dict[str, np.ndarray]:
-        """Read optional token metadata stored next to the PAE in an npz file.
-
-        Args:
-            path: Path to the PAE ``.npz`` file.
-
-        Returns:
-            Arrays for any of ``PAE_METADATA_KEYS`` present in the file.
-        """
-        with np.load(path, allow_pickle=False) as data:
-            return {k: np.asarray(data[k]) for k in cls.PAE_METADATA_KEYS if k in data}
-
-    @classmethod
-    def _canonical(cls, mol_type: str) -> frozenset:
-        return cls.CANONICAL_PROTEIN if mol_type == 'prot' else cls.CANONICAL_NUCLEIC
-
-    @classmethod
-    def _build_tokens(
-        cls,
-        atoms: AtomTable,
-        residues: 'OrderedDict[tuple[str, str, str], list[int]]',
-        chain_types: dict[str, str],
-        mod_mode: str,
-        lig_mode: str,
-    ) -> TokenTable:
-        chunks: list[tuple[tuple[str, str, str], str, list[int], bool]] = []
-        lig_chain_chunk: dict[str, int] = {}
-        for key, idx in residues.items():
-            chain, _, resname = key
-            mol_type = chain_types[chain]
-            if mol_type in ('lig', 'ion'):
-                if lig_mode == 'atom':
-                    chunks.extend((key, mol_type, [i], True) for i in idx)
-                elif lig_mode == 'residue':
-                    chunks.append((key, mol_type, list(idx), False))
-                elif chain in lig_chain_chunk:
-                    chunks[lig_chain_chunk[chain]][2].extend(idx)
-                else:
-                    lig_chain_chunk[chain] = len(chunks)
-                    chunks.append((key, mol_type, list(idx), False))
-            elif resname not in cls._canonical(mol_type) and mod_mode == 'atom':
-                chunks.extend((key, mol_type, [i], True) for i in idx)
-            else:
-                chunks.append((key, mol_type, list(idx), False))
-
-        rep_names = {'prot': ('CA', 'C', 'N'), 'nuc': ("C3'", 'C3*', 'P')}
-        atom_token = np.empty(len(atoms), dtype=int)
-        rep_atom = np.empty(len(chunks), dtype=int)
-        columns: dict[str, list] = {
-            k: []
-            for k in (
-                'chain',
-                'resnum',
-                'resname',
-                'atom_name',
-                'mol_type',
-                'tokenization',
-                'unit_key',
-            )
-        }
-        for t, (key, mol_type, idx, atom_tokenized) in enumerate(chunks):
-            chain, resnum, resname = key
-            rep = idx[0]
-            for name in rep_names.get(mol_type, ()):
-                match = [i for i in idx if atoms.atom_name[i] == name]
-                if match:
-                    rep = match[0]
-                    break
-            single = len(idx) == 1 and (atom_tokenized or mol_type in ('lig', 'ion'))
-            if mol_type in ('prot', 'nuc'):
-                unit = f'{chain}:res:{resnum}:{resname}'
-            else:
-                unit = f'{chain}:token:{t + 1}'
-            columns['chain'].append(chain)
-            columns['resnum'].append(resnum)
-            columns['resname'].append(resname)
-            columns['atom_name'].append(atoms.atom_name[rep])
-            columns['mol_type'].append(mol_type)
-            columns['tokenization'].append('atom' if single else 'residue')
-            columns['unit_key'].append(unit)
-            rep_atom[t] = rep
-            atom_token[idx] = t
-
-        return TokenTable(
-            **{k: np.array(v, dtype=object) for k, v in columns.items()},
-            rep_atom=rep_atom,
-            atom_token=atom_token,
-        )
-
-    @staticmethod
-    def _metadata_chains(metadata: dict[str, np.ndarray], n: int) -> list | None:
-        for key in ('token_asym_id', 'asym_id'):
-            values = metadata.get(key)
-            if values is not None and values.ndim == 1 and len(values) == n:
-                return [str(v) for v in values]
-        return None
-
-    @staticmethod
-    def _chains_match(token_chains: np.ndarray, reference: list) -> bool:
-        """Check token chains against numeric per-token chain assignments."""
-        seen = list(dict.fromkeys(reference))
-        chains = list(dict.fromkeys(token_chains))
-        if len(seen) != len(chains):
-            return False
-        expected = dict(zip(seen, chains, strict=True))
-        return [expected[c] for c in reference] == list(token_chains)
-
-    @classmethod
-    def infer_tokens(
-        cls,
-        atoms: AtomTable,
-        chain_types: dict[str, str],
-        n_tokens: int,
-        metadata: dict[str, np.ndarray] | None = None,
-    ) -> TokenTable:
-        """Reconstruct the predictor's token order to match the PAE matrix.
-
-        Canonical residues are one token each. Modified residues may be atom-
-        or residue-tokenized and ligands atom-, residue- or chain-tokenized;
-        every combination whose token count equals ``n_tokens`` (and agrees
-        with any per-token chain metadata) is a candidate.
-
-        Args:
-            atoms: Parsed heavy atoms.
-            chain_types: Output of :meth:`classify_molecules`.
-            n_tokens: PAE matrix dimension.
-            metadata: Optional per-token arrays from :meth:`read_pae_metadata`.
-
-        Returns:
-            The unique matching TokenTable.
-
-        Raises:
-            TokenMismatchError: If no tokenization matches.
-            ValueError: If several distinct tokenizations match.
-        """
-        metadata = metadata or {}
-        residues = atoms.residues()
-        n_canonical = mod_count = mod_atoms = lig_count = lig_atoms = 0
-        lig_chains = set()
-        for (chain, _, resname), idx in residues.items():
-            mol_type = chain_types[chain]
-            if mol_type in ('lig', 'ion'):
-                lig_count += 1
-                lig_atoms += len(idx)
-                lig_chains.add(chain)
-            elif resname in cls._canonical(mol_type):
-                n_canonical += 1
-            else:
-                mod_count += 1
-                mod_atoms += len(idx)
-
-        mod_tokens = {'atom': mod_atoms, 'residue': mod_count}
-        lig_tokens = {'atom': lig_atoms, 'residue': lig_count, 'chain': len(lig_chains)}
-        reference = cls._metadata_chains(metadata, n_tokens)
-
-        descriptions = []
-        candidates: dict[tuple[str, str], TokenTable] = {}
-        for mod_mode, n_mod in mod_tokens.items():
-            for lig_mode, n_lig in lig_tokens.items():
-                estimate = n_canonical + n_mod + n_lig
-                descriptions.append(
-                    f'modified={mod_mode},ligand={lig_mode}: {estimate} tokens'
-                )
-                if estimate != n_tokens:
-                    continue
-                # Policies for absent PTMs or ligands are identical.
-                effective = (
-                    mod_mode if mod_count else 'none',
-                    lig_mode if lig_count else 'none',
-                )
-                if effective in candidates:
-                    continue
-                tokens = cls._build_tokens(
-                    atoms, residues, chain_types, mod_mode, lig_mode
-                )
-                if reference is not None and not cls._chains_match(
-                    tokens.chain, reference
-                ):
-                    continue
-                candidates[effective] = tokens
-
-        if not candidates:
-            raise TokenMismatchError(
-                f'No token mapping matches the {n_tokens}-token PAE matrix: '
-                + '; '.join(descriptions)
-            )
-        signatures = {
-            tuple(zip(t.chain, t.resnum, t.resname, t.atom_name, strict=True))
-            for t in candidates.values()
-        }
-        if len(signatures) > 1:
-            raise ValueError(
-                f'Ambiguous token order: {len(signatures)} count-compatible '
-                'mappings. Provide per-token chain metadata in the PAE file.'
-            )
-        (mod_mode, lig_mode), tokens = next(iter(candidates.items()))
-        tokens.policy = f'modified={mod_mode};ligand={lig_mode}'
-        return tokens
-
-    @staticmethod
-    def frame_validity(
-        atoms: AtomTable,
-        tokens: TokenTable,
-        metadata: dict[str, np.ndarray] | None = None,
-    ) -> np.ndarray:
-        """Decide which tokens define a valid alignment frame.
-
-        A predictor-supplied ``token_has_frame``/``frame_mask`` is used when
-        present. Otherwise residue tokens need non-collinear N/CA/C (protein)
-        or C1'/C3'/C4' (nucleotide) atoms, and other tokens need two
-        non-collinear neighbouring atoms in the same residue. Ions never
-        define a frame.
-
-        Args:
-            atoms: Parsed heavy atoms.
-            tokens: Output of :meth:`infer_tokens`.
-            metadata: Optional per-token arrays from :meth:`read_pae_metadata`.
-
-        Returns:
-            Boolean array with one entry per token.
-        """
-        not_ion = tokens.mol_type != 'ion'
-        for key in ('token_has_frame', 'frame_mask'):
-            mask = (metadata or {}).get(key)
-            if mask is not None and mask.ndim == 1 and len(mask) == len(tokens):
-                return mask.astype(bool) & not_ion
-
-        residues = atoms.residues()
-        required = {'prot': ('N', 'CA', 'C'), 'nuc': ("C1'", "C3'", "C4'")}
-        valid = np.zeros(len(tokens), dtype=bool)
-        for t in range(len(tokens)):
-            mol_type = tokens.mol_type[t]
-            if mol_type == 'ion':
-                continue
-            idx = residues[(tokens.chain[t], tokens.resnum[t], tokens.resname[t])]
-            if tokens.tokenization[t] == 'residue' and mol_type in required:
-                positions = {atoms.atom_name[i]: atoms.xyz[i] for i in idx}
-                if not all(name in positions for name in required[mol_type]):
-                    continue
-                p0, p1, p2 = (positions[name] for name in required[mol_type])
-            else:
-                p0 = atoms.xyz[tokens.rep_atom[t]]
-                xyz = atoms.xyz[idx]
-                dist = np.linalg.norm(xyz - p0, axis=1)
-                others = xyz[dist > 1e-5]
-                if len(others) < 2:
-                    continue
-                nearest = np.argsort(dist[dist > 1e-5])[:2]
-                p1, p2 = others[nearest[0]], others[nearest[1]]
-            valid[t] = bool(np.linalg.norm(np.cross(p1 - p0, p2 - p0)) > 1e-4)
-        return valid
 
 
 class IpSAE2Calculator:

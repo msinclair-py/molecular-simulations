@@ -24,78 +24,56 @@ class TestModelParser:
         assert parser.cb_residues == []
         assert parser.chains == []
 
-    def test_nucleic_acids_class_attribute(self):
-        """Test nucleic acids class attribute"""
-        na_set = ModelParser.NUCLEIC_ACIDS
-        assert 'DA' in na_set
-        assert 'DC' in na_set
-        assert 'DT' in na_set
-        assert 'DG' in na_set
-        assert 'A' in na_set
-        assert 'C' in na_set
-        assert 'U' in na_set
-        assert 'G' in na_set
+    def test_canonical_residue_class_attributes(self):
+        """Canonical residues cover amino acids and nucleotides, not ligands"""
+        for name in ('DA', 'DC', 'DT', 'DG', 'A', 'C', 'U', 'G'):
+            assert name in ModelParser.CANONICAL_NUCLEIC
+        assert {'ALA', 'GLY'} <= ModelParser.CANONICAL_PROTEIN
+        assert 'SEP' not in ModelParser.CANONICAL_PROTEIN
+        assert (
+            'LIG' not in ModelParser.CANONICAL_PROTEIN | ModelParser.CANONICAL_NUCLEIC
+        )
 
-    def test_standard_residues_class_attribute(self):
-        """Test standard residues class attribute includes amino acids and nucleic acids"""
-        sr = ModelParser.STANDARD_RESIDUES
-        assert 'ALA' in sr
-        assert 'GLY' in sr
-        assert 'DA' in sr
-        assert 'LIG' not in sr
+    def test_read_atoms_pdb(self, tmp_path):
+        """PDB columns are read into the atom table"""
+        pdb_file = tmp_path / 'test.pdb'
+        pdb_file.write_text(
+            'ATOM      1  CA  GLY A   1      10.000  20.000  30.000  1.00 20.00           C\n'
+        )
+        atoms = ModelParser(pdb_file).read_atoms()
 
-    def test_parse_pdb_line(self):
-        """Test PDB line parsing"""
-        pdb_line = 'ATOM      1  CA  GLY A   1      10.000  20.000  30.000  1.00 20.00           C'
-        result = ModelParser.parse_pdb_line(pdb_line)
+        assert atoms.atom_name[0] == 'CA'
+        assert atoms.resname[0] == 'GLY'
+        assert atoms.chain[0] == 'A'
+        assert atoms.resnum[0] == '1'
+        assert atoms.element[0] == 'C'
+        assert np.allclose(atoms.xyz[0], [10.0, 20.0, 30.0])
 
-        assert result['atom_num'] == 1
-        assert result['atom_name'] == 'CA'
-        assert result['res'] == 'GLY'
-        assert result['chain_id'] == 'A'
-        assert result['resid'] == 1
-        assert np.allclose(result['coor'], [10.0, 20.0, 30.0])
+    def test_read_atoms_cif(self, tmp_path):
+        """mmCIF columns are read by name and quoted atom names unquoted"""
+        cif_file = tmp_path / 'test.cif'
+        cif_file.write_text(
+            '\n'.join(
+                [
+                    '_atom_site.group_PDB',
+                    '_atom_site.label_atom_id',
+                    '_atom_site.label_comp_id',
+                    '_atom_site.label_asym_id',
+                    '_atom_site.label_seq_id',
+                    '_atom_site.Cartn_x',
+                    '_atom_site.Cartn_y',
+                    '_atom_site.Cartn_z',
+                    'ATOM CA GLY A 1 10.000 20.000 30.000',
+                    'ATOM "C1\'" DA B 1 1.0 2.0 3.0',
+                ]
+            )
+            + '\n'
+        )
+        atoms = ModelParser(cif_file).read_atoms()
 
-    def test_parse_cif_line(self):
-        """Test CIF line parsing"""
-        # mmCIF format: group_PDB id label_atom_id alt_id label_comp_id label_asym_id label_seq_id Cartn_x Cartn_y Cartn_z ...
-        cif_line = 'ATOM 1 CA . GLY A 1 10.000 20.000 30.000 1.00 20.00 C'
-        fields = {
-            'id': 1,  # Atom serial number
-            'label_atom_id': 2,  # Atom name (CA)
-            'label_comp_id': 4,  # Residue name (GLY)
-            'label_asym_id': 5,  # Chain ID (A)
-            'label_seq_id': 6,  # Residue ID (1)
-            'Cartn_x': 7,  # X coordinate
-            'Cartn_y': 8,  # Y coordinate
-            'Cartn_z': 9,  # Z coordinate
-        }
-
-        result = ModelParser.parse_cif_line(cif_line, fields)
-
-        assert result['atom_num'] == 1
-        assert result['atom_name'] == 'CA'
-        assert result['res'] == 'GLY'
-        assert result['chain_id'] == 'A'
-        assert result['resid'] == 1
-        assert np.allclose(result['coor'], [10.0, 20.0, 30.0])
-
-    def test_parse_cif_line_missing_resid(self):
-        """Test CIF line parsing with missing residue ID"""
-        cif_line = 'ATOM 1 CA . GLY A . 10.000 20.000 30.000 1.00 20.00 C'
-        fields = {
-            'id': 1,
-            'label_atom_id': 2,
-            'label_comp_id': 4,
-            'label_asym_id': 5,
-            'label_seq_id': 6,
-            'Cartn_x': 7,
-            'Cartn_y': 8,
-            'Cartn_z': 9,
-        }
-
-        result = ModelParser.parse_cif_line(cif_line, fields)
-        assert result is None
+        assert list(atoms.atom_name) == ['CA', "C1'"]
+        assert list(atoms.chain) == ['A', 'B']
+        assert np.allclose(atoms.xyz[0], [10.0, 20.0, 30.0])
 
     def test_parse_structure_file_pdb(self, tmp_path):
         """Test parsing a real PDB structure file written to disk."""
@@ -116,22 +94,18 @@ class TestModelParser:
         assert len(parser.chains) == 2
         assert all(chain == 'A' for chain in parser.chains)
 
-    def test_classify_chains(self):
-        """Test chain classification"""
-        parser = ModelParser('test.pdb')
-        # Set up residues - need to structure it so the bug doesn't break the test
-        # The implementation has a bug where it uses indices from unique(chains) instead of self.chains
-        # So residue at index 0 represents chain A, index 1 represents chain B
-        parser.residues = [
-            {'res': 'GLY'},  # Chain A - index 0
-            {'res': 'DA'},  # Chain B - index 1
-        ]
-        parser.chains = ['A', 'B']  # Must match residues length
-
+    def test_classify_chains(self, tmp_path):
+        """Chains are labeled protein or nucleic acid"""
+        pdb_file = tmp_path / 'test.pdb'
+        pdb_file.write_text(
+            'ATOM      1  CA  GLY A   1      10.000  20.000  30.000  1.00 20.00           C\n'
+            "ATOM      2  C1' DA  B   1      12.000  20.000  30.000  1.00 20.00           C\n"
+        )
+        parser = ModelParser(pdb_file)
+        parser.parse_structure_file()
         parser.classify_chains()
 
-        assert parser.chain_types['A'] == 'protein'
-        assert parser.chain_types['B'] == 'nucleic_acid'
+        assert parser.chain_types == {'A': 'protein', 'B': 'nucleic_acid'}
 
 
 class TestScoreCalculator:
@@ -445,7 +419,7 @@ class TestScoreCalculatorEdgeCases:
 
 
 class TestModelParserCIF:
-    """Test ModelParser CIF parsing (lines 494, 503-505, 510)."""
+    """Test ModelParser CIF parsing."""
 
     def test_parse_structure_file_cif(self):
         """Test parsing CIF structure file."""
@@ -464,7 +438,6 @@ class TestModelParserCIF:
                 'ATOM 1 CA GLY A 1 10.000 20.000 30.000',
                 'ATOM 2 CA ALA A 2 12.000 22.000 32.000',
                 'ATOM 3 CB ALA A 2 13.000 23.000 33.000',
-                'ATOM 4 CA LEU A . 14.000 24.000 34.000',
             ]
             cif_file.write_text('\n'.join(lines) + '\n')
 
@@ -493,7 +466,7 @@ class TestParseStructureCBFallback:
         obj = ipSAE(str(pdb), 'plddt.npy', 'pae.npy', out_path=str(tmp_path))
         obj.parse_structure_file()
 
-        assert obj.parser.cb_residues[0] is obj.parser.residues[0]
+        assert obj.parser.cb_residues[0] == obj.parser.residues[0]
         assert obj.cb_coordinates.shape == (1, 3)
         assert np.array_equal(obj.cb_coordinates, obj.coordinates)
 
@@ -566,29 +539,33 @@ class TestBuildProteinTokenIndices:
         assert parser.protein_token_indices == [0, 1, 4, 5]
 
 
-class TestParseCifLineAuthFallback:
-    """Cover parse_cif_line's auth_seq_id fallback for a missing label_seq_id."""
+class TestReadAtomsAuthFallback:
+    """Cover read_atoms' auth_seq_id fallback for a missing label_seq_id."""
 
-    def test_auth_seq_id_used_when_label_missing(self):
-        """label_seq_id '.' with allow_missing + auth_seq_id present -> auth used."""
-        cif_line = 'ATOM 1 CA . GLY A . 10.0 20.0 30.0 1.00 20.00 C 5'
-        fields = {
-            'id': 1,
-            'label_atom_id': 2,
-            'label_comp_id': 4,
-            'label_asym_id': 5,
-            'label_seq_id': 6,
-            'Cartn_x': 7,
-            'Cartn_y': 8,
-            'Cartn_z': 9,
-            'auth_seq_id': 13,
-        }
+    def test_auth_seq_id_used_when_label_missing(self, tmp_path):
+        """label_seq_id '.' with auth_seq_id present -> auth used."""
+        cif_file = tmp_path / 'test.cif'
+        cif_file.write_text(
+            '\n'.join(
+                [
+                    '_atom_site.group_PDB',
+                    '_atom_site.label_atom_id',
+                    '_atom_site.label_comp_id',
+                    '_atom_site.label_asym_id',
+                    '_atom_site.label_seq_id',
+                    '_atom_site.Cartn_x',
+                    '_atom_site.Cartn_y',
+                    '_atom_site.Cartn_z',
+                    '_atom_site.auth_seq_id',
+                    'HETATM C1 NAG A . 10.0 20.0 30.0 5',
+                ]
+            )
+            + '\n'
+        )
+        atoms = ModelParser(cif_file).read_atoms()
 
-        result = ModelParser.parse_cif_line(cif_line, fields, allow_missing_seq_id=True)
-
-        assert result is not None
-        assert result['resid'] == 5
-        assert result['res'] == 'GLY'
+        assert atoms.resnum[0] == '5'
+        assert atoms.resname[0] == 'NAG'
 
 
 if __name__ == '__main__':

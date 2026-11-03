@@ -9,7 +9,12 @@ import numpy as np
 import polars as pl
 import pytest
 
-from molecular_simulations.analysis.ipSAE import ModelParser, ScoreCalculator, ipSAE
+from molecular_simulations.analysis.ipSAE import (
+    ModelParser,
+    ScoreCalculator,
+    TokenMismatchError,
+    ipSAE,
+)
 
 
 class TestModelParser:
@@ -19,7 +24,6 @@ class TestModelParser:
         """Test ModelParser initialization"""
         parser = ModelParser('test.pdb')
         assert parser.structure == Path('test.pdb')
-        assert parser.protein_token_indices == []
         assert parser.residues == []
         assert parser.cb_residues == []
         assert parser.chains == []
@@ -143,11 +147,13 @@ class TestScoreCalculator:
         assert np.allclose(ptm, [1.0, 0.5])
 
     def test_d0(self):
-        """L is floored at min_length, and d0 at 1 (protein) or 2 (nucleic acid)"""
-        assert ScoreCalculator.d0(10, False) == pytest.approx(
-            1.24 * 12 ** (1 / 3) - 1.8
+        """d0 matches upstream ipSAE: 1 up to min_length, floored at 1 or 2"""
+        formula = lambda n: 1.24 * (n - 15) ** (1 / 3) - 1.8  # noqa: E731
+        assert ScoreCalculator.d0(27, False) == 1.0
+        assert ScoreCalculator.d0(28, False) == pytest.approx(formula(28))
+        assert ScoreCalculator.d0(27, False, min_length=26) == pytest.approx(
+            formula(27)
         )
-        assert ScoreCalculator.d0(10, False, min_length=26) == 1.0
         assert ScoreCalculator.d0(10, True) == 2.0
         d0 = ScoreCalculator.d0(np.array([5, 100, 200]), False)
         assert d0.shape == (3,)
@@ -406,40 +412,23 @@ class TestParseStructureCBFallback:
         assert np.array_equal(obj.cb_coordinates, obj.coordinates)
 
 
-class TestBuildProteinTokenIndices:
-    """Cover build_protein_token_indices token-layout inference and errors."""
+class TestLegacyWithoutTokenTable:
+    """Legacy scores need a token table or one PAE row per residue."""
 
-    def _parser(self, skip_chains):
-        return ModelParser('unused.pdb', skip_chains=skip_chains)
+    def test_mismatch_raises(self, two_chain_pdb, tmp_path):
+        """The capped PDB has no tokenization for a 3-token PAE -> error."""
+        np.savez(tmp_path / 'plddt.npz', plddt=np.full(3, 0.9))
+        np.savez(tmp_path / 'pae.npz', pae=np.zeros((3, 3)))
+        obj = ipSAE(
+            str(two_chain_pdb),
+            tmp_path / 'plddt.npz',
+            tmp_path / 'pae.npz',
+            out_path=str(tmp_path),
+            scores=('ipsae',),
+        )
 
-    def test_non_contiguous_skipped_runs_raise(self):
-        """Skipped chains in two separate runs are unsolvable -> ValueError."""
-        parser = self._parser({'B', 'D'})
-        parser.chain_order = ['A', 'B', 'C', 'D']
-        parser.chain_residue_counts = {'A': 2, 'C': 2}
-
-        with pytest.raises(ValueError, match='non-contiguous'):
-            parser.build_protein_token_indices(6)
-
-    def test_kept_exceeds_total_raises(self):
-        """More kept residues than total tokens -> negative span -> ValueError."""
-        parser = self._parser({'B'})
-        parser.chain_order = ['A', 'B']
-        parser.chain_residue_counts = {'A': 5}
-
-        with pytest.raises(ValueError, match='exceeds'):
-            parser.build_protein_token_indices(3)
-
-    def test_contiguous_skip_infers_indices(self):
-        """A single contiguous skip block leaves the correct kept-token indices."""
-        parser = self._parser({'B'})
-        parser.chain_order = ['A', 'B', 'C']
-        parser.chain_residue_counts = {'A': 2, 'C': 2}
-
-        parser.build_protein_token_indices(6)
-
-        # A occupies tokens 0,1; the 2-token skip block spans 2,3; C is 4,5.
-        assert parser.protein_token_indices == [0, 1, 4, 5]
+        with pytest.raises(TokenMismatchError):
+            obj.run()
 
 
 class TestReadAtomsAuthFallback:

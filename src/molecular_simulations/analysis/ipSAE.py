@@ -199,6 +199,8 @@ class ipSAE:
         Raises:
             ValueError: If chains without standard residues are present,
                 not in ``skip_chains``, and ipSAE2 was not requested.
+            TokenMismatchError: If no tokenization matches the PAE and it is
+                not one row per residue.
         """
         self.parse_structure_file()
         nonpolymer = self.parser.nonpolymer_chains()
@@ -208,8 +210,6 @@ class ipSAE:
                 'or ion) and cannot be scored by pDockQ, pDockQ2, LIS or ipSAE. '
                 "Pass them in skip_chains, or request 'ipsae2' to score them."
             )
-        for chain in nonpolymer:
-            self.parser.skip_chain(chain)
 
         distances = cdist(self.cb_coordinates, self.cb_coordinates)
         pLDDT = self.load_pLDDT_file()
@@ -217,16 +217,12 @@ class ipSAE:
         try:
             self.tokenize(len(PAE))
         except ValueError:
-            indices = None
+            # Without a token table the arrays must be one row per residue.
+            n_residues = len(self.parser.residues)
+            if len(pLDDT) != n_residues or len(PAE) != n_residues:
+                raise
         else:
             indices = self.legacy_token_indices()
-        n_residues = len(self.parser.residues)
-        if indices is None and (len(pLDDT) != n_residues or len(PAE) != n_residues):
-            # No token table: assume one token per residue and infer the span
-            # of skipped chains.
-            self.parser.build_protein_token_indices(pLDDT.shape[0])
-            indices = np.array(self.parser.protein_token_indices, dtype=int)
-        if indices is not None:
             pLDDT = pLDDT[indices]
             PAE = PAE[np.ix_(indices, indices)]
 
@@ -331,15 +327,16 @@ class ipSAE:
             return np.array([], dtype=int)
         return np.flatnonzero(plddt == 0)
 
-    @staticmethod
     def merge_scores(
-        legacy: pl.DataFrame | None, ipsae2: pl.DataFrame | None
+        self, legacy: pl.DataFrame | None, ipsae2: pl.DataFrame | None
     ) -> pl.DataFrame:
-        """Join legacy and ipSAE2 scores on the unordered chain pair.
+        """Join legacy and ipSAE2 scores, one row per chain pair.
 
-        ipSAE2 directional columns are reoriented so that ``12`` always
-        means align on ``chain1`` and score ``chain2`` of the merged row.
-        Pairs reported by only one method have nulls for the other.
+        Rows follow the ipSAE2 pair order: by molecule type (prot, nuc, lig,
+        ion), then file order. Legacy rows are reported in the direction
+        with the larger ipSAE, so ``ipSAE_source`` records it as ``12``
+        (aligned on chain1) or ``21``. Pairs reported by only one method
+        have nulls for the other.
 
         Args:
             legacy: Output of run_legacy, or None.
@@ -351,50 +348,47 @@ class ipSAE:
         if ipsae2 is None or legacy is None:
             return legacy if ipsae2 is None else ipsae2
 
-        def pair_key(df: pl.DataFrame) -> pl.DataFrame:
-            return df.with_columns(
-                pl.min_horizontal('chain1', 'chain2').alias('_lo'),
-                pl.max_horizontal('chain1', 'chain2').alias('_hi'),
+        types = self.parser.molecule_types
+        order = sorted(types, key=lambda c: IpSAE2Calculator.TYPE_ORDER[types[c]])
+        rank = {chain: i for i, chain in enumerate(order)}
+        flip = pl.col('chain1').replace_strict(rank) > pl.col('chain2').replace_strict(
+            rank
+        )
+        oriented = [
+            pl.when(flip)
+            .then(pl.col('chain2'))
+            .otherwise(pl.col('chain1'))
+            .alias('chain1'),
+            pl.when(flip)
+            .then(pl.col('chain1'))
+            .otherwise(pl.col('chain2'))
+            .alias('chain2'),
+        ]
+        if 'ipSAE' in legacy.columns:
+            oriented.append(
+                pl.when(flip)
+                .then(pl.lit('21'))
+                .otherwise(pl.lit('12'))
+                .alias('ipSAE_source')
             )
+        legacy = legacy.with_columns(oriented)
 
-        legacy = pair_key(legacy)
-        ipsae2 = pair_key(ipsae2).join(
-            legacy.select('_lo', '_hi', pl.col('chain1').alias('_legacy_chain1')),
-            on=['_lo', '_hi'],
-            how='left',
+        merged = legacy.join(
+            ipsae2.drop('type1', 'type2'),
+            on=['chain1', 'chain2'],
+            how='full',
+            coalesce=True,
         )
-        swap = pl.col('_legacy_chain1').is_not_null() & (
-            pl.col('_legacy_chain1') != pl.col('chain1')
-        )
-        pairs = [('chain1', 'chain2'), ('type1', 'type2')] + [
-            (c, c[:-2] + '21') for c in ipsae2.columns if c.endswith('_12')
-        ]
-        swapped = []
-        for a, b in pairs:
-            swapped.append(pl.when(swap).then(pl.col(b)).otherwise(pl.col(a)).alias(a))
-            swapped.append(pl.when(swap).then(pl.col(a)).otherwise(pl.col(b)).alias(b))
-        source = pl.col('ipSAE2_source')
-        flipped = source.replace({'12': '21', '21': '12'})
-        swapped.append(
-            pl.when(swap).then(flipped).otherwise(source).alias('ipSAE2_source')
-        )
-        ipsae2 = ipsae2.with_columns(swapped).drop('_legacy_chain1')
-
-        merged = legacy.join(ipsae2, on=['_lo', '_hi'], how='full', coalesce=True)
-        merged = merged.with_columns(
-            pl.coalesce('chain1', 'chain1_right').alias('chain1'),
-            pl.coalesce('chain2', 'chain2_right').alias('chain2'),
-        )
-        legacy_columns = [
-            c for c in legacy.columns if c not in ('chain1', 'chain2', '_lo', '_hi')
-        ]
-        ipsae2_columns = [
-            c
-            for c in ipsae2.columns
-            if c not in ('chain1', 'chain2', 'type1', 'type2', '_lo', '_hi')
-        ]
-        return merged.sort('_lo', '_hi').select(
-            'chain1', 'chain2', 'type1', 'type2', *legacy_columns, *ipsae2_columns
+        return (
+            merged.with_columns(
+                pl.col('chain1').replace_strict(types).alias('type1'),
+                pl.col('chain2').replace_strict(types).alias('type2'),
+            )
+            .sort(
+                pl.col('chain1').replace_strict(rank),
+                pl.col('chain2').replace_strict(rank),
+            )
+            .select('chain1', 'chain2', 'type1', 'type2', *merged.columns[2:])
         )
 
     def save_scores(self) -> None:
@@ -593,24 +587,29 @@ class ScoreCalculator:
         return 1.0 / (1 + (pae / d0) ** 2)
 
     @staticmethod
-    def d0(L: int | np.ndarray, nucleic_acid: bool, min_length: int = 27) -> np.ndarray:
-        """TM-score d0 ``1.24 * (L - 15)^(1/3) - 1.8``.
+    def d0(
+        length: int | np.ndarray, nucleic_acid: bool, min_length: int = 27
+    ) -> np.ndarray:
+        """TM-score d0 ``1.24 * (length - 15)^(1/3) - 1.8``, as in upstream ipSAE.
 
-        L is floored at ``min_length`` and d0 at 1 (protein) or 2 (nucleic
-        acid). ipTM uses a length floor of 27 and ipSAE one of 26.
+        d0 is 1 for lengths up to ``min_length`` (27 for ipTM, 26 for ipSAE) and
+        is floored at 1 (protein) or 2 (nucleic acid).
 
         Args:
-            L: Length or lengths.
+            length: Length or lengths.
             nucleic_acid: Whether either chain is a nucleic acid.
-            min_length: Floor applied to L.
+            min_length: Longest length with d0 of 1.
 
         Returns:
-            d0 with the shape of L.
+            d0 with the shape of length.
         """
-        L = np.maximum(min_length, np.asarray(L, dtype=float))
-        return np.maximum(
-            2.0 if nucleic_acid else 1.0, 1.24 * (L - 15) ** (1 / 3) - 1.8
+        length = np.asarray(length, dtype=float)
+        d0 = np.where(
+            length > min_length,
+            1.24 * (np.maximum(length, min_length) - 15) ** (1 / 3) - 1.8,
+            1.0,
         )
+        return np.maximum(2.0 if nucleic_acid else 1.0, d0)
 
 
 class TokenMismatchError(ValueError):
@@ -749,12 +748,8 @@ class ModelParser:
         residues: Anchor atom index (CA or C1') per legacy residue.
         cb_residues: Distance atom index (CB or C3') per legacy residue.
         chains: Chain ID per legacy residue.
-        chain_order: Chain IDs in file order, skipped chains included.
-        chain_residue_counts: Legacy residues per kept chain.
         chain_types: Chain ID to protein or nucleic_acid, after
             :meth:`classify_chains`.
-        protein_token_indices: pLDDT/PAE indices for kept-chain anchor
-            tokens; populated by :meth:`build_protein_token_indices`.
         CANONICAL_PROTEIN: Standard amino acid residue names.
         CANONICAL_NUCLEIC: Standard RNA and DNA residue names.
         IONS: Residue or element names of single-atom ions.
@@ -805,9 +800,6 @@ class ModelParser:
         self.residues: list[int] = []
         self.cb_residues: list[int] = []
         self.chains: list[str] = []
-        self.chain_order: list[str] = []
-        self.chain_residue_counts: dict[str, int] = {}
-        self.protein_token_indices: list[int] = []
 
     def read_atoms(self) -> AtomTable:
         """Read heavy atoms from the model and classify its chains.
@@ -879,30 +871,22 @@ class ModelParser:
         without canonical residues (ligand, glycan, ion) yield none.
         """
         atoms = self.read_atoms()
-        self.chain_order = list(self.molecule_types)
         self.residues, self.cb_residues, self.chains = [], [], []
-        self.chain_residue_counts = {}
-
         chain_residues: dict[str, list[list[int]]] = {
-            chain: [] for chain in self.chain_order
+            chain: [] for chain in self.molecule_types
         }
         for (chain, _, _), idx in atoms.residues().items():
             chain_residues[chain].append(idx)
 
-        for chain in self.chain_order:
-            if chain in self.skip_chains:
+        for chain, mol_type in self.molecule_types.items():
+            if chain in self.skip_chains or mol_type not in ('prot', 'nuc'):
                 continue
-            count = 0
-            if self.molecule_types[chain] in ('prot', 'nuc'):
-                for idx in chain_residues[chain]:
-                    picked = self.residue_atoms(idx)
-                    if picked is None:
-                        continue
+            for idx in chain_residues[chain]:
+                picked = self.residue_atoms(idx)
+                if picked is not None:
                     self.residues.append(picked[0])
                     self.cb_residues.append(picked[1])
-                    count += 1
-            self.chains.extend([chain] * count)
-            self.chain_residue_counts[chain] = count
+                    self.chains.append(chain)
 
     def residue_atoms(self, idx: list[int]) -> tuple[int, int] | None:
         """Pick the anchor and distance atom of one residue.
@@ -937,74 +921,10 @@ class ModelParser:
         """
         return [
             chain
-            for chain in self.chain_order
+            for chain in self.molecule_types
             if chain not in self.skip_chains
             and self.molecule_types[chain] in ('lig', 'ion')
         ]
-
-    def skip_chain(self, chain: str) -> None:
-        """Mark an already-parsed chain without residues as skipped.
-
-        Args:
-            chain: Chain ID with no canonical residues.
-        """
-        self.skip_chains.add(chain)
-        self.chain_residue_counts.pop(chain, None)
-
-    def build_protein_token_indices(self, total_tokens: int) -> None:
-        """Derive pLDDT/PAE indices for kept-chain anchor tokens.
-
-        Each kept chain contributes one token per residue; any run of
-        consecutive skipped chains occupies the token span left over
-        between kept chains. Solvable when skipped chains form at most
-        one contiguous block in ``chain_order`` — the default layout
-        emitted by Chai, Boltz, and AlphaFold (polymers first, then
-        non-polymer chains).
-
-        Args:
-            total_tokens: Length of the pLDDT array (== PAE dim).
-
-        Raises:
-            ValueError: If skipped chains appear in multiple
-                non-contiguous runs, making per-run sizes ambiguous.
-        """
-        runs: list[tuple[bool, list[str]]] = []
-        for cid in self.chain_order:
-            is_kept = cid not in self.skip_chains
-            if runs and runs[-1][0] == is_kept:
-                runs[-1][1].append(cid)
-            else:
-                runs.append((is_kept, [cid]))
-
-        skipped_runs = [r for r in runs if not r[0]]
-        total_kept_tokens = sum(self.chain_residue_counts.values())
-        skipped_span = total_tokens - total_kept_tokens
-
-        if len(skipped_runs) > 1:
-            raise ValueError(
-                f'Cannot infer token layout: skipped chains appear in '
-                f'{len(skipped_runs)} non-contiguous runs. Reorder input '
-                'so non-polymer chains are grouped.'
-            )
-        if skipped_span < 0:
-            raise ValueError(
-                f'Kept residue count ({total_kept_tokens}) exceeds '
-                f'total tokens ({total_tokens}); structure and score '
-                'files are inconsistent.'
-            )
-
-        indices: list[int] = []
-        offset = 0
-        for is_kept, chain_ids in runs:
-            if is_kept:
-                for cid in chain_ids:
-                    n = self.chain_residue_counts[cid]
-                    indices.extend(range(offset, offset + n))
-                    offset += n
-            else:
-                offset += skipped_span
-
-        self.protein_token_indices = indices
 
     def classify_chains(self) -> None:
         """Label each chain with legacy residues as protein or nucleic acid."""

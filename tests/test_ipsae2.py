@@ -5,6 +5,8 @@ cutoff, the modified-residue weighting and the quoted-CIF DNA case are the
 ones asserted by the upstream ipSAE2 v0.1.5 test suite.
 """
 
+from collections import Counter
+
 import numpy as np
 import pytest
 from scipy.spatial import cKDTree
@@ -416,7 +418,7 @@ class TestLegacyTokenMapping:
         npz = tmp_path / 's.npz'
         scorer = ipSAE(model, npz, npz, scores=['ipsae', 'lis'])
         scorer.run()
-        assert scorer.parser.chain_residue_counts == {'A': 3, 'B': 1}
+        assert Counter(scorer.parser.chains) == {'A': 3, 'B': 1}
         assert list(scorer.legacy_token_indices()) == [0, 2, 5, 6]
         assert scorer.scores.height == 1
 
@@ -434,7 +436,7 @@ class TestLegacyTokenMapping:
         npz = tmp_path / 's.npz'
         scorer = ipSAE(model, npz, npz)
         scorer.run()
-        assert scorer.parser.chain_residue_counts == {'A': 2, 'C': 1}
+        assert Counter(scorer.parser.chains) == {'A': 2, 'C': 1}
         parser = scorer.parser
         assert parser.atoms.atom_name[parser.cb_residues[2]] == "C3'"
         assert list(scorer.legacy_token_indices()) == [0, 1, 2]
@@ -545,22 +547,21 @@ class TestScoreSelection:
         scorer = ipSAE(*files)
         scorer.run()
         scores = scorer.scores
-        assert set(zip(scores['chain1'], scores['chain2'], strict=True)) == {
-            ('B', 'A'),
-            ('A', 'G'),
-            ('B', 'G'),
-        }
+        # Rows follow the ipSAE2 order: proteins first, then file order.
+        pairs = list(zip(scores['chain1'], scores['chain2'], strict=True))
+        assert pairs == [('A', 'B'), ('A', 'G'), ('B', 'G')]
 
-        ba = row_for(scores, 'B', 'A')
+        ab = row_for(scores, 'A', 'B')
         # Glycan tokens are dropped, so B maps to token 8, not a glycan atom.
-        assert ba['ipSAE'] == pytest.approx(0.5)
+        assert ab['ipSAE'] == pytest.approx(0.5)
         for column in ('pDockQ', 'pDockQ2', 'LIS', 'ipTM'):
-            assert ba[column] is not None
-        # ipSAE2 directions are reoriented to the merged chain1 -> chain2.
-        assert ba['ipSAE2_12'] == pytest.approx(0.5)
-        assert ba['ipSAE2_21'] == pytest.approx(0.2)
-        assert ba['ipSAE2'] == pytest.approx(0.5)
-        assert ba['ipSAE2_source'] == '12'
+            assert ab[column] is not None
+        # Both scores take the B-aligned direction (21).
+        assert ab['ipSAE_source'] == '21'
+        assert ab['ipSAE2_12'] == pytest.approx(0.2)
+        assert ab['ipSAE2_21'] == pytest.approx(0.5)
+        assert ab['ipSAE2'] == pytest.approx(0.5)
+        assert ab['ipSAE2_source'] == '21'
 
         ag = row_for(scores, 'A', 'G')
         assert ag['type2'] == 'lig'

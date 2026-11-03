@@ -227,8 +227,11 @@ saved as ``.npz`` files:
    # pDockQ 0.23-0.5: Possible interface
    # pDockQ < 0.23: Unlikely correct
 
-``scorer.scores`` has one row per chain pair. pDockQ, pDockQ2, LIS, ipTM and
-ipSAE are defined for protein and nucleic acid chains; ipSAE2
+``scorer.scores`` has one row per chain pair, ordered by molecule type
+(protein, nucleic acid, ligand, ion) and then file order. pDockQ, pDockQ2,
+LIS, ipTM and ipSAE are defined for protein and nucleic acid chains, and
+report the direction with the larger ipSAE (``ipSAE_source`` is ``12`` when
+aligned on ``chain1``, ``21`` when aligned on ``chain2``). ipSAE2
 (`DunbrackLab/IPSAE2 <https://github.com/DunbrackLab/IPSAE2>`_) also scores
 ligands, glycans and ions:
 

@@ -111,3 +111,30 @@ jobs:
 
       - name: Check that Claude Code and Codex discover every skill install route
         run: .github/scripts/skills_e2e.sh
+
+  install-recipes:
+    name: README install (${{ matrix.recipe }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        recipe: [conda, pixi]
+    env:
+      CONDA_ALWAYS_YES: 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: conda-incubator/setup-miniconda@v3
+        if: matrix.recipe == 'conda'
+        with:
+          miniforge-version: latest
+
+      - name: Install pixi
+        if: matrix.recipe == 'pixi'
+        run: |
+          curl -fsSL https://pixi.sh/install.sh | bash
+          echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
+
+      - name: Run the README recipe and check the environment
+        run: .github/scripts/test_install_recipe.sh ${{ matrix.recipe }}

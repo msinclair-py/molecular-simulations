@@ -30,10 +30,16 @@ an existing AmberTools (set `AMBERHOME`, or pass `amberhome=` to the
 builders) or install it from conda-forge alongside the package:
 
 ```bash
-conda create -n molsim -c conda-forge python ambertools openmm
+conda create -n molsim -c conda-forge "python>=3.10,<3.14" ambertools openmm
 conda activate molsim
 pip install molecular-simulations
 ```
+
+Use conda-forge's `ambertools`: the package requires `numpy>=2.0`, and an
+AmberTools build that pins `numpy<2` makes pip silently install the old
+0.4.x release instead. If `pip show molecular-simulations` reports 0.4.x,
+that is the cause. A pip warning that `ndfes`, `edgembar` or `proprep` need
+`numpy<2` is harmless; the package does not use them.
 
 Scoring predicted complexes (`molsim-analyze-ipsae`) does not need AmberTools.
 

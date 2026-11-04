@@ -11,6 +11,8 @@ and `.inpcrd` coordinate files that the `molsim-run-simulations` workflow expect
 
 ## Prerequisites
 
+- **AmberTools from conda-forge** (`conda install -c conda-forge ambertools`);
+  it is not on PyPI, and builds that pin `numpy<2` conflict with this package.
 - **AmberTools must be installed and `AMBERHOME` set** in the environment. Every
   builder resolves `tleap`/`cpptraj`/`antechamber` under `$AMBERHOME/bin`. If
   `AMBERHOME` is unset, construction raises `ValueError`. You can also pass

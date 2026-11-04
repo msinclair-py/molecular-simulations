@@ -71,6 +71,9 @@ However, `gmxapi` operates within a single job allocation, limiting its applicab
 The recently published `asyncmd` package [@jung2025asyncmd] extends GROMACS workflows across job boundaries using Python's async/await syntax, with a focus on providing building blocks for trajectory-based enhanced sampling algorithms such as transition path sampling and weighted ensemble methods.
 While `asyncmd` excels at dynamic stopping conditions and adaptive sampling workflows, it currently supports only the SLURM scheduler and does not include system preparation or post-simulation analysis capabilities.
 
+For AMBER, tinyIFD [@hsu2023tinyifd] is a working implementation of automated, high-throughput MD: it scripts AmberTools preparation (`tleap`, `antechamber`) and runs batches of small-system simulations on GPUs with the specialized `mdgx.cuda` engine, steered by an actively learning model zoo, to refine ligand poses through induced-fit docking.
+Its pipeline is built around that task rather than general-purpose system preparation, simulation protocols, and analysis.
+
 General-purpose workflow frameworks such as AiiDA [@huber2020aiida] and signac/row [@adorf2018signac] enable reproducible computational workflows with automatic provenance tracking.
 These tools prioritize data management over MD-specific functionality; for instance, AiiDA lacks native support for GPU resource requests, and MD integration requires additional plugins.
 
